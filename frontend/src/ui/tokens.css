@@ -8,6 +8,8 @@
   --ink: #18202B; --ink-fg: #FFFFFF; --today: #0F766E; --rest: #FDF0F2; --ph: #BE123C; --ok: #15803D;
   --warn: #B45309; --danger: #B91C1C; --dim: .18;
   --warn-bg: #FEF3C7; --danger-bg: #FEE2E2; --ok-bg: #DCFCE7; --info-bg: #E0F2FE;
+  /* calendar date marks (§9.2): today's number in a blue circle, a public holiday's number in red */
+  --cal-today: #2563EB; --cal-ph: #DC2626; --cal-ph-bg: #FDE7E7;
   --shadow: 0 8px 24px rgba(0, 0, 0, .18);
   --font-ui: "Inter", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-head: "Space Grotesk", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -24,6 +26,7 @@
     --ink: #E5E9EF; --ink-fg: #0E131A; --today: #2DD4BF; --rest: #2A1A21; --ph: #FB7185; --ok: #4ADE80;
     --warn: #FBBF24; --danger: #F87171; --dim: .2;
     --warn-bg: #3A2A0B; --danger-bg: #3B1515; --ok-bg: #0F2E1B; --info-bg: #0E2A3A;
+    --cal-today: #3B82F6; --cal-ph: #F87171; --cal-ph-bg: #3A1A1D;
     --shadow: 0 8px 24px rgba(0, 0, 0, .5);
     color-scheme: dark;
   }
@@ -33,6 +36,7 @@
   --ink: #E5E9EF; --ink-fg: #0E131A; --today: #2DD4BF; --rest: #2A1A21; --ph: #FB7185; --ok: #4ADE80;
   --warn: #FBBF24; --danger: #F87171; --dim: .2;
   --warn-bg: #3A2A0B; --danger-bg: #3B1515; --ok-bg: #0F2E1B; --info-bg: #0E2A3A;
+  --cal-today: #3B82F6; --cal-ph: #F87171; --cal-ph-bg: #3A1A1D;
   --shadow: 0 8px 24px rgba(0, 0, 0, .5);
   color-scheme: dark;
 }

@@ -7,10 +7,14 @@
 // - [Collected: save] / [Not collected] (reason sheet). Reopened from Done: [Save correction] / [Undo].
 // Values are kept as a device draft on every change; a save goes to the outbox (never straight to the
 // server), so it works with no signal. The form is a snapshot: polls never re-render it (§8.2, D14).
+// The snapshot is taken only once this phone's outbox has been read (a fresh page load starts with an empty
+// list), so an unsent result always reopens with its values, photos, signature and note.
+// A single weighable type has no [0] chip (0 alone is refused): "nothing to collect" is Not collected → No
+// waste. A result refused with TICKET_REQUIRED always shows that ticket field, even from an older job copy.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { JobStop, MissReason, Outcome, VisitWrite, WasteType } from '../api';
 import { fmtWeight, useI18n } from '../i18n';
-import { useErrorText } from '../ui/Feedback';
+import { Loading, useErrorText } from '../ui/Feedback';
 import { resizePhoto } from '../ui/photo';
 import { useToast } from '../ui/Toast';
 import { useFileUrl } from '../ui/useFileUrl';
@@ -127,7 +131,29 @@ export interface ResultFormProps {
   cached?: boolean;
 }
 
+/** The stop as the form shows it: plus the ticket field a TICKET_REQUIRED refusal asks for ("tickets.REL"). */
+export function formStop(stop: JobStop, ns?: NotSentEntry | null): JobStop {
+  const code = ns?.error.code === 'TICKET_REQUIRED' ? /^tickets\.(.+)$/.exec(ns.error.field ?? '')?.[1] : undefined;
+  if (!code || !stop.weigh_types.includes(code) || stop.ticket_types.includes(code)) return stop;
+  return { ...stop, ticket_types: [...stop.ticket_types, code] };
+}
+
 export default function ResultForm(p: ResultFormProps) {
+  const { ready } = useDriver();
+  if (!ready) {
+    return (
+      <div className="drv">
+        <TopBar back={p.backTo} title={p.jobLabel} sub={p.stop.customer.name} />
+        <main className="drv-main">
+          <Loading />
+        </main>
+      </div>
+    );
+  }
+  return <ResultFormBody {...p} />;
+}
+
+function ResultFormBody(p: ResultFormProps) {
   const { t, lang } = useI18n();
   const { me, entries, save, box } = useDriver();
   const toast = useToast();
@@ -136,7 +162,7 @@ export default function ResultForm(p: ResultFormProps) {
   const dkey = draftKey(me.id, p.date, p.job, cid);
 
   // Snapshot at open: an open form never changes under the driver (§8.2, D14).
-  const [stop] = useState(p.stop);
+  const [stop] = useState(() => formStop(p.stop, p.notsent));
   const [local] = useState(() => [...entries].reverse().find((e) => e.key === stopKey(p.date, p.job, cid)) ?? null);
   const [existing] = useState<EffVisit | null>(() => (p.notsent ? visitOfBody(p.notsent.body, me.id) : effectiveVisit(p.stop, local ?? undefined, me.id)));
   const foreign = !p.notsent && !local && stop.visit?.outcome != null && stop.visit.driver_id !== me.id;
@@ -188,6 +214,8 @@ export default function ResultForm(p: ResultFormProps) {
   };
 
   const unit = (code: string) => p.wasteTypes[code]?.unit || 'kg';
+  // One weighable type: 0 alone is refused, so there is no [0] chip and the hints point to Not collected.
+  const single = stop.weigh_types.length === 1;
   const abbr = (code: string) => p.wasteTypes[code]?.abbr || code;
 
   const files = () => ({
@@ -220,14 +248,14 @@ export default function ResultForm(p: ResultFormProps) {
     const weights: Record<string, number> = {};
     for (const code of stop.weigh_types) {
       const raw = values.weights[code] ?? '';
-      if (!raw.trim()) errs['w.' + code] = t('driver.form.weightRequired');
+      if (!raw.trim()) errs['w.' + code] = t(single ? 'driver.form.weightRequiredOne' : 'driver.form.weightRequired');
       else {
         const n = parseWeight(raw);
         if (n === null) errs['w.' + code] = t('err.WEIGHT_INVALID');
         else weights[code] = n;
       }
     }
-    if (!Object.keys(errs).length && !Object.values(weights).some((n) => n > 0)) errs.form = t('err.WEIGHT_REQUIRED');
+    if (!Object.keys(errs).length && !Object.values(weights).some((n) => n > 0)) errs.form = t(single ? 'driver.form.weightZeroOne' : 'err.WEIGHT_REQUIRED');
     const tickets: Record<string, string> = {};
     for (const code of stop.ticket_types) {
       if (!((weights[code] ?? 0) > 0)) continue;
@@ -346,9 +374,11 @@ export default function ResultForm(p: ResultFormProps) {
                       update((x) => ({ ...x, weights: { ...x.weights, [code]: v } }));
                     }}
                   />
-                  <button type="button" className="zero" onClick={() => update((x) => ({ ...x, weights: { ...x.weights, [code]: '0' } }))}>
-                    0
-                  </button>
+                  {!single && (
+                    <button type="button" className="zero" onClick={() => update((x) => ({ ...x, weights: { ...x.weights, [code]: '0' } }))}>
+                      0
+                    </button>
+                  )}
                 </div>
                 {errors['w.' + code] && <span className="err">{errors['w.' + code]}</span>}
                 {ticketFor(code) && (

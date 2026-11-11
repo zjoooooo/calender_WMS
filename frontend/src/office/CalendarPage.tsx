@@ -1,21 +1,23 @@
-// Office calendar (§9.2, M3–M7 office side): top bar (‹ Today › · Week | Month · ⚡ Urgent pickup · + Task),
-// filter bar (search, R / S / ⚡A chips, one chip per task type, Clear highlight), legend, week or month
-// view, and every drawer and dialog, opened through one `open()` (calendarContext).
-// - view and anchor live in the URL (?view=week&anchor=2026-12-25), so Holidays-page links work.
-// - One query per view and anchor; it polls every 30 s while the range contains today and on focus (R36).
+// Office calendar (§9.2, M3–M7 office side): top bar (big month title · ‹ Today › · Week | Month · ⚡ Urgent
+// pickup · + Task), filter bar (search, R / S / ⚡A chips, one chip per task type, Clear highlight, Expand /
+// Collapse all), legend, month (default) or week view, Sunday first, and every drawer and dialog, opened
+// through one `open()` (calendarContext).
+// - view and anchor live in the URL (?view=week&anchor=2026-12-25), so Holidays-page links work; no view = month.
+// - One query per view and anchor (week_start=sun); it polls every 30 s while the range contains today and on
+//   focus (R36). Expanded month cells are kept per date here, so a refetch never collapses them.
 // - Highlight and search are exclusive (the last used wins); Esc clears them when no layer is open.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { getCalendar, type CalendarView, type RouteOccurrence, type RouteType, type TaskOccurrence } from '../api';
-import { fmtDay, useI18n } from '../i18n';
+import { fmtDay, monthName, useI18n } from '../i18n';
 import { useSession } from '../session';
 import { Drawer } from '../ui/Drawer';
 import { ErrorBanner, Loading } from '../ui/Feedback';
 import { anyLayerOpen } from '../ui/layer';
 import { rcStyle } from '../ui/palette';
 import { CalendarContext, type CalendarCtx, type Overlay } from './calendarContext';
-import { groupDays, legendItems, makeMatcher, rangeContainsToday, shortName, type Filters } from './calendarModel';
+import { groupDays, legendItems, makeMatcher, monthCellLines, monthWeeks, rangeContainsToday, shortName, type Filters } from './calendarModel';
 import { DayColumn, MonthView, WeekView } from './CalendarViews';
 import { CopyDialog } from './CopyDialog';
 import { RouteDrawer } from './RouteDrawer';
@@ -32,12 +34,12 @@ export default function CalendarPage() {
   const { t, lang } = useI18n();
   const { meta } = useSession();
   const [params, setParams] = useSearchParams();
-  const view: CalendarView = params.get('view') === 'month' ? 'month' : 'week';
+  const view: CalendarView = params.get('view') === 'week' ? 'week' : 'month';
   const anchor = params.get('anchor') ?? '';
 
   const q = useQuery({
-    queryKey: ['calendar', view, anchor],
-    queryFn: ({ signal }) => getCalendar(view, anchor, { signal }),
+    queryKey: ['calendar', view, anchor, 'sun'],
+    queryFn: ({ signal }) => getCalendar(view, anchor, { signal }, 'sun'),
     placeholderData: keepPreviousData,
     refetchInterval: (query) => (rangeContainsToday(query.state.data) ? 30_000 : false),
     refetchOnWindowFocus: true,
@@ -53,10 +55,13 @@ export default function CalendarPage() {
   const [drawer, setDrawer] = useState<DrawerOverlay | null>(null);
   const [dayDrawer, setDayDrawer] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogOverlay | null>(null);
+  /** Month cells the office expanded, per date (survives refetches and navigation). */
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const toggleCell = useCallback((date: string, on: boolean) => setExpanded((s) => ({ ...s, [date]: on })), []);
 
   const setNav = (v: CalendarView, a: string) => {
     const p = new URLSearchParams();
-    if (v === 'month') p.set('view', 'month');
+    if (v === 'week') p.set('view', 'week');
     if (a) p.set('anchor', a);
     setParams(p, { replace: true });
   };
@@ -83,6 +88,12 @@ export default function CalendarPage() {
   const matcher = useMemo(() => makeMatcher(data, hl, search), [data, hl, search]);
   const groups = useMemo(() => (data ? groupDays(data, filters) : []), [data, filters]);
   const legend = useMemo(() => legendItems(data, filters), [data, filters]);
+  // Month cells with more than 4 lines (after the filters): what Expand all / Collapse all acts on.
+  const collapsible = useMemo(
+    () => (view === 'month' ? monthWeeks(groups).flat().filter((g) => monthCellLines(g, false).collapsible).map((g) => g.day.date) : []),
+    [view, groups],
+  );
+  const allOpen = collapsible.length > 0 && collapsible.every((d) => expanded[d]);
   const taskTypes = (meta?.waste_types ?? []).filter((w) => !w.routable && w.active);
 
   const open = useCallback((o: Overlay) => {
@@ -108,33 +119,48 @@ export default function CalendarPage() {
     }
   }, [drawer, data, q.isPlaceholderData, q.isFetching, q.dataUpdatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  let title = '';
+  // Title: "2026年11月" / "November 2026" (month bold, year regular); the week view adds its date range.
+  let title = null;
   if (data) {
-    if (view === 'week') {
-      title = `${fmtDay(data.from, lang, { weekday: false, year: true })} – ${fmtDay(data.to, lang, { weekday: false })}`;
-    } else {
-      const mid = data.days[15]?.date ?? data.from;
-      title = lang === 'zh' ? `${mid.slice(0, 4)}年${Number(mid.slice(5, 7))}月` : `${MONTHS[Number(mid.slice(5, 7)) - 1]} ${mid.slice(0, 4)}`;
-    }
+    const ref = view === 'week' ? data.days[3]?.date ?? data.from : data.days.find((d) => d.in_month)?.date ?? data.from;
+    const y = ref.slice(0, 4);
+    const m = monthName(Number(ref.slice(5, 7)), lang);
+    title = (
+      <>
+        {lang === 'zh' ? (
+          <>
+            <span className="y">{y}年</span>
+            <b>{m}</b>
+          </>
+        ) : (
+          <>
+            <b>{m}</b> <span className="y">{y}</span>
+          </>
+        )}
+        {view === 'week' && <small className="wk">{`${fmtDay(data.from, lang, { weekday: false })} – ${fmtDay(data.to, lang, { weekday: false })}`}</small>}
+      </>
+    );
   }
   const dayGroup = dayDrawer ? groups.find((g) => g.day.date === dayDrawer) : undefined;
 
   return (
     <>
-      <div className="cal-bar">
-        <button type="button" className="btn" aria-label={t('cal.prev')} onClick={() => data && setNav(view, data.prev_anchor)}>
-          ‹
-        </button>
-        <button type="button" className="btn" onClick={() => setNav(view, '')}>
-          {t('common.today')}
-        </button>
-        <button type="button" className="btn" aria-label={t('cal.next')} onClick={() => data && setNav(view, data.next_anchor)}>
-          ›
-        </button>
-        <h1 className="range num" aria-live="polite">
+      <div className="cal-bar cal-top">
+        <h1 className="range cal-title num" aria-live="polite">
           {title}
         </h1>
         <span className="spacer" />
+        <div className="calnav" role="group">
+          <button type="button" className="btn" aria-label={t('cal.prev')} title={t('cal.prev')} onClick={() => data && setNav(view, data.prev_anchor)}>
+            ‹
+          </button>
+          <button type="button" className="btn" onClick={() => setNav(view, '')}>
+            {t('common.today')}
+          </button>
+          <button type="button" className="btn" aria-label={t('cal.next')} title={t('cal.next')} onClick={() => data && setNav(view, data.next_anchor)}>
+            ›
+          </button>
+        </div>
         <div className="seg" role="group" aria-label={t('cal.view')}>
           <button type="button" aria-pressed={view === 'week'} onClick={() => setNav('week', anchor)}>
             {t('cal.week')}
@@ -205,6 +231,17 @@ export default function CalendarPage() {
           </button>
         )}
         {q.isFetching && <span className="muted small">{t('app.loading')}</span>}
+        {view === 'month' && (
+          <button
+            type="button"
+            className="btn small expall"
+            aria-pressed={allOpen}
+            disabled={collapsible.length === 0}
+            onClick={() => setExpanded((s) => (allOpen ? {} : { ...s, ...Object.fromEntries(collapsible.map((d) => [d, true])) }))}
+          >
+            {allOpen ? `${t('cal.collapseAll')} ▴` : `${t('cal.expandAll')} ▾`}
+          </button>
+        )}
       </div>
 
       {legend.length > 0 && (
@@ -235,7 +272,7 @@ export default function CalendarPage() {
 
       {ctx && (
         <CalendarContext.Provider value={ctx}>
-          {view === 'week' ? <WeekView groups={groups} /> : <MonthView groups={groups} />}
+          {view === 'week' ? <WeekView groups={groups} /> : <MonthView groups={groups} expanded={expanded} onToggle={toggleCell} />}
 
           <Drawer
             open={!!dayGroup}
@@ -299,4 +336,3 @@ export default function CalendarPage() {
   );
 }
 
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];

@@ -1,7 +1,7 @@
 // outbox.ts (§7.7, §13): coalescing, order, files before the visit, the 200 / 409 / 422 / 401 / network
 // handling and exactly-once delivery through a stable op_id. Runs on in-memory stores.
-import { describe, expect, it } from 'vitest';
-import { ApiError, type VisitWrite } from '../api';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError, putDriverStop, uploadFile, type VisitWrite } from '../api';
 import { memoryKV } from './cache';
 import { Outbox, filesOf, nextFlushDelay, type FileRec, type NotSentEntry, type OutboxEntry, type OutboxEvent, type StopLabel } from './outbox';
 
@@ -279,5 +279,53 @@ describe('outbox', () => {
     const u = '0b6e1c2a-7f3d-4c55-9a1e-2b9d6a0c31f1';
     expect(filesOf({ photos: [`files/0b/${u}.jpg`, 'bad'], signature: `${u}.png` })).toEqual([`${u}.jpg`, `${u}.png`]);
     expect([0, 1, 2, 3, 9].map(nextFlushDelay)).toEqual([15_000, 30_000, 60_000, 60_000, 60_000]);
+  });
+});
+
+// REV-3 / REV-4: the real api.ts under the outbox, with a fake network.
+describe('outbox over the real api.ts', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const ok = () => new Response(JSON.stringify({ ok: true, data: { visit: { rev: 1 }, progress: {}, totals: {}, replay: false }, warnings: [] }), { status: 200 });
+  function realSetup(timeoutMs?: number) {
+    const stores = { outbox: memoryKV<OutboxEntry>(), files: memoryKV<FileRec>(), notsent: memoryKV<NotSentEntry>() };
+    const box = new Outbox({ user: 3, api: { uploadFile, putStop: putDriverStop }, ...stores, ...(timeoutMs ? { timeoutMs } : {}) });
+    return { box };
+  }
+
+  it('a captive-portal page (HTML, status 200) keeps the result queued; it is sent once the real network is back', async () => {
+    const fetchFn = vi.fn(async () => new Response('<html><body>Sign in to the Wi-Fi</body></html>', { status: 200, headers: { 'Content-Type': 'text/html' } }));
+    vi.stubGlobal('fetch', fetchFn);
+    const { box } = realSetup();
+    await box.save({ date: '2026-11-11', job: 'r5', customer_id: 12, body: collected(42), label });
+    const r1 = await box.flush();
+    expect(r1).toMatchObject({ sent: 0, refused: 0, stopped: 'network', remaining: 1 });
+    expect(await box.listNotSent()).toEqual([]);
+    vi.stubGlobal('fetch', vi.fn(async () => ok()));
+    const r2 = await box.flush();
+    expect(r2).toMatchObject({ sent: 1, refused: 0, stopped: null, remaining: 0 });
+  });
+
+  it('a response body that stalls ends as a timeout: the entry stays and the next flush sends it again', async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        calls++;
+        if (calls > 1) return ok();
+        const stalled = new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(new TextEncoder().encode('{"ok":true,"da')); // ... and never closes
+          },
+        });
+        return new Response(stalled, { status: 200 });
+      }),
+    );
+    const { box } = realSetup(50);
+    await box.save({ date: '2026-11-11', job: 'r5', customer_id: 12, body: collected(42), label });
+    const r1 = await box.flush();
+    expect(r1).toMatchObject({ sent: 0, stopped: 'network', remaining: 1 });
+    const r2 = await box.flush();
+    expect(calls).toBe(2);
+    expect(r2).toMatchObject({ sent: 1, stopped: null, remaining: 0 });
   });
 });

@@ -3,8 +3,9 @@
 // GET /api/routes/suggest-code?type=copy (called whenever the date changes): "Regular (only this date)" on a
 // work day (Adhoc when the source is adhoc), "Special (only this date)" on a rest day. "Skip the original" is
 // ticked by default when the source is a runnable recurring date. Modes: 'ph' = [Run on PH] (same date),
-// 'move' = [Move to work day…], 'copy' = free target.
-import { useEffect, useState, type FormEvent } from 'react';
+// 'move' = [Move to work day…] (default target: the first work day after the paused date, never today's
+// next work day), 'copy' = free target. A route target where the same code already runs gets a warning.
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   copyRouteDate,
@@ -12,22 +13,22 @@ import {
   getRoute,
   getTask,
   isApiError,
+  listHolidays,
   suggestRouteCode,
   type RouteOccurrence,
   type TaskOccurrence,
 } from '../api';
 import { fmtDay, useI18n } from '../i18n';
-import { useSession } from '../session';
 import { TypeTag } from '../ui/Chip';
 import { Dialog } from '../ui/Dialog';
 import { useErrorText } from '../ui/Feedback';
 import { useToast } from '../ui/Toast';
 import { useCalendar } from './calendarContext';
+import { nextWorkDayAfter } from './calendarModel';
 import { useGuardedWrite } from './officeShared';
 
 export function CopyDialog({ occ, mode, onClose }: { occ: RouteOccurrence | TaskOccurrence; mode: 'copy' | 'ph' | 'move'; onClose: () => void }) {
   const { t, lang } = useI18n();
-  const { meta } = useSession();
   const { data } = useCalendar();
   const toast = useToast();
   const errText = useErrorText();
@@ -35,7 +36,18 @@ export function CopyDialog({ occ, mode, onClose }: { occ: RouteOccurrence | Task
   const today = data.today;
   const isRoute = occ.kind === 'route';
   const runnable = occ.recurring && occ.status === 'scheduled' && occ.date >= today && !occ.frozen;
-  const [to, setTo] = useState(() => (mode === 'ph' ? occ.date : mode === 'move' ? meta?.next_work_day ?? '' : occ.date >= today ? '' : today));
+  // Move: the first work day after the paused date (holidays from the loaded range, refined by the list).
+  const holQ = useQuery({ queryKey: ['holidays'], queryFn: () => listHolidays(), enabled: mode === 'move', retry: false });
+  const holidays = useMemo(
+    () => new Set([...data.days.filter((d) => d.holiday).map((d) => d.date), ...(holQ.data ?? []).map((h) => h.date)]),
+    [data.days, holQ.data],
+  );
+  const moveDefault = mode === 'move' ? nextWorkDayAfter(occ.date, (d) => holidays.has(d), today) : '';
+  const [to, setTo] = useState(() => (mode === 'ph' ? occ.date : mode === 'move' ? moveDefault : occ.date >= today ? '' : today));
+  const [toTouched, setToTouched] = useState(false);
+  useEffect(() => {
+    if (mode === 'move' && !toTouched && moveDefault) setTo(moveDefault);
+  }, [mode, toTouched, moveDefault]);
   const [skip, setSkip] = useState(runnable && mode !== 'ph');
   const [code, setCode] = useState('');
   const [codeTouched, setCodeTouched] = useState(false);
@@ -51,10 +63,12 @@ export function CopyDialog({ occ, mode, onClose }: { occ: RouteOccurrence | Task
     if (suggestQ.data && !codeTouched) setCode(suggestQ.data.code);
   }, [suggestQ.data, codeTouched]);
   const resType = suggestQ.data?.type;
+  // The same route already runs on the target date (only dates in the loaded range are known).
+  const alreadyRuns = isRoute && !!to && to !== occ.date && data.routes.some((o) => o.code === occ.code && o.date === to && o.status === 'scheduled');
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!to) return w.setError(t('err.VALIDATION_field', { field: t('copy.to') }));
+    if (!to) return w.setError(t('err.required_field', { field: t('copy.to') }));
     await w.run(
       async (rel) => {
         // A past source is read from its frozen plan; its rev may be old: use the live rev when the item still exists.
@@ -105,7 +119,17 @@ export function CopyDialog({ occ, mode, onClose }: { occ: RouteOccurrence | Task
           <div className="muted small">{t('copy.from', { date: fmtDay(occ.date, lang) })}</div>
           <label className="field">
             <span>{t('copy.to')}</span>
-            <input type="date" value={to} min={today} disabled={mode === 'ph'} onChange={(e) => setTo(e.target.value)} data-autofocus />
+            <input
+              type="date"
+              value={to}
+              min={today}
+              disabled={mode === 'ph'}
+              onChange={(e) => {
+                setTo(e.target.value);
+                setToTouched(true);
+              }}
+              data-autofocus
+            />
             {to && <span className="hint">{fmtDay(to, lang)}</span>}
           </label>
           {isRoute && resType && (
@@ -113,6 +137,11 @@ export function CopyDialog({ occ, mode, onClose }: { occ: RouteOccurrence | Task
               <TypeTag type={resType} />
               <span>{t(`copy.result.${resType}`)}</span>
               {suggestQ.data?.holiday && <span className="tag ph">{suggestQ.data.holiday}</span>}
+            </div>
+          )}
+          {alreadyRuns && (
+            <div className="banner warn" role="status" data-testid="copy-already-runs">
+              {t('copy.alreadyRuns', { code: occ.code, date: fmtDay(to, lang) })}
             </div>
           )}
           {isRoute && suggestQ.error ? <div className="form-error">{errText(suggestQ.error)}</div> : null}

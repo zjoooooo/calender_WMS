@@ -1,13 +1,28 @@
 // Pure view logic of the office calendar (§5.8, §9.2): bucketing the server's occurrences per day,
 // type / task filters, the legend, highlight and search (one matcher), and small text helpers.
 // The client never computes a weekday, day class, status or lock for rules: those come from the payload.
-// The only date arithmetic here (addDays) is for form defaults such as "end = D − 1".
+// The only date arithmetic here (addDays, nextWorkDayAfter) is for form defaults such as "end = D − 1".
 import type { CalendarDay, CalendarResponse, RouteOccurrence, RouteType, RunStatus, TaskOccurrence } from '../api';
 
 /** 'YYYY-MM-DD' + n days (UTC arithmetic, no time zone involved). */
 export function addDays(date: string, n: number): string {
   const [y, m, d] = date.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
+/**
+ * Form default of "Move to work day…" (R15, §6.4): the first Monday–Saturday after `date` that is not a
+ * known holiday and not before `min` (today). Only a default: the server's suggest-code still checks the
+ * target's day class. '' when nothing is found within 60 days.
+ */
+export function nextWorkDayAfter(date: string, isHoliday: (d: string) => boolean, min = ''): string {
+  let d = date;
+  for (let i = 0; i < 60; i++) {
+    d = addDays(d, 1);
+    const sunday = new Date(d + 'T00:00:00Z').getUTCDay() === 0;
+    if (!sunday && !isHoliday(d) && d >= min) return d;
+  }
+  return '';
 }
 
 /** Natural code order: N2 before N10 (R5). */
@@ -119,6 +134,70 @@ export function makeMatcher(data: CalendarResponse | undefined, hl: string | nul
   return { active: true, route, task: (o) => custHit(o.customer_id), code: (c) => codes.has(c) };
 }
 
+/** Paused PH routes (§6.4): how many still need a decision and how many a copy already covers. */
+export function pausedCounts(list: Pick<RouteOccurrence, 'covered_by'>[]): { open: number; covered: number } {
+  const covered = list.filter((o) => o.covered_by.length > 0).length;
+  return { open: list.length - covered, covered };
+}
+
+// ---- month cell (§9.2) -------------------------------------------------------------------------------
+
+/** A month cell shows at most this many lines before it collapses ("N more"). */
+export const MONTH_CELL_MAX = 4;
+
+export type CellItem = RouteOccurrence | TaskOccurrence;
+
+export interface MonthCellLines {
+  /** Every line of the cell: routes (day order) then tasks, after the type filters. */
+  items: CellItem[];
+  /** The lines drawn now. */
+  shown: CellItem[];
+  /** The lines behind "N more" (empty while the cell is open). */
+  hidden: CellItem[];
+  /** More than `max` lines: the cell has the "N more" / "Show less" control. */
+  collapsible: boolean;
+  /** Every line is drawn. */
+  open: boolean;
+  /** Open only because the search or highlight matches a line that would be hidden. */
+  auto: boolean;
+}
+
+/**
+ * Collapse rule of a month cell: up to `max` lines are all shown; with more, the first `max` are shown and
+ * the rest sit behind "N more" until the office expands the cell (`expanded`, kept per date by the page) or
+ * a search / highlight matches one of the hidden lines. Paused PH routes are not lines (own "⏸ N" line).
+ */
+export function monthCellLines(
+  g: Pick<DayGroups, 'routes' | 'tasks'>,
+  expanded: boolean,
+  matcher?: Pick<Matcher, 'active' | 'route' | 'task'>,
+  max: number = MONTH_CELL_MAX,
+): MonthCellLines {
+  const items: CellItem[] = [...g.routes, ...g.tasks];
+  const collapsible = items.length > max;
+  const matches = (o: CellItem) => (o.kind === 'route' ? matcher!.route(o) : matcher!.task(o));
+  const auto = collapsible && !expanded && !!matcher?.active && items.slice(max).some(matches);
+  const open = !collapsible || expanded || auto;
+  return {
+    items,
+    shown: open ? items : items.slice(0, max),
+    hidden: open ? [] : items.slice(max),
+    collapsible,
+    open,
+    auto,
+  };
+}
+
+/** The month grid's week rows (7 days each) that hold at least one day of the month: 4, 5 or 6 rows. */
+export function monthWeeks<T extends { day: Pick<CalendarDay, 'in_month'> }>(groups: T[]): T[][] {
+  const weeks: T[][] = [];
+  for (let i = 0; i < groups.length; i += 7) {
+    const w = groups.slice(i, i + 7);
+    if (w.some((g) => g.day.in_month)) weeks.push(w);
+  }
+  return weeks;
+}
+
 // ---- legend (§9.2) ---------------------------------------------------------------------------------
 
 export interface LegendItem {
@@ -196,22 +275,6 @@ export function taskGroupCounts(tasks: TaskOccurrence[]): { byType: [string, num
     if (o.run_status === 'not_started') unclaimed++;
   }
   return { byType: [...byType.entries()], unclaimed };
-}
-
-/** Month chip status dot (§8.3): green done, amber open, red incomplete, grey no record. */
-export function statusDot(s: RunStatus | null): 'ok' | 'warn' | 'danger' | 'grey' | null {
-  switch (s) {
-    case 'done':
-      return 'ok';
-    case 'open':
-      return 'warn';
-    case 'incomplete':
-      return 'danger';
-    case 'no_record':
-      return 'grey';
-    default:
-      return null;
-  }
 }
 
 /** Job key of an occurrence for /api/runs/{date}/{job}: 'r5' or 't6'. */

@@ -153,6 +153,8 @@ async function main() {
     console.log('customers');
     await page.getByRole('button', { name: '+ 新建客户' }).click();
     const dlg = page.getByRole('dialog');
+    await dlg.getByRole('button', { name: '保存' }).click();
+    check(/请填写名称/.test(await dlg.locator('.form-error').innerText()), 'saving with an empty name says "请填写名称" (not a generic "输入有误")', await dlg.locator('.form-error').innerText());
     await dlg.getByLabel('名称').fill('Kopi Tiam 88');
     await dlg.getByLabel('地址').fill('Blk 312 Clementi Ave 4');
     await dlg.getByLabel('电话').fill('+65 6123 4567');
@@ -228,11 +230,38 @@ async function main() {
     await page.getByLabel('名称', { exact: true }).fill('E2E Test Holiday');
     await page.getByRole('button', { name: '+ 添加' }).click();
     await added.waitFor();
+    // "+ 添加" on a date that already has a holiday is refused on screen (no silent rename, OFF-6).
+    await page.locator('input[type=date]').fill('2026-12-25');
+    await page.getByLabel('名称', { exact: true }).fill('Dup');
+    const dupMsg = await page.locator('[data-testid=holiday-exists]').innerText();
+    check((await page.getByRole('button', { name: '+ 添加' }).isDisabled()) && /已经是假日/.test(dupMsg) && dupMsg.includes('Christmas Day'), 'adding an existing holiday date is refused: "+ 添加" disabled, it names Christmas Day', dupMsg);
+    await page.locator('input[type=date]').fill('');
+    await page.getByLabel('名称', { exact: true }).fill('');
+
+    // 6b. The calendar opens in the month view (Sunday first); today is blue, the new holiday red with its bar.
+    console.log('calendar month view (zh)');
+    await page.getByRole('link', { name: '日历' }).click();
+    await page.locator('.month .mcell').first().waitFor();
+    check((await page.locator('.month .mh').allInnerTexts()).join(' ') === '周日 周一 周二 周三 周四 周五 周六', 'calendar opens in the month view, 周日 first');
+    check(/^\d{4}年\d{1,2}月$/.test((await page.locator('.cal-title').innerText()).trim()), 'month title "2026年11月"', await page.locator('.cal-title').innerText());
+    const todayNum = page.locator('.month .dnum.today');
+    check((await todayNum.count()) === 1 && (await todayNum.evaluate((e) => getComputedStyle(e).backgroundColor)) === 'rgb(37, 99, 235)', "today's number has the blue circle");
+    await page.goto(BASE + '/?anchor=2026-12-31');
+    const phCell = page.locator('.month .mcell[data-date="2026-12-31"]');
+    await phCell.locator('.mph').waitFor();
+    check((await phCell.locator('.dnum').evaluate((e) => getComputedStyle(e).color)) === 'rgb(220, 38, 38)' && /★\s*E2E Test Holiday/.test(await phCell.locator('.mph').innerText()), 'the new holiday: red number and "★ E2E Test Holiday" bar');
+    await page.goto(BASE + '/?view=week&anchor=2026-12-31');
+    await page.locator('.week .day').first().waitFor();
+    const wk = await page.locator('.week .day').evaluateAll((els) => els.map((e) => e.dataset.date));
+    check(wk[0] === '2026-12-27' && wk[6] === '2027-01-02', 'week view runs Sunday to Saturday', wk);
+    await shot(page, '03b-calendar');
 
     // 7. Settings: rollover (admin), trucks, waste types.
     console.log('settings');
     await page.getByRole('link', { name: '设置' }).click();
     await page.getByRole('heading', { name: '垃圾类型' }).waitFor();
+    // The heading renders before the list query answers; wait for the rows (slow under parallel load).
+    await page.locator('tbody tr').nth(2).waitFor({ timeout: 15000 }).catch(() => {});
     check((await page.locator('tbody tr').count()) >= 3, 'waste types table lists the seed types');
     await page.getByPlaceholder('例如 SBA1234X').fill('sba 1234 x');
     await page.getByRole('button', { name: '+ 添加车牌' }).click();

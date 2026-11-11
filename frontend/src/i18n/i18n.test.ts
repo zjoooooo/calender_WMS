@@ -2,7 +2,7 @@
 // areas, placeholders match, and every API error code has a text.
 import { describe, expect, it } from 'vitest';
 import { AREAS, DICTS, interpolate, translate } from './index';
-import { fmtDay, weekdayOf } from './format';
+import { fmtDay, fmtMonthStart, monthName, weekdayOf } from './format';
 import { ERROR_CODES, WARNING_CODES } from '../api';
 
 const placeholders = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
@@ -58,11 +58,28 @@ describe('translate and format', () => {
     expect(translate('en', 'no.such.key')).toBe('no.such.key');
   });
 
+  it('uses the singular text for n = 1 when there is one (OFF-9)', () => {
+    expect(translate('en', 'cal.nTasks', { n: 1 })).toBe('1 task');
+    expect(translate('en', 'cal.nTasks', { n: 2 })).toBe('2 tasks');
+    expect(translate('en', 'users.taskJobs', { n: 1 })).toBe('1 task');
+    expect(translate('en', 'cal.moreN', { n: 1 })).toBe('1 more'); // no _one text: the plain one
+    expect(translate('zh', 'cal.nTasks', { n: 1 })).toBe('1 个任务');
+    expect(translate('en', 'err.required_field', { field: 'Name' })).toBe('Name is required');
+  });
+
   it('formats dates per language without the browser time zone', () => {
     expect(weekdayOf('2026-11-11')).toBe(3);
     expect(weekdayOf('2026-11-15')).toBe(7);
     expect(fmtDay('2026-11-11', 'zh')).toBe('11月11日 周三');
     expect(fmtDay('2026-11-11', 'en')).toBe('Wed 11 Nov');
     expect(fmtDay('2026-12-25', 'en', { year: true })).toBe('Fri 25 Dec 2026');
+  });
+
+  it('formats month names and the month-grid label of the 1st', () => {
+    expect(monthName(11, 'zh')).toBe('11月');
+    expect(monthName(11, 'en')).toBe('November');
+    expect(monthName(11, 'en', true)).toBe('Nov');
+    expect(fmtMonthStart('2026-11-01', 'zh')).toBe('11月1日');
+    expect(fmtMonthStart('2026-12-01', 'en')).toBe('Dec 1');
   });
 });

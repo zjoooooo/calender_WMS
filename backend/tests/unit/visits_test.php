@@ -270,15 +270,22 @@ return (static function (): array {
         'R31 + R32: the same customer on a route and a task; day totals count both, night-shift visits count for the job date' => function () use ($held, $put, $b) {
             $e = RunsFx::env(['runs' => $held()]);
             $j = T::ok($e->call('GET', '/api/driver/runs/2026-11-11/r5', null, 'ali'));
-            T::eq([['job' => 't6', 'label' => 'OTC task', 'outcome' => null]], $j['stops'][0]['also_on']);
-            T::eq([['job' => 't12', 'label' => 'COMPACTOR task', 'outcome' => null]], $j['stops'][1]['also_on']);
+            T::eq([['job' => 't6', 'kind' => 'task', 'label' => 'OTC task', 'outcome' => null]], $j['stops'][0]['also_on']);
+            T::eq([['job' => 't12', 'kind' => 'task', 'label' => 'COMPACTOR task', 'outcome' => null]], $j['stops'][1]['also_on']);
+            // DRV-9: the task label follows the reader's language (no English in the Chinese UI)
+            T::ok($e->call('PATCH', '/api/me', ['lang' => 'zh'], 'ali'));
+            $z = T::ok($e->call('GET', '/api/driver/runs/2026-11-11/r5', null, 'ali'));
+            T::eq([['job' => 't6', 'kind' => 'task', 'label' => 'OTC 任务', 'outcome' => null]], $z['stops'][0]['also_on']);
+            T::eq([['job' => 'r5', 'kind' => 'route', 'label' => 'N1', 'outcome' => null]],
+                T::ok($e->call('GET', '/api/driver/runs/2026-11-11/t6', null, 'ali'))['stops'][0]['also_on']);
+            T::ok($e->call('PATCH', '/api/me', ['lang' => 'en'], 'ali'));
             $t = T::ok($e->call('GET', '/api/driver/today', null, 'ali'));
             T::eq([['job' => 'r5', 'code' => 'N1']], array_values(array_filter($t['tasks'], static fn ($x) => $x['job'] === 't6'))[0]['also_on']);
             T::ok($put($e, 't6', 12, $b(1, 0, 'collected', ['weights' => ['OTC' => '30,2']]), 'ali'));
             T::ok($put($e, 'r5', 12, $b(2, 0, 'collected', ['weights' => ['REL' => 120.5]]), 'ali'));
             $j = T::ok($e->call('GET', '/api/driver/runs/2026-11-11/r5', null, 'ali'));
             T::eq('collected', $j['stops'][0]['also_on'][0]['outcome']);
-            T::eq([['job' => 'r5', 'label' => 'N1', 'outcome' => 'collected']], T::ok($e->call('GET', '/api/driver/runs/2026-11-11/t6', null, 'ali'))['stops'][0]['also_on']);
+            T::eq([['job' => 'r5', 'kind' => 'route', 'label' => 'N1', 'outcome' => 'collected']], T::ok($e->call('GET', '/api/driver/runs/2026-11-11/t6', null, 'ali'))['stops'][0]['also_on']);
             $day = static function (TestEnv $e, string $date): array {
                 foreach (T::ok($e->call('GET', '/api/calendar?view=week&anchor=' . $date, null, 'mei'))['days'] as $d) {
                     if ($d['date'] === $date) {

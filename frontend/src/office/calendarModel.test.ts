@@ -8,6 +8,11 @@ import {
   groupDays,
   legendItems,
   makeMatcher,
+  MONTH_CELL_MAX,
+  monthCellLines,
+  monthWeeks,
+  nextWorkDayAfter,
+  pausedCounts,
   rangeContainsToday,
   routesByCustomer,
   taskGroupCounts,
@@ -136,5 +141,98 @@ describe('helpers', () => {
     expect(taskGroupCounts(data.tasks)).toEqual({ byType: [['OTC', 1], ['COMPACTOR', 1]], unclaimed: 1 });
     expect(addDays('2026-12-31', 1)).toBe('2027-01-01');
     expect(addDays('2026-03-01', -1)).toBe('2026-02-28');
+  });
+});
+
+describe('month cell collapse (§9.2)', () => {
+  const routes = (n: number, date = '2026-11-12') =>
+    Array.from({ length: n }, (_, i) => route({ route_id: 100 + i, code: `R${i + 1}`, date, stops: stops(7 + i) }));
+  const keys = (list: { key: string }[]) => list.map((o) => o.key);
+
+  it('shows up to 4 lines with no control', () => {
+    expect(MONTH_CELL_MAX).toBe(4);
+    for (const n of [0, 1, 4]) {
+      const c = monthCellLines({ routes: routes(n), tasks: [] }, false);
+      expect(c.collapsible).toBe(false);
+      expect(c.open).toBe(true);
+      expect(c.shown).toHaveLength(n);
+      expect(c.hidden).toEqual([]);
+    }
+  });
+
+  it('more than 4: the first 4 lines, the rest behind "N more"; routes come before tasks', () => {
+    const t = [task({ task_id: 1, date: '2026-11-12', customer_id: 12 })];
+    const c = monthCellLines({ routes: routes(4), tasks: t }, false);
+    expect(c.collapsible).toBe(true);
+    expect(c.open).toBe(false);
+    expect(c.shown.map((o) => o.kind)).toEqual(['route', 'route', 'route', 'route']);
+    expect(keys(c.hidden)).toEqual(['t1@2026-11-12']);
+    const big = monthCellLines({ routes: routes(13), tasks: t }, false);
+    expect(big.shown).toHaveLength(4);
+    expect(big.hidden).toHaveLength(10);
+    expect(keys(big.items)).toEqual([...keys(routes(13)), 't1@2026-11-12']);
+  });
+
+  it('expanded shows every line and keeps the control (Show less)', () => {
+    const c = monthCellLines({ routes: routes(13), tasks: [] }, true);
+    expect(c.collapsible).toBe(true);
+    expect(c.open).toBe(true);
+    expect(c.auto).toBe(false);
+    expect(c.shown).toHaveLength(13);
+    expect(c.hidden).toEqual([]);
+  });
+
+  it('opens by itself while the search or highlight matches a hidden line, not a shown one', () => {
+    const list = routes(6);
+    const hl = (code: string) => ({ active: true, route: (o: RouteOccurrence) => o.code === code, task: () => false });
+    const hidden = monthCellLines({ routes: list, tasks: [] }, false, hl('R6'));
+    expect(hidden.open && hidden.auto).toBe(true);
+    expect(hidden.shown).toHaveLength(6);
+    const shown = monthCellLines({ routes: list, tasks: [] }, false, hl('R2'));
+    expect(shown.open || shown.auto).toBe(false);
+    const off = monthCellLines({ routes: list, tasks: [] }, false, { active: false, route: () => true, task: () => true });
+    expect(off.open).toBe(false);
+    const tasks = [task({ task_id: 9, date: '2026-11-12', customer_id: 40 })];
+    const byTask = monthCellLines({ routes: list, tasks }, false, makeMatcher(data, null, 'golden'));
+    expect(byTask.auto).toBe(true);
+  });
+
+  it('a custom limit', () => {
+    expect(monthCellLines({ routes: routes(3), tasks: [] }, false, undefined, 2).hidden).toHaveLength(1);
+  });
+
+  it('month weeks: only the week rows that hold a day of the month', () => {
+    const g = (n: number, inMonth: (i: number) => boolean) => Array.from({ length: n }, (_, i) => ({ day: { in_month: inMonth(i) } }));
+    // Nov 2026, Sunday first: Nov 1 .. Nov 30 are cells 0..29 of 42 -> 5 rows.
+    expect(monthWeeks(g(42, (i) => i < 30)).map((w) => w.length)).toEqual([7, 7, 7, 7, 7]);
+    // Aug 2026: Sat 1 is cell 6, Mon 31 is cell 36 -> 6 rows.
+    expect(monthWeeks(g(42, (i) => i >= 6 && i <= 36))).toHaveLength(6);
+    // Feb 2026: Sun 1 .. Sat 28 -> 4 rows.
+    expect(monthWeeks(g(42, (i) => i < 28))).toHaveLength(4);
+  });
+});
+
+describe('Move to work day default (OFF-1 / REV-2)', () => {
+  const hol = new Set(['2026-11-08', '2026-11-09', '2026-12-25', '2026-12-01']);
+  const isHol = (d: string) => hol.has(d);
+  it('is the first work day after the paused date, not the next work day after today', () => {
+    expect(nextWorkDayAfter('2026-12-25', isHol, '2026-11-11')).toBe('2026-12-26'); // Christmas (Fri) -> Sat 26 Dec
+    expect(nextWorkDayAfter('2026-12-01', isHol, '2026-11-11')).toBe('2026-12-02'); // a Tue PH -> Wed
+  });
+  it('skips Sundays and holidays and never returns a date before today', () => {
+    expect(nextWorkDayAfter('2026-11-07', isHol, '2026-11-01')).toBe('2026-11-10'); // Sat -> Sun 8 (PH) -> Mon 9 (PH) -> Tue
+    expect(nextWorkDayAfter('2026-11-05', isHol, '2026-11-11')).toBe('2026-11-11');
+  });
+});
+
+describe('paused PH counts (OFF-5)', () => {
+  it('counts the routes that still need a decision apart from the covered ones', () => {
+    const list = [
+      route({ code: 'C1', date: '2026-12-01', route_id: 1, status: 'holiday_skipped', covered_by: [{ route_id: 9, code: 'C1-01', date: '2026-12-01' }] }),
+      route({ code: 'C2', date: '2026-12-01', route_id: 2, status: 'holiday_skipped' }),
+      route({ code: 'C3', date: '2026-12-01', route_id: 3, status: 'holiday_skipped' }),
+    ];
+    expect(pausedCounts(list)).toEqual({ open: 2, covered: 1 });
+    expect(pausedCounts([])).toEqual({ open: 0, covered: 0 });
   });
 });

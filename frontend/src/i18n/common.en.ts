@@ -93,6 +93,7 @@ const common: { [K in keyof typeof zh]: string } = {
 
   'err.VALIDATION': 'Invalid input: please check',
   'err.VALIDATION_field': 'Invalid value: {field}',
+  'err.required_field': '{field} is required',
   'err.NOT_FOUND': 'Not found (it may have been deleted)',
   'err.UNAUTHORIZED': 'Please sign in again',
   'err.FORBIDDEN': 'Your account is not allowed to do this',

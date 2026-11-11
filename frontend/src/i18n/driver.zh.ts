@@ -93,6 +93,8 @@ const driver = {
 
   'driver.form.weightLabel': '{type}（{unit}）',
   'driver.form.weightRequired': '请填重量（没有就按 0）',
+  'driver.form.weightRequiredOne': '请填重量。没有垃圾？请按「没收…」→「没有垃圾」。',
+  'driver.form.weightZeroOne': '重量要大于 0。没有垃圾？请按「没收…」→「没有垃圾」。',
   'driver.form.ticket': '{type} 过磅单号',
   'driver.form.ticketTooLong': '单号最多 30 个字符',
   'driver.form.collected': '已收：保存',

@@ -841,7 +841,7 @@ for t in plan.tasks:
 3. A **Paused** group comes last: the holiday_skipped regular routes, collapsed into one line.
 
 ### 5.9 Calendar request
-- `GET /api/calendar?view=week|month&anchor=D` returns the whole grid. Weeks start on Monday, and the month grid is 6 × 7.
+- `GET /api/calendar?view=week|month&anchor=D[&week_start=sun]` returns the whole grid. Weeks start on Monday by default (`week_start=sun`: Sunday, as the office calendar asks), and the month grid is 6 × 7.
 - For each day the server sends `class`, `holiday`, `past`, `can_create`, `ops` (today and past days only), `totals`, and the occurrence lists.
 - The client never computes a weekday, a day class, a status or a lock. It only renders, filters, searches and highlights.
 
@@ -892,6 +892,7 @@ for t in plan.tasks:
 ### 6.2 Scope dialog (recurring routes)
 - (•) **Only Wed 18 Nov**: writes `override.stops` and note.
 - ( ) **Wed 18 Nov and all following**: per R12, a template replace (when 18 Nov is the next date the route runs) or a split from 18 Nov (R14, same code, so the calendar looks the same).
+- "Only this date" is pre-selected, except when the date inherits an empty list (a route just created, before its first customers): then "and all following" is pre-selected, so the first customers become the route's list on every date it runs.
 - The dialog lists "Not changed: Mon 23 Nov, Fri 27 Nov (they have their own list)".
 - For today's container with a run, it adds the driver impact, computed client-side from the loaded payload. Example: "N1 (Ali, 3/8) will get 1 new stop".
 
@@ -911,7 +912,8 @@ for t in plan.tasks:
 - **Paused (PH) regular routes**:
   - In the day column they collapse into one grey line, "⏸ 3 regular routes paused (PH) ▸".
   - Each expanded row has [Run on PH], a copy to the same date (special one-off), and [Move to work day…], a copy to a chosen work date (regular one-off, R tag, not adhoc).
-  - A covered row shows "→ N1-25 Fri 25 Dec".
+  - [Move to work day…] pre-fills the first work day after the paused date (Fri 25 Dec → Sat 26 Dec), never the next work day after today. The dialog warns when the same code already runs on the chosen date.
+  - A covered row shows "→ N1-25 Fri 25 Dec" once. The paused line counts only the routes that still need a decision: "⏸ 11 paused · 2 covered".
 - **Moving a one-off** is "Change date" in its menu. The new date is re-validated by R6.
 
 ### 6.5 Route schedule and identity
@@ -1129,7 +1131,7 @@ After the rollover (default 04:00), the previous day's jobs are no longer listed
 | D09 plan change after start | R26 `RUN_EXISTS`, with `release_run` when resolved = 0. |
 | D10 calendar shows actuals | Frozen plan + run overlay, plus `no_record`. |
 | D11 closed / no waste / refused | Missed reasons. An optional photo can serve as evidence. |
-| D12 blank vs 0 | Every shown field is required, with a [0] chip. The server treats an absent type as 0 and requires at least one value > 0. |
+| D12 blank vs 0 | Every shown field is required, with a [0] chip when the stop has two or more weighable types (with one type, 0 alone is refused, so there is no chip and the hint points to Not collected → No waste). The server treats an absent type as 0 and requires at least one value > 0. |
 | D13 unregistered type | Not on site: only the customer's registered routable types are weighable (`TYPE_NOT_ALLOWED` otherwise). The driver calls the office, which edits the customer; the form updates on the next poll. Task: not applicable. |
 | D14 customer types change mid-run | Pending stops refresh on poll. An open form never changes. Visits keep their snapshot. |
 | D15 waste-type list changes | R3: code, unit and routable are immutable, and deactivation is guarded. |
@@ -1194,7 +1196,7 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
 
 - **Today's day header** shows the ops line `○3 ◑6 ⇄1 ✓2` and the totals "REL 2,410 kg · OTC 300 kg · COMPACTOR 5,200 kg" (provisional while any job is active or open).
 - **Past day headers** show the totals plus counts of incomplete and no_record jobs.
-- **Month chips** get a small status dot: green done, amber open, red incomplete, grey no record.
+- **Month lines** show the same status in short form at the right: the glyph, the driver (active, done) and the count, e.g. `◑ Ali 3/8`, `○ 0/8`, `✓ Ali`; future dates show the stop count (muted). The full text is in the tooltip.
 - **Today's day drawer**, sorted Needs driver, Not started, Working, Done, is the live dispatch board. No extra page is needed.
 
 ### 8.4 Driver-side sync
@@ -1229,9 +1231,9 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
 **Login.** Fields: username and password, plus a language toggle. A first login with `must_change_password` goes to "Set new password".
 
 **Calendar** (the main page, as in the mockup):
-- **Top bar**:
-  - [‹] [Today] [›] and the range title;
-  - [Week | Month];
+- **Top bar** (laid out like a desktop calendar app):
+  - a big title at the left: "November 2026" / "2026年11月" (month bold, year regular); the week view adds its date range in small text;
+  - at the right: [‹] [Today] [›] (grouped) and [Week | Month] (Month is the default: no `view` in the URL = month, `?view=week` = week);
   - [⚡ Urgent pickup] and [+ Task];
   - navigation: Calendar, Routes, Tasks, Customers, Holidays, Settings, Users (admin only);
   - user menu: language, change password, sign out everywhere;
@@ -1240,31 +1242,39 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
   - search: route code, route name, or customer name or code;
   - type chips: `R`, `S` and `⚡A`;
   - task chips, one per non-routable type: `OTC` and `COMPACTOR`. Every chip toggles visibility;
-  - [Clear highlight], shown while a highlight or search is active.
+  - [Clear highlight], shown while a highlight or search is active;
+  - month view only: [Expand all / Collapse all] for the collapsed cells.
 - **Legend row**: every route code that appears in the visible range, as `▌CODE short-name`, sorted A, R, S and then by code. Clicking a code highlights it.
 - **Highlight and search.**
   - Clicking a code (in the legend, a row or a chip) highlights that code on every date. Everything else dims to 18% opacity.
   - Clicking the same code again, or pressing Esc, clears the highlight.
   - Search dims everything that does not match. It covers routes (code, name, stop customers) and tasks (customer).
   - Highlight and search are exclusive: the last one used wins.
-- **Week view**: 7 columns, Monday to Sunday, so rest days sit at the right. Each column has:
+- **Date colours (both views)**: today's date (the op_date) is shown in **blue** (white digits in a filled blue circle or pill); a public holiday's date is shown in **red**. On a PH that is today, the blue wins and the holiday bar or tag stays red. Light and dark themes use the tokens `--cal-today`, `--cal-ph` and `--cal-ph-bg`.
+- **Week view**: 7 columns, Sunday to Saturday (`week_start=sun`, the same order as the month view). Each column has:
   - **Header**: "Wed 11 Nov".
-    - Today (the op_date) gets a "Today" tag and an accent ring. Between 00:00 and the rollover the tag stays on the previous date and reads "Today · until {time}" (§9.1), so the night shift is still visible as live.
+    - Today (the op_date) gets the blue date, a "Today" tag and a blue accent ring. Between 00:00 and the rollover the tag stays on the previous date and reads "Today · until {time}" (§9.1), so the night shift is still visible as live.
     - Past days get a lock.
-    - Rest days get a rose tint, and a PH also gets a red tag with its name.
+    - Rest days get a faint rose tint; a PH also gets a red date and a red "★ PH · name" tag.
     - A summary line: "12 routes · 96 stops · 4 tasks · 1 paused".
     - Today's ops line, and the totals for today and past days.
   - **Tasks group**, at the top so that tasks are never buried under 10+ routes:
     - With 3 tasks or fewer, each task is one row.
     - With more than 3, the group collapses to one line, "▣ Tasks 5 · OTC 2 · COMPACTOR 3 · ○2 unclaimed ▸", which expands in place. It also expands automatically when a search or highlight matches a task in it.
     - **Task row (one line)**: grey fill, rounded pill, **no colour bar**; then the abbr tag (`OTC` / `COMPACTOR`), "↻" for a recurring task, the customer name (ellipsis) and the status (glyph + short word, §8.3) at the right. It never looks like a route container.
-  - **Route rows (one line each)**: a 5 px colour bar, **CODE** (bold mono), the type tag (`R` / `S` / `⚡A`, with a dashed amber border for adhoc), the name (ellipsis, truncated first), and the status glyph + short word + count at the right (§8.3). Stops are not listed in the week view.
-  - **Paused group**: "⏸ 3 regular routes paused (PH) ▸". Expanded rows offer [Run on PH] and [Move to work day…].
+  - **Route rows (one line each)**: a 5 px colour bar, **CODE** (bold mono), the type tag (`R` / `S` / `⚡A`, with a dashed amber border for adhoc), the name (ellipsis, truncated first but never below about 3 characters), and the status glyph + short word + count at the right (§8.3). In a narrow day column (under about 300 px, e.g. a 1440 px laptop) the status word ("Unclaimed", "Needs driver") moves to the tooltip, like the month lines: "○ 0/10"; a driver's name stays ("◑ Devi 0/8"). Stops are not listed in the week view.
+  - **Paused group**: "⏸ 3 regular routes paused (PH) ▸", counting only the routes that still need a decision ("⏸ 11 regular routes paused (PH) · 2 covered"). Expanded rows offer [Run on PH] and [Move to work day…]; a covered row shows "→ N1-25 Fri 25 Dec" once.
   - **Footer** (today and later): [+ Route] [+ Task].
-- **Month view**: a 6 × 7 grid.
-  - Each cell shows the date, "12 routes", a PH tag, and then **code chips** in day order. A chip is the code with a 4 px colour edge; adhoc chips are dashed with a lightning mark, and today and past chips carry a status dot.
-  - After the code chips come "⏸3" for paused routes and **one task chip** "▣ 5". The task chip gets an amber dot if today has unclaimed tasks, or if a past day has incomplete or no-record tasks; its tooltip lists the tasks.
-  - Clicking the date opens the **day drawer** (about 460 px), which renders the same column as the week view. Clicking a chip opens that route's drawer.
+- **Month view** (the default view; modelled on the Apple Calendar month view the user sent, Round 5):
+  - A header row of weekday names, **Sunday to Saturday** (`week_start=sun`), and only the week rows that hold a day of the month (4–6 rows of the server's 6 × 7 grid). Thin gridlines, no gaps.
+  - Each cell: the day number at the top right (about 19 px; the 1st of a month reads "Nov 1" / "11月1日"; days of other months muted), today in the blue circle and a PH in red (see Date colours). Today and past days show the **day's totals per waste type** left of the number, small and muted ("REL 1,475.5 kg"; tooltip adds "provisional" while the day is open), as in the week header (R32).
+  - A PH cell starts with a red-tinted, full-width **holiday bar** "★ Deepavali (observed)". Paused PH routes follow as one line "⏸ 12 paused ▸" ("⏸ 11 paused · 1 covered ▸" once some are covered; not counted in the 4 below), which opens the day drawer ([Run on PH], [Move to work day…]).
+  - Then **one line per item**: routes first (day order, §5.8), then tasks, after the type and task filters.
+    - Route line: colour bar, **CODE** (bold mono), type tag (`R` / `S` / `⚡A`; adhoc gets a dashed amber outline), the name (ellipsis, truncated first) and a short status at the right (§8.3 month lines). Skipped dates are struck through.
+    - Task line: grey pill, the abbr tag (`OTC` / `COMPACTOR`), "↻" when recurring, the customer and a short status.
+    - Highlight and search dim lines the same way as rows.
+  - **Collapse rule**: a cell with **more than 4 lines** shows the first 4 and then "N more ▾" (tooltip: the hidden codes / tasks). Clicking it expands the cell in place, with "Show less ▴" at the end. Cells with 4 lines or fewer have no control. The expanded state is kept per date by the page, so the 30 s refetch never collapses it; a cell also opens by itself while a search or highlight matches one of its hidden lines.
+  - **Clicks**: a route line opens that route's drawer (§6.1: edit stops, reorder, …); a task line opens the task drawer; the day number opens the **day drawer** (about 460 px), which renders the same column as the week view. Today and later cells get a **"+"** at the top left (shown on hover or focus, always on touch screens) with the same create menu as the week view's footer (the route kinds of `can_create`, and + Task), so routes are added without leaving the month view.
 - **Route drawer**: §6.1.
 - **Task drawer**: §6.8.
 - **Dialogs**:
@@ -1318,7 +1328,7 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
 - **Tabs**: [Routes (12)] [Tasks (4)].
   - **Route card** (72 px): colour bar, **CODE in 20 px mono**, type tag, name, "8 stops", the first 3 customers, the note and the status. A taken route is grey and cannot be tapped ("Chong 4/10").
   - **Task card**: the abbr badge (`OTC` / `COMPACTOR`), "↻" for a recurring task, the customer name and address, the note, the status, and "also on your route N1" where it applies.
-- **Banners**: "New today" for new jobs. The "Not sent: show the office" list appears when it is not empty.
+- **Banners**: "New today" for new jobs this driver can still act on (not done, not taken by someone else). The "Not sent: show the office" list appears when it is not empty.
 
 **S2 Route preview (= select).**
 - Content: the code, name, note and a read-only stop list (seq, name, address).
@@ -1342,13 +1352,15 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
 - **One field per weighable type**, rendered from the stop's `weigh_types` (route: the customer's registered routable types; task: the task's type). There is no way to add another type on site.
   - a label "REL (kg)";
   - `inputmode=decimal`, a 28 px font, "," accepted;
-  - a [0] chip;
+  - a [0] chip (only when the stop has two or more weighable types);
   - a value ≥ `confirm_over` asks "1,250.0 kg, correct?".
 - A **Ticket no.** field per weighable type whose `weigh_method = weighbridge`. It is hidden for on-site types, which are all types by default.
 - [Add photo]: the camera opens, and thumbnails appear, up to 5.
 - [Signature]: a full-screen finger pad, with Clear and Save.
 - An optional note.
-- [Collected: save] in big green. For a route stop it then goes to the next stop; for a task, back to Today.
+- [Collected: save] in big green. For a route stop it then goes to the next stop (only while the driver still holds the route); for a task, back to Today.
+- The form also watches the job: when the office releases or reassigns it, the phone says "Office took back N1" / "Office moved N1 to Bala" and returns to Today, as the run view does (§8.2).
+- A stop with an unsent result always opens with its queued values, photos, signature and note (the form waits until the phone's outbox has been read).
 - [Not collected] opens a reason sheet: No waste / Closed / No access / Refused / Other….
 - When the form is reopened from Done (today's jobs only): [Save correction] and [Undo].
 - For a task, the overflow menu has [Give back] while the result is not yet saved.
@@ -1357,7 +1369,7 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
 
 **S6 Route done.** Collected, missed and the totals per type, then [Back to Today].
 
-**S7 Not sent.** Refused entries with the server's reason. Each one can be opened, edited and resent, or shown to the office.
+**S7 Not sent.** Refused entries with the server's reason. Each one can be opened, edited and resent, or shown to the office. An entry refused with `TICKET_REQUIRED` opens with that ticket field. A reply that is not the API's JSON (a Wi-Fi sign-in page, a proxy page) counts as no signal: the result stays queued and is resent, it never goes to Not sent.
 
 **Tap counts:**
 - start a route: 2 taps;
@@ -1416,8 +1428,8 @@ GET /api/meta ->
 
 ### 10.4 Calendar (office)
 ```
-GET /api/calendar?view=week|month&anchor=2026-11-11 ->
-{"from":"2026-11-09","to":"2026-11-15","today":"2026-11-11","prev_anchor":"2026-11-02","next_anchor":"2026-11-16",
+GET /api/calendar?view=week|month&anchor=2026-11-11[&week_start=mon|sun] ->
+{"view":"week","week_start":"mon","from":"2026-11-09","to":"2026-11-15","today":"2026-11-11","prev_anchor":"2026-11-02","next_anchor":"2026-11-16",
  "missing_holiday_years":[2027],
  "days":[{"date":"2026-11-11","dow":3,"class":"work","holiday":null,"past":false,"in_month":true,
           "can_create":["regular","adhoc","task"],
@@ -1427,6 +1439,7 @@ GET /api/calendar?view=week|month&anchor=2026-11-11 ->
  "tasks":[TaskOccurrence…],
  "customers":{"12":{"id":12,"code":"C0012","name":"ABC Restaurant","address":"12 Jalan Besar","waste_types":["REL","OTC"],"active":true}}}
 ```
+- `week_start` (optional, default `mon`; anything else than `mon` or `sun` is `422 VALIDATION`) sets the first column. With `sun`: the week view is the Sunday on or before the anchor to the Saturday after it, and the month view is the 42 days from the Sunday on or before the 1st (a month whose 1st is a Sunday starts on the 1st). `prev_anchor` / `next_anchor` keep their meaning (± 7 days; the 1st of the previous / next month). The office calendar always sends `sun`.
 - `ops` is present only for today and past days.
 - `customers` covers every customer referenced in the range, archived ones included.
 - Occurrences are already sorted per §5.8.

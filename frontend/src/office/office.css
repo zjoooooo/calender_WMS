@@ -13,6 +13,14 @@
 .cal-bar { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; }
 .cal-bar .search { width: 300px; }
 .cal-bar .range { font-family: var(--font-head); font-weight: 700; font-size: 16px; min-width: 0; }
+/* big month title like a desktop calendar: "November 2026" / "2026年11月" (month bold, year regular) */
+.cal-top .cal-title { font-size: 30px; font-weight: 400; letter-spacing: -.01em; line-height: 1.15; }
+.cal-title b { font-weight: 800; }
+.cal-title .y { font-weight: 400; }
+.cal-title .wk { font-family: var(--font-ui); font-size: 14px; font-weight: 500; color: var(--muted); margin-left: 12px; letter-spacing: 0; white-space: nowrap; }
+.calnav { display: inline-flex; align-items: center; gap: 4px; }
+.calnav .btn { border-radius: 999px; min-width: 32px; justify-content: center; }
+.cal-bar .expall { margin-left: auto; }
 .tchip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 4px 10px; font-size: 12.5px; display: inline-flex; gap: 6px; align-items: center; }
 .tchip[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -26,16 +34,21 @@
 
 /* ---- week grid ---------------------------------------------------------------------------------- */
 .week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; align-items: start; }
-.day { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; min-width: 0; min-height: 160px; }
-.day.rest { background: var(--rest); }
-.day.today { border-color: var(--today); box-shadow: 0 0 0 1px var(--today); }
+.day { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; min-width: 0; min-height: 160px; container-type: inline-size; }
+.day.rest { background: color-mix(in srgb, var(--rest) 45%, var(--surface)); }
+.day.today { border-color: var(--cal-today); box-shadow: 0 0 0 1px var(--cal-today); }
 .dh { padding: 8px 10px 6px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
 .dh .d1 { display: flex; align-items: baseline; gap: 6px; }
 .dh .dow { font-weight: 600; }
 .dh .dt { font-family: var(--font-head); font-weight: 700; font-size: 17px; border: 0; background: none; padding: 0; color: var(--fg); }
 .dh .dt:hover { text-decoration: underline; }
+/* same date marks as the month grid: today blue (white on a blue pill), a public holiday red */
+.dh .dt.ph { color: var(--cal-ph); }
+.dh .dt.today { background: var(--cal-today); color: #fff; border-radius: 999px; padding: 0 8px; }
+.dh .phtag { color: var(--cal-ph); background: var(--cal-ph-bg); border-color: transparent; }
+.dh .phtag::before { content: "★ "; }
 .dh .lock { margin-left: auto; font-size: 11px; color: var(--muted); white-space: nowrap; }
-.dh .todaytag { margin-left: auto; font-size: 11px; font-weight: 700; color: var(--today); white-space: nowrap; }
+.dh .todaytag { margin-left: auto; font-size: 11px; font-weight: 700; color: var(--cal-today); white-space: nowrap; }
 .dh .sum, .dh .opsline, .dh .totals { font-size: 11.5px; color: var(--muted); }
 .dh .opsline { font-weight: 600; color: var(--fg); }
 .phtag { display: inline-block; font-size: 11px; font-weight: 600; color: var(--ph); border: 1px solid currentColor; border-radius: 4px; padding: 0 5px; width: max-content; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -54,8 +67,11 @@
 .occ.adhoc { border-style: dashed; border-color: var(--warn); }
 .occ .code { font-size: 13px; border: 0; background: none; padding: 0; color: var(--fg); cursor: pointer; }
 .occ .code:hover { text-decoration: underline; }
-/* the name only gets the space left over: it is truncated first, the status keeps its count (§8.3) */
-.occ .nm { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* the name gets the space left over (truncated first) but never less than ~3 characters; the status keeps
+   its count (§8.3). In a narrow day column (week view on a laptop) the status word ("Unclaimed", "Needs
+   driver") moves to the tooltip, like the month line: "○ 0/10"; a driver's name stays. */
+.occ .nm { flex: 1 1 0; min-width: 3em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@container (max-width: 300px) { .occ .sg .w:not(.who), .trow .sg .w:not(.who) { display: none; } }
 .occ .st { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .occ .ed { color: var(--warn); font-size: 11px; flex: none; }
 .occ.cancelled .code, .occ.cancelled .nm { text-decoration: line-through; color: var(--muted); }
@@ -76,7 +92,7 @@
   background: var(--surface-2); border-radius: 999px; padding: 3px 9px; font-size: 12px; line-height: 18px; transition: opacity .15s;
 }
 .trow:hover { border-color: var(--line); }
-.trow .nm { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trow .nm { flex: 1; min-width: 3em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .trow .rec { color: var(--muted); font-weight: 700; }
 .trow.cancelled .nm { text-decoration: line-through; color: var(--muted); }
 .tgroup { border: 0; background: var(--surface-2); border-radius: 7px; padding: 4px 9px; font-size: 12px; text-align: left; color: var(--fg); }
@@ -89,26 +105,78 @@
 .day-foot .menu-wrap { flex: 1; display: flex; }
 .day-foot .menu-wrap > .addr { width: 100%; }
 
-/* ---- month ------------------------------------------------------------------------------------- */
-.month { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
-.mh { font-size: 12px; font-weight: 600; color: var(--muted); padding: 0 4px; }
-.mcell { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px; min-height: 118px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.mcell.rest { background: var(--rest); }
-.mcell.out { opacity: .45; }
-.mcell.past .mchips { opacity: .8; }
-.mcell.today { border-color: var(--today); box-shadow: 0 0 0 1px var(--today); }
-.mtop { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.mtop .dnum { border: 0; background: transparent; font-family: var(--font-head); font-weight: 700; font-size: 15px; padding: 0; color: var(--fg); }
-.mtop .dnum:hover { text-decoration: underline; }
-.mtop .cnt { margin-left: auto; font-size: 11px; color: var(--muted); white-space: nowrap; }
-.mchips { display: flex; flex-wrap: wrap; gap: 3px; }
-.mchip { position: relative; font-family: var(--font-code); font-weight: 700; font-size: 10.5px; border: 1px solid var(--line); background: var(--surface); border-left: 4px solid var(--rc); border-radius: 3px; padding: 0 4px; line-height: 16px; color: var(--fg); transition: opacity .15s; }
-.mchip.adhoc { border-style: dashed; border-left-style: solid; border-color: var(--warn); border-left-color: var(--rc); }
-.mchip.paused { opacity: .45; border-left-color: var(--line); }
-.mchip.cancelled { text-decoration: line-through; color: var(--muted); }
-.mchip.task { border-left: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; }
-.mchip .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-left: 3px; vertical-align: 1px; }
-.dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.danger { background: var(--danger); } .dot.grey { background: var(--muted); }
+/* ---- month (§9.2): desktop-calendar grid, Sunday first, one line per item ------------------------ */
+.month {
+  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.mh { font-size: 13px; font-weight: 500; color: var(--muted); padding: 7px 10px 6px; text-align: right; white-space: nowrap; overflow: hidden; }
+.mcell { border-top: 1px solid var(--line); border-left: 1px solid var(--line); min-height: 128px; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 3px 4px 6px; position: relative; }
+.month > .mcell:nth-child(7n + 1) { border-left: 0; }
+.mtop { display: flex; align-items: center; justify-content: flex-end; gap: 4px; min-height: 30px; }
+.mtop .menu-wrap { margin-right: auto; }
+/* the day's totals per waste type (today and past days), left of the day number */
+.mtot { flex: 0 1 auto; min-width: 0; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mcell .dnum {
+  font-family: var(--font-head); font-size: 19px; font-weight: 500; line-height: 1; color: var(--fg);
+  min-width: 30px; height: 30px; padding: 0 7px; border: 0; border-radius: 999px; background: transparent;
+  display: inline-grid; place-items: center; white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.mcell .dnum:hover { background: var(--surface-2); }
+.mcell.out .dnum { color: var(--muted); font-weight: 400; }
+.mcell .dnum.ph { color: var(--cal-ph); font-weight: 600; }
+.mcell.out .dnum.ph { opacity: .7; }
+.mcell .dnum.today, .mcell .dnum.today:hover { background: var(--cal-today); color: #fff; font-weight: 700; opacity: 1; }
+.mcell.out .mlines, .mcell.out .mph, .mcell.out .mpaused { opacity: .55; }
+/* "+" create menu: shown on hover / focus, always on touch screens */
+.madd {
+  width: 26px; height: 26px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface);
+  color: var(--muted); font-size: 17px; line-height: 1; padding: 0; display: inline-grid; place-items: center; opacity: 0;
+  transition: opacity .12s;
+}
+.mcell:hover .madd, .mcell:focus-within .madd, .madd[aria-expanded="true"] { opacity: 1; }
+.madd:hover, .madd[aria-expanded="true"] { color: var(--fg); border-color: var(--muted); }
+@media (hover: none) { .madd { opacity: 1; } }
+/* the holiday bar (first line of the cell) and the paused PH routes */
+.mph {
+  font-size: 12px; font-weight: 600; line-height: 18px; color: var(--cal-ph); background: var(--cal-ph-bg);
+  border-radius: 5px; padding: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mpaused {
+  border: 0; background: transparent; text-align: left; font-size: 11.5px; line-height: 17px; color: var(--muted);
+  padding: 0 6px; border-radius: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: opacity .15s;
+}
+.mpaused:hover { background: var(--surface-2); color: var(--fg); }
+.mlines { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+/* one line per route: colour bar, CODE, type tag, name (truncated first), short status at the right */
+.mline {
+  display: flex; align-items: center; gap: 5px; width: 100%; min-width: 0; text-align: left; cursor: pointer;
+  border: 1px solid transparent; background: transparent; border-radius: 5px; padding: 1px 5px 1px 3px;
+  font-size: 12px; line-height: 17px; color: var(--fg); transition: opacity .15s;
+}
+.mline::before { content: ""; width: 4px; height: 14px; border-radius: 2px; background: var(--rc); flex: none; }
+.mline:hover { background: var(--surface-2); }
+.mline:focus-visible { outline: 2px solid var(--cal-today); outline-offset: 0; }
+.mline .code { font-size: 11.5px; flex: none; }
+.mline .tt { font-size: 9px; line-height: 13px; padding: 0 3px; flex: none; }
+.mline .nm { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mline .st { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.mline .sg { font-size: 11px; }
+.mline .sg .g { margin-right: 2px; }
+.mline.adhoc { border: 1px dashed var(--warn); }
+.mline.orphan { border-color: var(--danger); }
+.mline.cancelled .code, .mline.cancelled .nm { text-decoration: line-through; color: var(--muted); }
+/* task lines: grey pill, no colour bar */
+.mline.task { background: var(--surface-2); border-radius: 999px; padding: 0 7px 0 3px; }
+.mline.task::before { display: none; }
+.mline.task:hover { border-color: var(--line); }
+.mline .wtag { font-size: 9.5px; line-height: 14px; padding: 0 4px; flex: none; }
+.mline .rec { color: var(--muted); font-weight: 700; flex: none; }
+.mmore {
+  border: 0; background: transparent; text-align: left; font-size: 11.5px; font-weight: 600; line-height: 18px;
+  color: var(--muted); padding: 0 6px; border-radius: 5px; white-space: nowrap;
+}
+.mmore:hover { color: var(--fg); background: var(--surface-2); }
 
 /* day drawer renders the same column */
 .daydrawer .day { border: 0; min-height: 0; background: transparent; }
@@ -192,9 +260,12 @@ button.sn:hover { text-decoration: underline; }
 @media (max-width: 1100px) { .week { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (max-width: 760px) {
   .week { grid-template-columns: 1fr; }
-  .month { gap: 3px; }
-  .mcell { min-height: 84px; padding: 4px; }
-  .mchip { font-size: 9.5px; padding: 0 2px; border-left-width: 3px; }
+  .mcell { min-height: 84px; padding: 2px; }
+  .mh { padding: 5px 4px; font-size: 11px; }
+  .mcell .dnum { font-size: 15px; min-width: 24px; height: 24px; padding: 0 4px; }
+  .mline { font-size: 10.5px; gap: 3px; padding: 0 2px; }
+  .mline .tt, .mline .st, .mline .nm { display: none; }
+  .cal-top .cal-title { font-size: 22px; }
   .stop { grid-template-columns: auto 26px minmax(0, 1fr); }
   .stop .ops { grid-column: 3; }
 }

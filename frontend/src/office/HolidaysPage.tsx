@@ -1,5 +1,6 @@
 // Holidays page (§6.10, R16): one list per year; add, rename and delete for dates >= today; past rows
-// show a lock. HOLIDAY_CONFLICT lists the one-off routes to change first (with links to the calendar);
+// show a lock. "+ Add" on a date that already has a holiday is refused on screen (use Rename). HOLIDAY_CONFLICT
+// replaces the open confirm dialog and lists the one-off routes to change first (with links to the calendar);
 // RUN_EXISTS opens the R26 dialog. A banner shows years in view or within 60 days with no holidays.
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link } from 'react-router-dom';
@@ -86,7 +87,12 @@ export default function HolidaysPage() {
       void qc.invalidateQueries({ queryKey: ['meta'] }); // next_work_day may change
       return true;
     } catch (e) {
-      if (isApiError(e, 'HOLIDAY_CONFLICT')) setConflict({ date: a.date, details: e.details as HolidayConflictDetails });
+      if (isApiError(e, 'HOLIDAY_CONFLICT')) {
+        // Only the conflict dialog stays open, so Esc / Close leave nothing behind.
+        setDeleting(null);
+        setRenaming(null);
+        setConflict({ date: a.date, details: e.details as HolidayConflictDetails });
+      }
       else if (isApiError(e, 'RUN_EXISTS')) setRunErr({ error: e, action: a });
       else setFormError(errText(e));
       return false;
@@ -97,8 +103,8 @@ export default function HolidaysPage() {
 
   const submitAdd = async (e: FormEvent) => {
     e.preventDefault();
-    if (!newDate || !newName.trim() || newIsPast) return;
-    const ok = await perform({ kind: 'put', date: newDate, name: newName.trim(), added: !existing });
+    if (!newDate || !newName.trim() || newIsPast || existing) return;
+    const ok = await perform({ kind: 'put', date: newDate, name: newName.trim(), added: true });
     if (ok) {
       setYear(Number(newDate.slice(0, 4)));
       setNewDate('');
@@ -143,13 +149,17 @@ export default function HolidaysPage() {
           <span>{t('holidays.name')}</span>
           <input value={newName} onChange={(e) => setNewName(e.target.value)} maxLength={60} />
         </label>
-        <button type="submit" className="btn primary" disabled={busy || !newDate || !newName.trim() || newIsPast}>
+        <button type="submit" className="btn primary" disabled={busy || !newDate || !newName.trim() || newIsPast || !!existing}>
           + {t('holidays.addBtn')}
         </button>
         {(existing || newIsPast || formError) && (
           <div style={{ flexBasis: '100%' }} className="small">
             {newIsPast && <div className="form-error">{t('holidays.pastDate')}</div>}
-            {existing && !newIsPast && <div className="muted">{t('holidays.exists', { name: existing.name })}</div>}
+            {existing && !newIsPast && (
+              <div className="form-error" role="alert" data-testid="holiday-exists">
+                {t('holidays.exists', { date: day(existing.date), name: existing.name })}
+              </div>
+            )}
             {formError && <div className="form-error" role="alert">{formError}</div>}
           </div>
         )}

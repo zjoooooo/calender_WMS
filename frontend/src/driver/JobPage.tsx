@@ -4,6 +4,8 @@
 //   task:  mine with a plate, or done -> the result form (S4 for the task); otherwise the preview (S2T)
 // /driver/job/:date/:job/stop/:cid[?notsent=<id>] — the result form of one route stop (S4). It keeps the
 // last loaded job, so an open form stays usable after the rollover or with no signal (§8.4).
+// Both watch the job: when the office releases or reassigns it (§8.2), the phone says so and returns to
+// Today, also from a stop form (which moves from stop to stop without passing through the run view).
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
@@ -25,19 +27,14 @@ function useMaxPhotos(): number {
   return useSession().meta?.config.max_photos ?? 5;
 }
 
-export default function JobPage() {
-  const { date = '', job = '' } = useParams();
+/** The office released or reassigned my job (§8.2): say so and go back to Today. */
+function useOfficeTookJob(data: Loaded<JobDetail> | undefined): void {
   const { t } = useI18n();
   const nav = useNavigate();
   const toast = useToast();
-  const q = useJob(date, job);
-  const today = useToday();
-  const td = today.data?.data;
-
-  // The office released or reassigned my job (§8.2): say so and go back to Today.
   const prevMine = useRef<boolean | null>(null);
   useEffect(() => {
-    const d = q.data;
+    const d = data;
     if (!d || d.cached) return;
     const j = d.data;
     if (prevMine.current && !j.mine && !isSelfRelease(j.date, j.job)) {
@@ -46,7 +43,16 @@ export default function JobPage() {
       nav('/driver', { replace: true });
     }
     prevMine.current = j.mine;
-  }, [q.data, nav, t, toast]);
+  }, [data, nav, t, toast]);
+}
+
+export default function JobPage() {
+  const { date = '', job = '' } = useParams();
+  const { t } = useI18n();
+  const q = useJob(date, job);
+  const today = useToday();
+  const td = today.data?.data;
+  useOfficeTookJob(q.data);
 
   const hardError = q.isError && (isApiError(q.error, 'NOT_TODAY') || isApiError(q.error, 'NOT_FOUND') || isApiError(q.error, 'VALIDATION'));
   if (hardError || (!q.data && q.error)) {
@@ -171,10 +177,11 @@ export function StopPage() {
   const [params] = useSearchParams();
   const nav = useNavigate();
   const { t } = useI18n();
-  const { me, entries, notsent } = useDriver();
+  const { me, entries, notsent, ready } = useDriver();
   const maxPhotos = useMaxPhotos();
   const today = useToday();
   const q = useJob(date, job);
+  useOfficeTookJob(q.data);
   const last = useRef<Loaded<JobDetail> | null>(null);
   if (q.data) last.current = q.data;
   const loaded = q.data ?? last.current;
@@ -184,8 +191,9 @@ export function StopPage() {
   const j = loaded?.data;
   const stop = j?.stops.find((s) => s.customer.id === customerId) ?? (ns ? stopFromEntry(ns) : null);
 
-  if (!stop) {
-    if (!loaded && !q.error) {
+  if (!stop || !ready) {
+    // Before the outbox is read, a ?notsent= entry is not known yet: wait instead of "not on this job".
+    if ((!loaded && !q.error) || !ready) {
       return (
         <div className="drv">
           <TopBar back={`/driver/job/${date}/${job}`} title={t('driver.title')} />
@@ -224,7 +232,9 @@ export function StopPage() {
       afterSave={(outcome) => {
         if (ns) return nav('/driver/notsent', { replace: true });
         if (kind === 'task') return nav('/driver', { replace: true });
-        if (outcome === null || !j) return nav(runUrl, { replace: true });
+        // Not mine any more (the office took it back; the hook above says so): no auto-advance.
+        const latest = q.data && !q.data.cached ? q.data.data : j;
+        if (outcome === null || !j || !latest?.mine) return nav(runUrl, { replace: true });
         // Collected / not collected: straight to the next pending stop (§7.3 step 5).
         const next = nextPendingStop(j, localEntries(entries, date, job), me.id, customerId, [customerId]);
         nav(next ? `${runUrl}/stop/${next.customer.id}` : runUrl, { replace: true });

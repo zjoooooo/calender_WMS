@@ -22,6 +22,8 @@ export interface DriverCtx {
   box: Outbox;
   /** Waiting outbox entries of this driver (oldest first). */
   entries: OutboxEntry[];
+  /** `entries` and `notsent` have been read from the device at least once (they start empty). */
+  ready: boolean;
   notsent: NotSentEntry[];
   /** The last flush stopped on a network error / timeout / 5xx. */
   failing: boolean;
@@ -64,6 +66,7 @@ export function DriverProvider({ me, children }: { me: DriverMe; children: React
   const online = useOnline();
   const [entries, setEntries] = useState<OutboxEntry[]>([]);
   const [notsent, setNotsent] = useState<NotSentEntry[]>([]);
+  const [ready, setReady] = useState(false);
   const [failing, setFailing] = useState(false);
   const [lastSentAt, setLastSentAt] = useState<number | null>(null);
 
@@ -92,9 +95,13 @@ export function DriverProvider({ me, children }: { me: DriverMe; children: React
   );
 
   const refresh = useCallback(async () => {
-    const [a, b] = await Promise.all([box.list(), box.listNotSent()]);
-    setEntries(a);
-    setNotsent(b);
+    try {
+      const [a, b] = await Promise.all([box.list(), box.listNotSent()]);
+      setEntries(a);
+      setNotsent(b);
+    } finally {
+      setReady(true);
+    }
   }, [box]);
 
   const alive = useRef(true);
@@ -147,8 +154,8 @@ export function DriverProvider({ me, children }: { me: DriverMe; children: React
   );
 
   const value = useMemo<DriverCtx>(
-    () => ({ me, online, box, entries, notsent, failing, lastSentAt, save, flushNow, refresh }),
-    [me, online, box, entries, notsent, failing, lastSentAt, save, flushNow, refresh],
+    () => ({ me, online, box, entries, ready, notsent, failing, lastSentAt, save, flushNow, refresh }),
+    [me, online, box, entries, ready, notsent, failing, lastSentAt, save, flushNow, refresh],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

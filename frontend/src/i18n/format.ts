@@ -46,6 +46,20 @@ export function fmtDay(date: string, lang: Lang, opts: DayFormat = {}): string {
   return `${withWd ? WD_EN[dow] + ' ' : ''}${d} ${MON_EN[m]}${opts.year ? ' ' + y : ''}`;
 }
 
+const MONTH_EN = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+/** Month 1–12 as "11月" / "November" (short: "Nov"). */
+export function monthName(m: number, lang: Lang, short = false): string {
+  if (lang === 'zh') return `${m}月`;
+  return (short ? MON_EN : MONTH_EN)[m] ?? '';
+}
+
+/** Month-grid label of the 1st of a month: "11月1日" / "Nov 1" (§9.2). */
+export function fmtMonthStart(date: string, lang: Lang): string {
+  const [, m, d] = parts(date);
+  return lang === 'zh' ? `${m}月${d}日` : `${MON_EN[m]} ${d}`;
+}
+
 /** 'HH:MM' of a server timestamp ('2026-11-11T07:52:00+08:00' -> '07:52'), in the server's offset. */
 export function fmtTime(iso: string | null | undefined): string {
   return iso && iso.length >= 16 ? iso.slice(11, 16) : '';

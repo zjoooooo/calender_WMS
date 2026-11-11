@@ -103,8 +103,9 @@ export interface MenuItem {
   danger?: boolean;
 }
 
-/** A button with a small popover menu (closes on outside click and Esc). `null` items draw a separator. */
-export function MenuButton({ label, items, className, align = 'right', up }: { label: ReactNode; items: (MenuItem | null)[]; className?: string; align?: 'left' | 'right'; up?: boolean }) {
+/** A button with a small popover menu (closes on outside click and Esc). `null` items draw a separator.
+ *  `title` is the trigger's tooltip and accessible name (for an icon-only trigger such as "+"). */
+export function MenuButton({ label, items, className, align = 'right', up, title }: { label: ReactNode; items: (MenuItem | null)[]; className?: string; align?: 'left' | 'right'; up?: boolean; title?: string }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -128,7 +129,7 @@ export function MenuButton({ label, items, className, align = 'right', up }: { l
   const style = { [align]: 0, ...(up ? { top: 'auto', bottom: 'calc(100% + 4px)' } : {}) };
   return (
     <div ref={ref} className="menu-wrap">
-      <button type="button" className={className ?? 'btn'} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+      <button type="button" className={className ?? 'btn'} aria-haspopup="menu" aria-expanded={open} title={title} aria-label={title} onClick={() => setOpen((o) => !o)}>
         {label}
       </button>
       {open && (

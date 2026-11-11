@@ -12,6 +12,7 @@ import {
   onUnauthorized,
   parseEnvelope,
   deleteRoute,
+  requestFull,
   setToken,
 } from './api';
 import { translate } from './i18n';
@@ -48,6 +49,17 @@ describe('parseEnvelope', () => {
       expect(e).toBeInstanceOf(ApiError);
       const a = e as ApiError;
       expect([a.code, a.http, a.details.until]).toEqual(['ACCOUNT_LOCKED', 423, '2026-11-11T07:52:00+08:00']);
+    }
+  });
+
+  it('a non-envelope page below 500 (captive portal, proxy) is NETWORK, not a server answer', () => {
+    for (const status of [200, 302, 404]) {
+      try {
+        parseEnvelope(status, null);
+        expect.unreachable();
+      } catch (e) {
+        expect([(e as ApiError).code, (e as ApiError).http]).toEqual(['NETWORK', 0]);
+      }
     }
   });
 
@@ -121,6 +133,28 @@ describe('requestFull via the endpoint functions', () => {
     await expect(login('a', 'b')).rejects.toMatchObject({ code: 'BAD_CREDENTIALS' });
     off();
     expect(hits).toEqual(['UNAUTHORIZED']);
+  });
+
+  it('the timeout also covers a response body that stalls (TIMEOUT, not a hang)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const stalled = new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(new TextEncoder().encode('{"ok":true,"da'));
+          },
+        });
+        return new Response(stalled, { status: 200 });
+      }),
+    );
+    const t0 = Date.now();
+    await expect(requestFull('GET', '/meta', undefined, { timeoutMs: 50 })).rejects.toMatchObject({ code: 'TIMEOUT', http: 0 });
+    expect(Date.now() - t0).toBeLessThan(2000);
+  });
+
+  it('an HTML page with status 200 is NETWORK', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<html>portal</html>', { status: 200, headers: { 'Content-Type': 'text/html' } })));
+    await expect(getMeta()).rejects.toMatchObject({ code: 'NETWORK', http: 0 });
   });
 
   it('a network failure is NETWORK', async () => {

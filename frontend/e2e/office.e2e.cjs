@@ -1,4 +1,4 @@
-// End-to-end test of the office calendar (M3–M7 office side) at 1440×1000.
+// End-to-end test of the office calendar (M3–M7 office side, Round 5 month view) at 1440×1000.
 // Starts its own backend (php -S) and Vite, seeds demo data through the API (scripts/seed-demo.mjs,
 // with live runs), drives Chromium with Playwright and checks every result through the API, then stops both.
 //
@@ -102,6 +102,139 @@ async function dragTo(page, from, to) {
   await page.waitForTimeout(400); // drop animation
 }
 
+const BLUE = 'rgb(37, 99, 235)'; // --cal-today (light theme)
+const RED = 'rgb(220, 38, 38)'; // --cal-ph (light theme)
+const noOverflow = (page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+
+/** Month view checks (§9.2, Round 5). Leaves tomorrow's first regular route edited (only that date) and an
+ *  extra OTC task on tomorrow, plus one adhoc route on workDay. */
+async function monthChecks(page, { today, tomorrow, workDay, ph }) {
+  console.log('month view (default)');
+  check(!new URL(page.url()).searchParams.get('view') && (await page.locator('.month').count()) === 1 && (await page.locator('.week').count()) === 0, 'the calendar opens in the month view');
+  const heads = await page.locator('.month .mh').allInnerTexts();
+  check(heads.join(' ') === 'Sun Mon Tue Wed Thu Fri Sat', 'weekday header Sun..Sat', heads);
+  const cells = await page.locator('.month .mcell').evaluateAll((els) => els.map((e) => e.dataset.date));
+  check(new Date(cells[0] + 'T00:00:00Z').getUTCDay() === 0, 'the first column is a Sunday', cells[0]);
+  const mcal = await api('GET', `/calendar?view=month&anchor=${today}&week_start=sun`);
+  let rows = 0;
+  for (let i = 0; i < 42; i += 7) if (mcal.days.slice(i, i + 7).some((d) => d.in_month)) rows++;
+  check(cells.length === rows * 7 && rows >= 4 && rows <= 6, `only the week rows of the month are drawn (${rows} rows)`, cells.length);
+  check((await page.locator('.cal-title').innerText()).includes(String(today.slice(0, 4))), 'big month title with the year', await page.locator('.cal-title').innerText());
+  const tnum = page.locator(`.month .mcell[data-date="${today}"] .dnum`);
+  const tStyle = await tnum.evaluate((e) => [getComputedStyle(e).backgroundColor, getComputedStyle(e).color]);
+  check(tStyle[0] === BLUE && tStyle[1] === 'rgb(255, 255, 255)', "today's number: white on a blue circle", tStyle);
+  check(await noOverflow(page), 'no horizontal overflow at 1440');
+  // Daily totals per waste type are visible in the month view too (DRV-3).
+  const tTot = page.locator(`.month .mcell[data-date="${today}"] [data-testid=month-totals]`);
+  check((await tTot.count()) === 1 && /REL [\d,.]+ kg/.test(await tTot.innerText()), "today's cell shows the day's totals (REL … kg)", (await tTot.count()) && (await tTot.innerText()));
+  await shot(page, '00-month');
+
+  // A day with more than 4 lines: 4 + "N more"; expand / collapse in place; a refetch keeps it open.
+  await page.goto(`${BASE}/?anchor=${tomorrow}`);
+  const cell = page.locator(`.month .mcell[data-date="${tomorrow}"]`);
+  await cell.locator('.mline').first().waitFor();
+  const lines = cell.locator('.mline');
+  const occ = async () => {
+    const c = await api('GET', `/calendar?view=week&anchor=${tomorrow}&week_start=sun`);
+    return [...c.routes.filter((o) => o.date === tomorrow && o.status !== 'holiday_skipped'), ...c.tasks.filter((o) => o.date === tomorrow)];
+  };
+  const items = await occ();
+  const n = items.length;
+  check(n > 4 && (await lines.count()) === 4, `${tomorrow} has ${n} lines: exactly 4 are shown`, await lines.count());
+  const more = cell.locator('.mmore');
+  check((await more.innerText()).trim() === `${n - 4} more ▾`, `then "${n - 4} more ▾"`, await more.innerText());
+  check((await more.getAttribute('title')).includes(items[4].code || ''), 'its tooltip lists the hidden lines');
+  // search for a hidden route opens the cell by itself
+  const hiddenRoute = items.slice(4).find((o) => o.kind === 'route' && !items.slice(0, 4).some((x) => x.code && x.code.includes(o.code)));
+  if (hiddenRoute) {
+    await page.fill('input[type=search]', hiddenRoute.code);
+    await page.waitForTimeout(200);
+    check((await cell.locator(`.mline[data-code="${hiddenRoute.code}"]:not(.dim)`).count()) === 1 && (await cell.locator('.mmore').count()) === 0, `searching ${hiddenRoute.code} opens the cell and keeps it lit`);
+    await page.getByRole('button', { name: 'Clear highlight' }).click();
+    check((await lines.count()) === 4, 'cleared: the cell collapses again');
+  }
+  await more.click();
+  check((await lines.count()) === n && /Show less ▴/.test(await cell.locator('.mmore').innerText()), `"${n - 4} more" expands the cell in place (${n} lines, Show less)`);
+  await shot(page, '00-month-expanded');
+  // a refetch (new data from the server) must not collapse it
+  const otcCust = (await api('GET', '/customers')).find((c) => c.waste_types.includes('OTC') && c.active !== false);
+  await api('POST', '/tasks', { waste_type: 'OTC', customer_id: otcCust.id, date: tomorrow, note: 'e2e month refetch' });
+  const resp = page.waitForResponse((r) => r.url().includes('/api/calendar') && r.status() === 200, { timeout: 40000 });
+  await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+  await resp;
+  await page.waitForTimeout(400);
+  check((await lines.count()) === n + 1 && (await cell.locator('.mmore', { hasText: 'Show less' }).count()) === 1, 'after a refetch the cell stays expanded and shows the new task', await lines.count());
+  await cell.locator('.mmore').click();
+  check((await lines.count()) === 4 && /more ▾/.test(await cell.locator('.mmore').innerText()), '"Show less" collapses it again');
+  // Expand all / Collapse all
+  await page.getByRole('button', { name: /^Expand all/ }).click();
+  check((await page.locator('.month .mmore[aria-expanded="false"]').count()) === 0 && (await lines.count()) === n + 1, 'Expand all opens every cell');
+  await page.getByRole('button', { name: /^Collapse all/ }).click();
+  check((await page.locator('.month .mmore[aria-expanded="true"]').count()) === 0 && (await lines.count()) === 4, 'Collapse all closes them');
+
+  // Clicking a route line opens its drawer; the stop list is editable (↓, save only this date).
+  const line = cell.locator('.mline:not(.adhoc):not(.task)').first();
+  const code = await line.getAttribute('data-code');
+  const key = await line.getAttribute('data-key');
+  await line.click();
+  const drawer = page.locator('.drawer');
+  await drawer.locator('.stoplist .stop').first().waitFor();
+  check(new RegExp(code).test(await drawer.locator('.rd-title').innerText()), `clicking the ${code} line opens its route drawer`);
+  const before = await drawer.locator('.stoplist .stop').evaluateAll((els) => els.map((e) => Number(e.dataset.cid)));
+  await drawer.locator(`.stop[data-cid="${before[0]}"]`).getByRole('button', { name: /^Move down/ }).click();
+  await drawer.getByRole('button', { name: 'Save', exact: true }).click();
+  const scope = page.locator('.dialog', { hasText: 'Apply this change to' });
+  await scope.waitFor();
+  await scope.getByRole('button', { name: 'Save', exact: true }).click();
+  await drawer.waitFor({ state: 'detached' });
+  const saved = (await occ()).find((o) => o.key === key);
+  check(saved && saved.edited && saved.stops[0].customer_id === before[1] && saved.stops[1].customer_id === before[0], `the ${code} stop order was changed from the month view (only ${tomorrow})`);
+
+  // "+" in a future cell: the create menu of that day; ⚡ Adhoc creates a route and opens its drawer.
+  await page.goto(`${BASE}/?anchor=${workDay}`);
+  const wcell = page.locator(`.month .mcell[data-date="${workDay}"]`);
+  await wcell.locator('.mline').first().waitFor();
+  const adhocBefore = (await api('GET', `/calendar?view=week&anchor=${workDay}`)).routes.filter((o) => o.date === workDay && o.type === 'adhoc').length;
+  await wcell.hover();
+  await wcell.locator('button.madd').click();
+  const menu = await page.locator('.menu').innerText();
+  check(/Regular · repeats weekly/.test(menu) && /Adhoc · this date only/.test(menu) && /\+ Task/.test(menu) && !/Special/.test(menu), '"+" offers the day\'s route kinds and + Task', menu);
+  await page.getByRole('menuitem', { name: '⚡ Adhoc · this date only' }).click();
+  const rf = page.locator('.dialog');
+  await rf.getByRole('button', { name: 'Create', exact: true }).click();
+  await rf.waitFor({ state: 'detached' });
+  const nd = page.locator('.drawer');
+  await nd.locator('.rd-title').waitFor({ timeout: 10000 });
+  await nd.getByRole('button', { name: /Add customer/ }).click();
+  await nd.locator('.picker input[type=search]').fill('Golden');
+  await nd.locator('.picker-item').first().click();
+  await nd.getByRole('button', { name: 'Save', exact: true }).click();
+  const sc2 = page.locator('.dialog', { hasText: 'Apply this change to' });
+  if (await sc2.isVisible().catch(() => false)) await sc2.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.waitForTimeout(800);
+  const adhocs = (await api('GET', `/calendar?view=week&anchor=${workDay}`)).routes.filter((o) => o.date === workDay && o.type === 'adhoc');
+  check(adhocs.length === adhocBefore + 1 && adhocs.some((o) => o.stops.length === 1), `"+" created an adhoc route on ${workDay} and its customer was added in the drawer`, adhocs.map((o) => [o.code, o.stops.length]));
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  check((await wcell.locator('.mline.adhoc').count()) === adhocBefore + 1, 'the new adhoc line shows in the cell (dashed)');
+
+  // A Mon–Sat public holiday: red number, the ★ bar and the "⏸ N paused" line that opens the day drawer.
+  if (ph) {
+    await page.goto(`${BASE}/?anchor=${ph}`);
+    const pcell = page.locator(`.month .mcell[data-date="${ph}"]`);
+    await pcell.waitFor();
+    check((await pcell.locator('.dnum').evaluate((e) => getComputedStyle(e).color)) === RED, `${ph}: the PH number is red`);
+    check(/★/.test(await pcell.locator('.mph').innerText()), 'the holiday bar with ★ and the name', await pcell.locator('.mph').innerText());
+    await pcell.locator('button.mpaused').click();
+    await page.locator('.drawer .daydrawer button.paused').waitFor();
+    check(true, '"⏸ N paused" opens the day drawer (Run on PH / Move to work day)');
+    await page.keyboard.press('Escape');
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  check(await noOverflow(page), 'no horizontal overflow at 1280');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+}
+
 async function main() {
   fs.rmSync(DATA, { recursive: true, force: true });
   const env = { ...process.env, WMS_DATA_DIR: DATA };
@@ -163,18 +296,30 @@ async function main() {
     await page.fill('input[name=username]', 'admin');
     await page.fill('input[name=password]', ADMIN_PW);
     await page.click('button[type=submit]');
-    await page.waitForSelector('.week .occ');
+    await page.waitForSelector('.month .mline');
     await page.getByRole('button', { name: 'EN', exact: true }).click();
     await page.getByRole('button', { name: 'Week', exact: true }).waitFor();
 
-    // 1. Week view renders 12+ routes per work day, with live statuses.
+    // 0. Month view (Round 5): the default, Sunday first, 4 lines + "N more", today blue, PH red, "+".
+    await monthChecks(page, { today, tomorrow, workDay, ph });
+
+    // 1. Week view (Sunday first) renders 12+ routes per work day, with live statuses.
     console.log('week view');
+    await page.goto(BASE + '/?view=week');
+    await page.locator('.week .occ').first().waitFor();
+    const weekDates = await page.locator('.week .day').evaluateAll((els) => els.map((e) => e.dataset.date));
+    check(weekDates.length === 7 && new Date(weekDates[0] + 'T00:00:00Z').getUTCDay() === 0, 'week view: 7 columns, Sunday first', weekDates);
+    const todayDt = page.locator(`.week .day[data-date="${today}"] .dh .dt`);
+    check((await todayDt.evaluate((e) => getComputedStyle(e).backgroundColor)) === BLUE, "week view: today's date on blue");
     const todayCol = page.locator(`.week .day[data-date="${today}"]`);
     const nextCol = page.locator(`.week .day[data-date="${tomorrow}"]`);
     const nToday = await todayCol.locator('.occ').count();
     const nNext = (await nextCol.count()) ? await nextCol.locator('.occ').count() : 0;
     check(Math.max(nToday, nNext) >= 12, `a day column renders 12+ one-line route rows (today ${nToday}, next work day ${nNext})`);
     check(await page.locator('.week .day.today').count() === 1, 'today has the accent ring');
+    // OFF-8: in a 1440 px week every row keeps a readable part of its name (the status word moves to the tooltip).
+    const nmW = await page.locator('.week .day .occ .nm').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().width)));
+    check(nmW.length > 0 && Math.min(...nmW) >= 30, `week rows: every name keeps >= 30 px (min ${Math.min(...nmW)} px)`, nmW.slice(0, 12));
     check((await page.locator('.legend .lchip').count()) >= 12, 'legend lists the route codes in range');
     if (nToday > 0) {
       const n1 = todayCol.locator('.occ[data-code="N1"]');
@@ -222,7 +367,7 @@ async function main() {
     if (!ph) {
       check(false, 'found a future Mon–Sat public holiday with N1 paused');
     } else {
-      await page.goto(`${BASE}/?anchor=${ph}`);
+      await page.goto(`${BASE}/?view=week&anchor=${ph}`);
       const phCol = page.locator(`.week .day[data-date="${ph}"]`);
       await phCol.waitFor();
       const pausedBtn = phCol.locator('button.paused');
@@ -251,17 +396,48 @@ async function main() {
       await phCol.locator('.pausedlist > div', { has: page.locator(`.occ[data-code="${second}"]`) }).getByRole('button', { name: 'Move to work day…' }).click();
       let target = addDays(ph, 3);
       const dlg2 = page.locator('.dialog');
+      // OFF-1: the default target is the first work day after the paused date, not tomorrow.
+      const holSet = new Set((await api('GET', '/holidays')).map((h) => h.date));
+      let expectMove = addDays(ph, 1);
+      while (new Date(expectMove + 'T00:00:00Z').getUTCDay() === 0 || holSet.has(expectMove)) expectMove = addDays(expectMove, 1);
+      await page.waitForTimeout(300);
+      const defTarget = await dlg2.locator('input[type=date]').inputValue();
+      check(defTarget === expectMove && defTarget !== tomorrow, `Move to work day: the target defaults to ${expectMove} (after the PH), not ${tomorrow}`, defTarget);
+      const runsThen = (await occOn(expectMove, second)).occ.some((o) => o.status === 'scheduled');
+      await page.waitForTimeout(200);
+      check((await dlg2.locator('[data-testid=copy-already-runs]').count()) === (runsThen ? 1 : 0), `the dialog warns exactly when ${second} already runs on ${expectMove} (${runsThen})`);
       await dlg2.locator('input[type=date]').fill(target);
       await dlg2.locator('text=Regular (only this date)').waitFor();
       await dlg2.getByRole('button', { name: 'Copy', exact: true }).click();
       await dlg2.waitFor({ state: 'detached' });
       const moved = (await api('GET', `/calendar?view=week&anchor=${target}`)).routes.filter((o) => o.date === target && !o.recurring);
       check(moved.some((o) => o.type === 'regular' && o.copied_from), `Move to work day: a regular one-off (R tag) on ${target}`, moved.map((o) => [o.code, o.type]));
+      // OFF-5: the group counts only what still needs a decision; a covered row shows its "→" once.
+      await page.waitForTimeout(500);
+      if (!(await phCol.locator('.pausedlist').count())) await phCol.locator('button.paused').click();
+      const nPaused = (await occOn(ph, 'N1')).cal.routes.filter((o) => o.date === ph && o.status === 'holiday_skipped').length;
+      const grp = await phCol.locator('button.paused').innerText();
+      check(grp.includes(`${nPaused - 2} regular routes paused (PH) · 2 covered`), `paused group: "${nPaused - 2} … · 2 covered"`, grp);
+      const n1Row = await phCol.locator('.pausedlist > div', { has: page.locator('.occ[data-code="N1"]') }).innerText();
+      check((n1Row.match(/→/g) || []).length === 1, 'the covered N1 row shows "→ code date" once', n1Row);
+      // OFF-7: deleting this PH is refused (the special N1 copy needs it); the conflict dialog closes with Esc.
+      const phName = (await api('GET', '/holidays')).find((h) => h.date === ph).name;
+      await page.goto(BASE + '/holidays');
+      await page.getByRole('tab', { name: new RegExp(ph.slice(0, 4)) }).click();
+      await page.locator('tr', { hasText: phName }).first().getByRole('button', { name: 'Delete' }).click();
+      await page.locator('.dialog').getByRole('button', { name: 'Delete' }).click();
+      const conf = page.locator('.dialog', { hasText: 'One-off routes on this date' });
+      await conf.waitFor();
+      check((await page.locator('.dialog').count()) === 1, 'the holiday conflict replaces the delete confirmation (one dialog)');
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(200);
+      check((await page.locator('.dialog').count()) === 0 && (await page.locator('.scrim').count()) === 0, 'Esc closes the conflict dialog, no scrim left');
+      check((await api('GET', '/holidays')).some((h) => h.date === ph), 'the holiday is still there');
     }
 
     // 4. Route drawer: add a customer, drag it to the top, save "only this date".
     console.log('drawer edit + drag + scope');
-    await page.goto(`${BASE}/?anchor=${workDay}`);
+    await page.goto(`${BASE}/?view=week&anchor=${workDay}`);
     const col = page.locator(`.week .day[data-date="${workDay}"]`);
     await col.locator('.occ[data-code="N2"] .nm').click();
     const drawer = page.locator('.drawer');
@@ -309,9 +485,39 @@ async function main() {
     }
     check((await page.locator(`.week .day[data-date="${workDay}"] .occ[data-code="N2"] .ed`).count()) === 1, 'the row shows the edited mark');
 
+    // 4b. R20 lost update (REV-1): another clerk saves while this drawer has an unsaved draft.
+    console.log('drawer: someone else saved meanwhile');
+    await col.locator('.occ[data-code="N2"] .nm').click();
+    const dr = page.locator('.drawer');
+    await dr.locator('.stoplist .stop').first().waitFor();
+    const n2now = (await occOn(workDay, 'N2')).occ[0];
+    const firstCid = n2now.stops[0].customer_id;
+    await dr.locator(`.stop[data-cid="${firstCid}"]`).getByRole('button', { name: /^Remove from route/ }).click();
+    const custAll = await api('GET', '/customers');
+    const mei = custAll.find((c) => c.waste_types.includes('REL') && c.active !== false && !n2now.stops.some((x) => x.customer_id === c.id));
+    await api('PUT', `/routes/${n2now.route_id}/dates/${workDay}`, { rev: n2now.rev, scope: 'this', stops: [...n2now.stops.map((x) => ({ customer_id: x.customer_id, note: x.note })), { customer_id: mei.id, note: '' }] });
+    const refetched = page.waitForResponse((r) => r.url().includes('/api/calendar') && r.status() === 200, { timeout: 40000 });
+    await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+    await refetched;
+    await page.waitForTimeout(400);
+    const meanwhile = dr.locator('[data-testid=changed-meanwhile]');
+    check((await meanwhile.count()) === 1 && (await meanwhile.innerText()).includes(mei.name), 'the drawer says someone else saved meanwhile and names the added customer', (await meanwhile.count()) && (await meanwhile.innerText()));
+    await dr.getByRole('button', { name: 'Save', exact: true }).click();
+    const sc4 = page.locator('.dialog', { hasText: 'Apply this change to' });
+    await sc4.waitFor();
+    await sc4.getByRole('button', { name: 'Save', exact: true }).click();
+    await dr.locator('.form-error').waitFor();
+    check(/Someone else changed this/.test(await dr.locator('.form-error').innerText()), 'the save is refused (STALE_REVISION), the draft stays');
+    const n2after = (await occOn(workDay, 'N2')).occ[0];
+    check(n2after.stops.some((x) => x.customer_id === mei.id) && n2after.stops.some((x) => x.customer_id === firstCid), "the other clerk's customer is not silently removed", n2after.stops.map((x) => x.customer_id));
+    await dr.getByRole('button', { name: 'Discard changes' }).click();
+    check((await dr.locator(`.stop[data-cid="${mei.id}"]`).count()) === 1, 'Discard loads their version');
+    await page.keyboard.press('Escape');
+    await dr.waitFor({ state: 'detached' });
+
     // 5. Urgent pickup: adhoc for tomorrow with two customers.
     console.log('urgent pickup');
-    await page.goto(BASE + '/');
+    await page.goto(BASE + '/?view=week');
     await page.locator('.week .occ').first().waitFor();
     await page.getByRole('button', { name: /Urgent pickup/ }).first().click();
     const urgent = page.locator('.dialog', { hasText: 'Urgent pickup' });
@@ -337,7 +543,7 @@ async function main() {
 
     // 6. OTC task on a Sunday.
     console.log('OTC task on Sunday');
-    await page.goto(`${BASE}/?anchor=${sunday}`);
+    await page.goto(`${BASE}/?view=week&anchor=${sunday}`);
     const sun = page.locator(`.week .day[data-date="${sunday}"]`);
     await sun.waitFor();
     check(!(await sun.locator('.day-foot').innerText()).includes('Regular'), 'Sunday offers no Regular');
@@ -395,13 +601,16 @@ async function main() {
       check(false, 'recurring COMPACTOR task on Sunday found');
     }
 
-    // 8. Month view: code chips, status dots and the day drawer.
-    console.log('month view');
-    await page.goto(`${BASE}/?view=month`);
+    // 8. Month view: status on the lines and the day drawer.
+    console.log('month view: statuses and the day drawer');
+    await page.goto(BASE + '/');
     await page.locator('.month .mcell').first().waitFor();
-    check((await page.locator('.month .mcell').count()) === 42, 'month grid is 6 × 7');
-    check((await page.locator(`.month .mcell[data-date="${today}"] .mchip`).count()) >= 12, "today's cell lists the code chips");
-    check((await page.locator(`.month .mcell[data-date="${today}"] .mchip .dot.ok`).count()) >= 1, 'a done job has the green dot');
+    await page.getByRole('button', { name: /^Expand all/ }).click();
+    const todayLines = page.locator(`.month .mcell[data-date="${today}"] .mline`);
+    check((await todayLines.count()) >= 12, "Expand all: today's cell lists every route line", await todayLines.count());
+    check((await page.locator(`.month .mcell[data-date="${today}"] .mline .sg.done`).count()) >= 1, 'a done job shows ✓ on its line');
+    await page.getByRole('button', { name: /^Collapse all/ }).click();
+    check((await todayLines.count()) <= 4, 'Collapse all: back to 4 lines');
     await page.locator(`.month .mcell[data-date="${today}"] .dnum`).click();
     await page.locator('.drawer .daydrawer .occ').first().waitFor();
     const order = await page.locator('.drawer .daydrawer .occ').evaluateAll((els) => els.map((e) => e.innerText));
@@ -411,7 +620,7 @@ async function main() {
 
     // 9. Run actions and the result dialog (today).
     console.log('run actions and results');
-    await page.goto(BASE + '/');
+    await page.goto(BASE + '/?view=week');
     await page.locator('.week .occ').first().waitFor();
     const tcol = page.locator(`.week .day[data-date="${today}"]`);
     if (await tcol.count()) {
@@ -515,7 +724,7 @@ async function main() {
       if (o && o.status === 'scheduled') break;
     }
     const w2Before = (await occOn(later, 'W2')).occ[0];
-    await page.goto(`${BASE}/?anchor=${later}`);
+    await page.goto(`${BASE}/?view=week&anchor=${later}`);
     await page.locator(`.week .day[data-date="${later}"] .occ[data-code="W2"] .nm`).click();
     const dr3 = page.locator('.drawer');
     await dr3.waitFor();
@@ -534,7 +743,7 @@ async function main() {
 
     // 9d. "+ Route" -> Regular form (clicked weekday pre-ticked); the new route's drawer opens.
     console.log('route create and task move');
-    await page.goto(`${BASE}/?anchor=${workDay}`);
+    await page.goto(`${BASE}/?view=week&anchor=${workDay}`);
     const wcol = page.locator(`.week .day[data-date="${workDay}"]`);
     await wcol.locator('.occ').first().waitFor();
     await wcol.getByRole('button', { name: '+ Route' }).click();
@@ -554,11 +763,22 @@ async function main() {
     check(/Z9/.test(await nd.locator('.rd-title').innerText()), 'the new route Z9 opens in its drawer, ready for customers');
     const z9 = (await api('GET', '/routes')).find((r) => r.code === 'Z9');
     check(z9 && z9.type === 'regular' && z9.days.length === 1 && z9.start === workDay, 'created regular Z9 from the clicked date', z9);
-    await page.keyboard.press('Escape');
+    // OFF-2: its first customers become the route's list for every date (scope pre-selects "and following").
+    await nd.getByRole('button', { name: /Add customer/ }).click();
+    await nd.locator('.picker input[type=search]').fill('Golden');
+    await nd.locator('.picker-item').first().click();
+    await nd.getByRole('button', { name: 'Save', exact: true }).click();
+    const zsc = page.locator('.dialog', { hasText: 'Apply this change to' });
+    await zsc.waitFor();
+    check(await zsc.locator('input[type=radio]').nth(1).isChecked(), 'new route: the scope dialog pre-selects "<date> and all following"');
+    await zsc.getByRole('button', { name: 'Save', exact: true }).click();
+    await nd.waitFor({ state: 'detached' });
+    const z9next = (await occOn(addDays(workDay, 7), 'Z9')).occ[0];
+    check(z9next && z9next.stops.length === 1 && !z9next.edited, `Z9 one week later (${addDays(workDay, 7)}) has the customer too`, z9next && z9next.stops.length);
     // Move one date of a recurring COMPACTOR task (Tuas, Tue + Fri).
     const tue = (await api('GET', `/calendar?view=week&anchor=${workDay}`)).tasks.find((o) => o.recurring && o.waste_type === 'COMPACTOR' && o.date >= workDay && o.status === 'scheduled');
     if (tue) {
-      await page.goto(`${BASE}/?anchor=${tue.date}`);
+      await page.goto(`${BASE}/?view=week&anchor=${tue.date}`);
       const tc = page.locator(`.week .day[data-date="${tue.date}"]`);
       await tc.locator('.occ').first().waitFor();
       if (await tc.locator('button.tgroup').count()) await tc.locator('button.tgroup').click();

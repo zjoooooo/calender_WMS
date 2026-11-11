@@ -233,7 +233,7 @@ function TemplateEditor({ id, onClose }: { id: number; onClose: () => void }) {
   const save = () => {
     if (!route) return;
     if (route.recurring && apply === 'from') {
-      if (!fromDate) return w.setError(t('err.VALIDATION_field', { field: t('rf.fromDate') }));
+      if (!fromDate) return w.setError(t('err.required_field', { field: t('rf.fromDate') }));
       return w.run(
         (rel) => changeRouteSchedule(route.id, { rev: route.rev, from: fromDate, stops: draft.stops, ...(rel ? { release_run: true } : {}) }),
         (r) => {

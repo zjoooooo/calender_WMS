@@ -424,6 +424,64 @@ final class Plan
         return null;
     }
 
+    /**
+     * The segments of a split recurring route: a "following" save (R12) and a schedule change (R14) end
+     * the route at D - 1 and continue it as a new route with the same code and type from D. To the office
+     * they are still one route. Returns the indexes in $plan['routes'] of route $i and of every route
+     * chained to it (same code and type, recurring, each period starting the day after the previous ends).
+     * A one-off route is its own chain.
+     * @return list<int>
+     */
+    private static function chain(array $plan, int $i): array
+    {
+        $r = $plan['routes'][$i];
+        if (Usage::isOneOff($r)) {
+            return [$i];
+        }
+        $cands = [];
+        foreach ($plan['routes'] as $k => $o) {
+            if ($k !== $i && !Usage::isOneOff($o) && $o['type'] === $r['type'] && strcasecmp((string) $o['code'], (string) $r['code']) === 0) {
+                $cands[$k] = $o;
+            }
+        }
+        $out = [$i];
+        foreach ([false, true] as $forward) {
+            $cur = $r;
+            while (true) {
+                $next = null;
+                foreach ($cands as $k => $o) {
+                    $linked = $forward
+                        ? (($cur['end'] ?? null) !== null && $o['start'] === Dates::addDays($cur['end'], 1))
+                        : (($o['end'] ?? null) !== null && Dates::addDays($o['end'], 1) === $cur['start']);
+                    if ($linked) {
+                        $next = $k;
+                        break;
+                    }
+                }
+                if ($next === null) {
+                    break;
+                }
+                $out[] = $next;
+                $cur = $cands[$next];
+                unset($cands[$next]);
+            }
+        }
+        return $out;
+    }
+
+    /**
+     * The other segments of route $i's chain that still run today or later, when route $i itself does
+     * (an edit or delete of an ended segment stays on that segment). @return list<int>
+     */
+    private static function liveChainOthers(array $plan, int $i, string $today): array
+    {
+        if (!Usage::routeLive($plan['routes'][$i], $today)) {
+            return [];
+        }
+        return array_values(array_filter(self::chain($plan, $i),
+            static fn (int $k) => $k !== $i && Usage::routeLive($plan['routes'][$k], $today)));
+    }
+
     public static function nextTaskDate(array $task, string $from, array $ix): ?string
     {
         if (Usage::isOneOff($task)) {
@@ -534,6 +592,9 @@ final class Plan
         $i = self::mustRoute($plan, $c->intParam('id'));
         $old = $plan['routes'][$i];
         self::checkRev($old, $b['rev'] ?? null);
+        if (Usage::isOneOff($old)) {
+            self::notPast($old['date'], $c->today, 'date'); // R11/R13: a one-off dated before today is frozen
+        }
         if (array_key_exists('type', $b) && $b['type'] !== $old['type']) {
             throw new ApiError('TYPE_IMMUTABLE', 422, 'type', ['type' => $old['type']]);
         }
@@ -575,7 +636,41 @@ final class Plan
         if ($r['code'] !== $old['code'] || self::period($r) !== self::period($old)) {
             self::checkCodeFree($plan, $r);
         }
+        // A split route is one route to the office: an edit "from today" also changes the code, colour,
+        // name, note and weekdays of the other segments that run today or later (R14). Weekdays added or
+        // removed here are added to or removed from each segment, so a planned schedule change is kept.
+        $others = self::liveChainOthers($plan, $i, $c->today);
         $plan['routes'][$i] = $r;
+        foreach ($others as $k) {
+            $s = $plan['routes'][$k];
+            $t = $s;
+            foreach (['code', 'color', 'name', 'note'] as $f) {
+                if ($r[$f] !== $old[$f]) {
+                    $t[$f] = $r[$f];
+                }
+            }
+            if ($r['type'] === 'regular' && $r['days'] !== $old['days']) {
+                $days = array_diff(array_unique(array_merge($s['days'], array_diff($r['days'], $old['days']))), array_diff($old['days'], $r['days']));
+                sort($days);
+                $t['days'] = $days === [] ? $r['days'] : array_values($days);
+            } elseif ($r['type'] === 'special') {
+                foreach (['sun', 'ph'] as $f) {
+                    if (!empty($r[$f]) !== !empty($old[$f])) {
+                        $t[$f] = !empty($r[$f]);
+                    }
+                }
+                if (empty($t['sun']) && empty($t['ph'])) {
+                    [$t['sun'], $t['ph']] = [!empty($r['sun']), !empty($r['ph'])];
+                }
+            }
+            if ($t !== $s) {
+                $t['rev'] = (int) ($s['rev'] ?? 1) + 1;
+                $plan['routes'][$k] = self::canonRoute($t);
+                if ($t['code'] !== $s['code']) {
+                    self::checkCodeFree($plan, $plan['routes'][$k]);
+                }
+            }
+        }
         $c->savePlan($plan, ['release_run' => self::flag($b, 'release_run')]);
         if (array_key_exists('stops', $b) && $r['stops'] === []) {
             $c->warn('EMPTY_ROUTE');
@@ -583,15 +678,25 @@ final class Plan
         return self::routeOut($r);
     }
 
-    /** DELETE /api/routes/{id}?rev=4[&release_run=1] -> 204 (the route and its overrides; past days stay frozen). */
+    /**
+     * DELETE /api/routes/{id}?rev=4[&release_run=1] -> 204 (the route and its overrides; past days stay frozen).
+     * A split route goes as a whole: the other segments of its chain that run today or later are deleted too.
+     */
     public static function deleteRoute(Ctx $c): mixed
     {
         $plan = $c->plan();
         $id = $c->intParam('id');
         $i = self::mustRoute($plan, $id);
         self::checkRev($plan['routes'][$i], $c->query('rev'));
-        array_splice($plan['routes'], $i, 1);
-        $plan['route_overrides'] = array_values(array_filter($plan['route_overrides'] ?? [], static fn ($o) => (int) $o['route_id'] !== $id));
+        if (Usage::isOneOff($plan['routes'][$i])) {
+            self::notPast($plan['routes'][$i]['date'], $c->today, 'date'); // R11/R13: a one-off dated before today is frozen
+        }
+        $ids = [$id => true];
+        foreach (self::liveChainOthers($plan, $i, $c->today) as $k) {
+            $ids[(int) $plan['routes'][$k]['id']] = true;
+        }
+        $plan['routes'] = array_values(array_filter($plan['routes'], static fn ($r) => !isset($ids[(int) $r['id']])));
+        $plan['route_overrides'] = array_values(array_filter($plan['route_overrides'] ?? [], static fn ($o) => !isset($ids[(int) $o['route_id']])));
         $c->savePlan($plan, ['release_run' => $c->queryBool('release_run')]);
         return $c->noContent();
     }

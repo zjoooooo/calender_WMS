@@ -1,7 +1,8 @@
 // S1 Today (§7.3, §9.3): the op_date's jobs. Top bar with the date (and the night-shift line between
 // midnight and the rollover), the driver's name and the sync pill; "My work" (held route and tasks,
 // "Assigned by office"); tabs Routes / Tasks, each with the sections Needs driver, Available, Taken
-// and Done. Taken jobs are grey and cannot be tapped. Banners: "New today", "Not sent", switch mode.
+// and Done. Taken jobs are grey and cannot be tapped. Banners: "New today" (only jobs still open to this
+// driver: not done, not taken by someone else), "Not sent", switch mode.
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { prefs, type DriverRouteCard, type DriverTaskCard, type DriverToday } from '../api';
@@ -78,7 +79,15 @@ export default function Today() {
       }
     }
   }, [seenKey]);
-  const fresh = seen ? jobKeys.filter((k) => !seen.includes(k)) : [];
+  // Only jobs this driver can still act on: not done, and not taken by someone else (DRV: no stale news).
+  const actionable = useMemo(() => {
+    const ok = (status: string, holder: number | null) => status === 'planned' || status === 'not_started' || status === 'open' || (status === 'active' && holder === me.id);
+    return new Set([
+      ...(data?.routes ?? []).filter((r) => ok(r.status, driverId(r.driver))).map((r) => r.job),
+      ...(data?.tasks ?? []).filter((x) => ok(x.status, x.driver?.id ?? null)).map((x) => x.job),
+    ]);
+  }, [data, me.id]);
+  const fresh = seen ? jobKeys.filter((k) => !seen.includes(k) && actionable.has(k)) : [];
   const ackNew = () => {
     prefs.set(seenKey, JSON.stringify(jobKeys));
     setSeen(jobKeys);

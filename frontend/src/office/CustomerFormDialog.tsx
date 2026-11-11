@@ -82,7 +82,7 @@ export function CustomerFormDialog(props: CustomerFormDialogProps) {
   const toggle = (code: string) => setPicked((p) => (p.includes(code) ? p.filter((c) => c !== code) : [...p, code]));
 
   const save = async (extra: Extra = {}) => {
-    if (!name.trim()) return setError(t('err.VALIDATION_field', { field: t('customers.fieldName') }));
+    if (!name.trim()) return setError(t('err.required_field', { field: t('customers.fieldName') }));
     if (picked.length === 0) return setError(t('customers.needType'));
     if (props.requireRoutable && !picked.some((c) => types.find((w) => w.code === c)?.routable)) {
       return setError(t('customers.needRoutable', { routable: routableNames(types) }));

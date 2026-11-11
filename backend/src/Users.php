@@ -55,6 +55,8 @@ final class Users
      * PATCH /api/users/{id} {name?, role?, lang?, active?, password?} (admin).
      * password = reset: must_change_password, login locks cleared, token_version bumped.
      * active=false: token_version bumped and the user_deactivated hook releases held jobs (R24).
+     * A role change away from driver releases the jobs the user holds in the same way: a non-driver
+     * can no longer enter results, so the job must not stay "active" under them.
      */
     public static function patch(Ctx $c): array
     {
@@ -103,9 +105,10 @@ final class Users
         if ($deactivated) {
             $u['token_version'] = (int) ($u['token_version'] ?? 0) + 1;
         }
+        $noLongerDriver = $users['users'][$i]['role'] === 'driver' && $u['role'] !== 'driver';
         $users['users'][$i] = $u;
         $c->saveUsers($users);
-        if ($deactivated) {
+        if ($deactivated || $noLongerDriver) {
             Hooks::run(Hooks::USER_DEACTIVATED, $c, $u);
         }
         return self::out($u, $c->now);

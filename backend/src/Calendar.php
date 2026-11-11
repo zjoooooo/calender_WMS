@@ -353,15 +353,25 @@ final class Calendar
                 $flagged++;
             }
         }
+        // left_by names the driver only when they gave the job back themselves (leave, or a switch they made).
+        // When the office took it back (release, reassign, deactivation, a give-back for an assign; the hold's
+        // closed_by is then not the driver), left_by is null and released_by_office is true.
         $leftBy = null;
+        $byOffice = false;
         if ($driverId === null && $last !== null && in_array($last['end'] ?? null, ['left', 'switched', 'released', 'reassigned'], true)) {
-            $leftBy = self::userName($users, $last['driver_id'] ?? null);
+            $closedBy = $last['closed_by'] ?? null;
+            if (in_array($last['end'], ['left', 'switched'], true) && ($closedBy === null || $closedBy === 'user:' . (int) ($last['driver_id'] ?? 0))) {
+                $leftBy = self::userName($users, $last['driver_id'] ?? null);
+            } else {
+                $byOffice = true;
+            }
         }
         return [
             'driver' => $driverId === null ? null : ['id' => (int) $driverId, 'name' => self::userName($users, $driverId)],
             'vehicle_no' => $last['vehicle_no'] ?? null,
             'holders' => $holders,
             'left_by' => $leftBy,
+            'released_by_office' => $byOffice,
             'collected' => $c['collected'],
             'missed' => $c['missed'],
             'pending' => $c['pending'],
@@ -409,22 +419,28 @@ final class Calendar
 
     // ---- GET /api/calendar ---------------------------------------------------------------------
 
-    /** GET /api/calendar?view=week|month&anchor=YYYY-MM-DD (§5.9, §10.4). */
+    /**
+     * GET /api/calendar?view=week|month&anchor=YYYY-MM-DD[&week_start=mon|sun] (§5.9, §10.4).
+     * week_start (default mon): the first column of the week and of the month grid.
+     */
     public static function get(Ctx $c): array
     {
         $view = V::enum($c->query('view', 'week'), 'view', ['week', 'month']);
+        $weekStart = V::enum($c->query('week_start', 'mon'), 'week_start', ['mon', 'sun']);
         $anchor = $c->query('anchor', '') ?: $c->today;
         V::date($anchor, 'anchor');
+        // Days from the start of the week to $d (ISO weekday 1 = Monday … 7 = Sunday).
+        $back = static fn (string $d): int => $weekStart === 'sun' ? Dates::weekday($d) % 7 : Dates::weekday($d) - 1;
         $month = null;
         if ($view === 'week') {
-            $from = Dates::addDays($anchor, 1 - Dates::weekday($anchor));
+            $from = Dates::addDays($anchor, -$back($anchor));
             $to = Dates::addDays($from, 6);
             $prev = Dates::addDays($from, -7);
             $next = Dates::addDays($from, 7);
         } else {
             $first = substr($anchor, 0, 8) . '01';
             $month = substr($anchor, 0, 7);
-            $from = Dates::addDays($first, 1 - Dates::weekday($first));
+            $from = Dates::addDays($first, -$back($first));
             $to = Dates::addDays($from, 41);
             [$y, $m] = array_map('intval', explode('-', $month));
             $prev = sprintf('%04d-%02d-01', $m === 1 ? $y - 1 : $y, $m === 1 ? 12 : $m - 1);
@@ -492,6 +508,7 @@ final class Calendar
         }
         return [
             'view' => $view,
+            'week_start' => $weekStart,
             'from' => $from,
             'to' => $to,
             'today' => $c->today,

@@ -36,9 +36,11 @@ export interface StatusGlyphProps {
   notCollected?: boolean;
   /** Tooltip. */
   title?: string;
+  /** Month-view line (§9.2): glyph + driver (active, done) + count only, no status word; done drops the count. */
+  compact?: boolean;
 }
 
-export function StatusGlyph({ status, kind = 'route', driver, resolved = 0, total = 0, notCollected, title }: StatusGlyphProps) {
+export function StatusGlyph({ status, kind = 'route', driver, resolved = 0, total = 0, notCollected, title, compact }: StatusGlyphProps) {
   const { t } = useI18n();
   if (!status) return null;
   const count = kind === 'route' ? ` ${resolved}/${total}` : '';
@@ -46,6 +48,7 @@ export function StatusGlyph({ status, kind = 'route', driver, resolved = 0, tota
   let word: string;
   switch (status) {
     case 'planned':
+      if (compact && kind === 'task') return null;
       return (
         <span className="sg planned num" title={title ?? t('status.planned')}>
           {kind === 'route' ? total : '–'}
@@ -65,13 +68,17 @@ export function StatusGlyph({ status, kind = 'route', driver, resolved = 0, tota
     default:
       word = t(`status.${status}`);
   }
-  const showCount = kind === 'route' && status !== 'cancelled' && status !== 'holiday_skipped' && status !== 'no_record';
+  const showCount = kind === 'route' && status !== 'cancelled' && status !== 'holiday_skipped' && status !== 'no_record' && !(compact && status === 'done');
+  // Compact keeps the driver's name (active, done); the status word moves to the tooltip.
+  const isName = (status === 'active' || status === 'done') && !!driver && !notCollected;
+  if (compact && glyph && !isName) word = '';
   const cls = `sg ${status}${notCollected ? ' missed' : ''}`;
   return (
-    <span className={cls} title={title ?? t(`status.${status}`)}>
+    <span className={cls} title={title ?? t(`status.${status}`)} aria-label={compact && !word ? title ?? t(`status.${status}`) : undefined}>
       {glyph && <span className="g" aria-hidden="true">{glyph}</span>}
-      {word}
-      {showCount && <span className="num">{count}</span>}
+      {/* .w = a status word, which a narrow week column hides (CSS); a driver's name (.who) always stays */}
+      {word && <span className={isName ? 'w who' : 'w'}>{word}</span>}
+      {showCount && <span className="num">{word ? count : count.trim()}</span>}
     </span>
   );
 }

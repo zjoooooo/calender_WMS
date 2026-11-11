@@ -8,12 +8,15 @@
 // Edit: code, colour (10 swatches), name, note, Mon–Sat or Sunday/PH, start and end; one-offs: the date
 // (Change date, re-checked by R6). Schedule changes apply (•) from today (template edit) or ( ) from date D
 // (R14 change-schedule; code, colour, name and note always apply at once).
+// R20: an edit sends the rev the form was loaded from (not the refetched one), so a change saved by someone
+// else meanwhile is answered with STALE_REVISION; the form keeps its values and a second save replaces it.
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   changeRouteSchedule,
   createRoute,
   getRoute,
+  isApiError,
   patchRoute,
   suggestRouteCode,
   type Route,
@@ -70,6 +73,7 @@ export function RouteForm(props: Props) {
   const [apply, setApply] = useState<'today' | 'from'>(edit && props.fromD ? 'from' : 'today');
   const [fromDate, setFromDate] = useState(edit && props.date ? props.date : '');
   const [loaded, setLoaded] = useState(false);
+  const [baseRev, setBaseRev] = useState<number | null>(null);
 
   // Initial values.
   useEffect(() => {
@@ -94,8 +98,23 @@ export function RouteForm(props: Props) {
     setStart(route.start ?? '');
     setEnd(route.end ?? '');
     setDate(route.date ?? '');
+    setBaseRev(route.rev);
     setLoaded(true);
   }, [edit, route, loaded]);
+  /** After STALE_REVISION (shown, refetched) the next save is based on the current rev. */
+  const staleGuard =
+    <R,>(fn: (rel: boolean) => Promise<R>) =>
+    async (rel: boolean): Promise<R> => {
+      try {
+        return await fn(rel);
+      } catch (e) {
+        if (isApiError(e, 'STALE_REVISION')) {
+          const current = Number((e.details as { current?: unknown } | null)?.current);
+          if (Number.isFinite(current) && current > 0) setBaseRev(current);
+        }
+        throw e;
+      }
+    };
 
   // Suggested code for a new one-off (A<n> on a work day, S<n> on a rest day).
   const suggestQ = useQuery({
@@ -112,8 +131,8 @@ export function RouteForm(props: Props) {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     w.setError(null);
-    if (!code.trim()) return w.setError(t('err.VALIDATION_field', { field: t('common.code') }));
-    if (!name.trim()) return w.setError(t('err.VALIDATION_field', { field: t('common.name') }));
+    if (!code.trim()) return w.setError(t('err.required_field', { field: t('common.code') }));
+    if (!name.trim()) return w.setError(t('err.required_field', { field: t('common.name') }));
     if (type === 'regular' && !oneOff && days.length === 0) return w.setError(t('rf.needDays'));
     if (type === 'special' && !oneOff && !sun && !ph) return w.setError(t('rf.needSunPh'));
     const sched = type === 'regular' ? { days: [...days].sort() } : { sun, ph };
@@ -134,7 +153,7 @@ export function RouteForm(props: Props) {
       return;
     }
     if (!route) return;
-    const ident: RoutePatch = { rev: route.rev };
+    const ident: RoutePatch = { rev: baseRev ?? route.rev };
     if (code.trim().toUpperCase() !== route.code) ident.code = code.trim().toUpperCase();
     if (color !== null && color !== route.color) ident.color = color;
     if (name.trim() !== route.name) ident.name = name.trim();
@@ -146,24 +165,24 @@ export function RouteForm(props: Props) {
     };
     if (oneOff) {
       if (date !== route.date) ident.date = date;
-      await w.run((rel) => patchRoute(route.id, { ...ident, ...(rel ? { release_run: true } : {}) }), done);
+      await w.run(staleGuard((rel) => patchRoute(route.id, { ...ident, ...(rel ? { release_run: true } : {}) })), done);
       return;
     }
     if (apply === 'today') {
       const body: RoutePatch = { ...ident, ...sched };
       if (start !== (route.start ?? '')) body.start = start;
       if ((end || null) !== (route.end ?? null)) body.end = end || null;
-      await w.run((rel) => patchRoute(route.id, { ...body, ...(rel ? { release_run: true } : {}) }), done);
+      await w.run(staleGuard((rel) => patchRoute(route.id, { ...body, ...(rel ? { release_run: true } : {}) })), done);
       return;
     }
     // From date D: identity first (template edit), then the schedule split (R14).
-    if (!fromDate) return w.setError(t('err.VALIDATION_field', { field: t('rf.fromDate') }));
-    await w.run(async (rel) => {
-      let rev = route.rev;
+    if (!fromDate) return w.setError(t('err.required_field', { field: t('rf.fromDate') }));
+    await w.run(staleGuard(async (rel) => {
+      let rev = ident.rev;
       if (Object.keys(ident).length > 1) rev = (await patchRoute(route.id, ident)).data.rev;
       const cs = await changeRouteSchedule(route.id, { rev, from: fromDate, ...sched, end: end || null, ...(rel ? { release_run: true } : {}) });
       return cs;
-    }, done);
+    }), done);
   };
 
   const titleKey = edit ? 'rf.editTitle' : `rf.create.${createType}`;

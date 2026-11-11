@@ -179,7 +179,12 @@ export function buildUrl(path: string, query?: RequestOptions['query']): string 
   return url;
 }
 
-/** Maps a parsed envelope (or its absence) to a result or an ApiError. Exported for tests. */
+/**
+ * Maps a parsed envelope (or its absence) to a result or an ApiError. Exported for tests.
+ * A body that is not the API's envelope below 500 (a Wi-Fi captive portal or proxy page, often with
+ * status 200) did not come from the server: it is NETWORK (http 0), so the phone's outbox keeps the result
+ * and resends it, and the driver views fall back to their cached copy.
+ */
 export function parseEnvelope<T>(status: number, body: any): ApiResult<T> {
   if (status === 204) return { data: null as T, warnings: [], status };
   if (body && typeof body === 'object' && body.ok === true) {
@@ -189,7 +194,8 @@ export function parseEnvelope<T>(status: number, body: any): ApiResult<T> {
     const e = body.error;
     throw new ApiError(String(e.code || 'UNKNOWN'), status, e.message || '', e.field ?? null, e.details ?? null);
   }
-  throw new ApiError(status >= 500 ? 'INTERNAL' : 'UNKNOWN', status, `HTTP ${status}`);
+  if (status >= 500) throw new ApiError('INTERNAL', status, `HTTP ${status}`);
+  throw new ApiError('NETWORK', 0, `HTTP ${status}: not an API response`);
 }
 
 /** Low-level request; returns the whole result. */
@@ -206,34 +212,46 @@ export async function requestFull<T>(method: string, path: string, body?: unknow
     payload = JSON.stringify(body);
   }
 
+  // The timeout covers the whole exchange, headers AND body: a body that stalls half way (a mobile link
+  // dropping mid-response) ends as TIMEOUT instead of hanging the caller (and the outbox flush) for good.
   const ctrl = new AbortController();
   let timedOut = false;
-  const timer = opts.timeoutMs ? setTimeout(() => { timedOut = true; ctrl.abort(); }, opts.timeoutMs) : null;
+  let rejectTimeout: (e: ApiError) => void = () => {};
+  const timeoutP = new Promise<never>((_, reject) => (rejectTimeout = reject));
+  timeoutP.catch(() => undefined);
+  const timer = opts.timeoutMs
+    ? setTimeout(() => {
+        timedOut = true;
+        ctrl.abort();
+        rejectTimeout(new ApiError('TIMEOUT', 0, 'Request timed out'));
+      }, opts.timeoutMs)
+    : null;
   const onAbort = () => ctrl.abort();
   if (opts.signal?.aborted) ctrl.abort();
   opts.signal?.addEventListener('abort', onAbort);
 
   let res: Response;
+  let text = '';
   try {
-    res = await fetch(buildUrl(path, opts.query), { method, headers, body: payload, signal: ctrl.signal, cache: 'no-store' });
-  } catch (e) {
-    if (timedOut) throw new ApiError('TIMEOUT', 0, 'Request timed out');
-    if (opts.signal?.aborted) throw e; // the caller cancelled: rethrow the AbortError
-    throw new ApiError('NETWORK', 0, e instanceof Error ? e.message : 'Network error');
+    try {
+      res = await Promise.race([fetch(buildUrl(path, opts.query), { method, headers, body: payload, signal: ctrl.signal, cache: 'no-store' }), timeoutP]);
+      if (res.status !== 204) text = await Promise.race([res.text(), timeoutP]);
+    } catch (e) {
+      if (timedOut) throw new ApiError('TIMEOUT', 0, 'Request timed out');
+      if (opts.signal?.aborted) throw e; // the caller cancelled: rethrow the AbortError
+      throw new ApiError('NETWORK', 0, e instanceof Error ? e.message : 'Network error');
+    }
   } finally {
     if (timer) clearTimeout(timer);
     opts.signal?.removeEventListener('abort', onAbort);
   }
 
   let json: any = null;
-  if (res.status !== 204) {
-    const text = await res.text().catch(() => '');
-    if (text) {
-      try {
-        json = JSON.parse(text);
-      } catch {
-        json = null; // not JSON (proxy error page, …)
-      }
+  if (text) {
+    try {
+      json = JSON.parse(text);
+    } catch {
+      json = null; // not JSON (proxy error page, …)
     }
   }
 
@@ -474,11 +492,15 @@ export interface CalendarResponse {
   routes: RouteOccurrence[];
   tasks: TaskOccurrence[];
   customers: Record<string, CustomerRef>;
+  /** First column of the week and of the month grid (the request's week_start, default 'mon'). */
+  week_start?: WeekStart;
 }
 
 export type CalendarView = 'week' | 'month';
-export const getCalendar = (view: CalendarView, anchor: IsoDate, opts?: RequestOptions): Promise<CalendarResponse> =>
-  request('GET', '/calendar', undefined, { ...opts, query: { view, anchor } });
+export type WeekStart = 'mon' | 'sun';
+/** week_start 'sun': Sunday-first week and month grid (the office calendar); default 'mon'. */
+export const getCalendar = (view: CalendarView, anchor: IsoDate, opts?: RequestOptions, weekStart?: WeekStart): Promise<CalendarResponse> =>
+  request('GET', '/calendar', undefined, { ...opts, query: { view, anchor, week_start: weekStart } });
 
 // ---------------------------------------------------------------------------------------------
 // §10.5 Routes and containers

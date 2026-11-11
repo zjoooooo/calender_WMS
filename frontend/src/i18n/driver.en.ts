@@ -94,6 +94,8 @@ const driver: { [K in keyof typeof zh]: string } = {
 
   'driver.form.weightLabel': '{type} ({unit})',
   'driver.form.weightRequired': 'Enter the weight (tap 0 when there is none)',
+  'driver.form.weightRequiredOne': 'Enter the weight. Nothing to collect? Tap "Not collected…" → No waste.',
+  'driver.form.weightZeroOne': 'The weight must be above 0. Nothing to collect? Tap "Not collected…" → No waste.',
   'driver.form.ticket': '{type} weighbridge ticket no.',
   'driver.form.ticketTooLong': 'At most 30 characters',
   'driver.form.collected': 'Collected: save',

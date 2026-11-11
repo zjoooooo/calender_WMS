@@ -277,6 +277,15 @@ async function main() {
     const fontPx = await weightInput.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
     check(fontPx >= 28, 'weight field font is 28 px', fontPx);
     check((await pageA.locator('input[name^="weight-"]').count()) === 1, 'only the routable type (REL) is weighable on a route stop');
+    // DRV-4: one weighable type: no [0] chip, and the empty / 0 hints point to Not collected → No waste.
+    check((await pageA.locator('[data-testid=result-form] button.zero').count()) === 0, 'a REL-only stop has no [0] chip (0 alone is refused)');
+    await pageA.click('[data-testid=save-collected]');
+    const emptyErr = await pageA.locator('.dfield .err').first().innerText();
+    check(/Not collected/.test(emptyErr) && !/tap 0/.test(emptyErr), 'the empty-weight hint points to "Not collected… → No waste"', emptyErr);
+    await weightInput.fill('0');
+    await pageA.click('[data-testid=save-collected]');
+    const zeroErr = await pageA.locator('.form-err').innerText();
+    check(/Not collected/.test(zeroErr), 'a 0 weight says what to do instead', zeroErr);
     await weightInput.fill('120,5');
     await pageA.setInputFiles('[data-testid=photo-input]', { name: 'photo.png', mimeType: 'image/png', buffer: makePng(400, 300) });
     await pageA.waitForSelector('[data-testid=photos] img');
@@ -510,12 +519,26 @@ async function main() {
     check((await pageA.locator('input[name="weight-REL"]').inputValue()) === '77', 'the form reopens with the saved value');
     check((await pageA.locator('[data-testid=save-collected]').innerText()).includes('Save correction'), 'it offers Save correction and Undo');
     await pageA.fill('input[name="weight-REL"]', '78.5');
+    await pageA.fill('textarea[name=note]', 'evidence note');
+    // DRV-2: the send fails (no network for the PUT), then the stop is opened by a fresh page load.
+    await pageA.route('**/api/driver/runs/**/stops/**', (route) => (route.request().method() === 'PUT' ? route.abort('failed') : route.continue()));
     await pageA.click('[data-testid=save-collected]');
+    await pageA.waitForURL((u) => !u.pathname.endsWith('/' + cidOff));
+    const stopUrl = `${BASE}/driver/job/${today}/${RB.job}/stop/${cidOff}`;
+    await pageA.goto(stopUrl);
+    await pageA.waitForSelector('[data-testid=result-form] input[name="weight-REL"]');
+    const reW = await pageA.locator('input[name="weight-REL"]').inputValue();
+    const reNote = await pageA.locator('textarea[name=note]').inputValue();
+    const reBanner = await pageA.locator('.dban.warn', { hasText: 'You are correcting a saved result.' }).count();
+    check(reW === '78.5' && reNote === 'evidence note' && reBanner === 1, 'a fresh load of an unsent stop opens with its queued values and the "correcting" banner', { reW, reNote, reBanner });
+    await pageA.unroute('**/api/driver/runs/**/stops/**');
+    await pageA.evaluate(() => window.dispatchEvent(new Event('focus'))); // a flush starts on focus
     const corrected = await until(async () => {
       const r = await call('GET', `/runs/${today}/${RB.job}`, null, admin);
       return r.visits[cidOff]?.rev === 2 ? r.visits[cidOff] : null;
     });
     check(corrected && corrected.weights.REL === 78.5 && corrected.history.length === 1, 'correction stored as rev 2 with history', corrected && { w: corrected.weights, h: corrected.history.length });
+    check(corrected && corrected.note === 'evidence note', 'its note reached the server too', corrected && corrected.note);
 
     // ---- 7b. Office actions reach the phone (§8.2) -------------------------------------------------------
     console.log('office actions');
@@ -525,15 +548,29 @@ async function main() {
       await pageB.goto(BASE + '/driver');
       const banner = await pageB.locator('[data-testid=new-today]').innerText({ timeout: 10000 });
       check(banner.includes(otcCust.name), '"New today" banner for a task the office just created', banner);
+      // DRV-6: a new task someone else already took is not announced.
+      const other = (await call('GET', '/customers?type=OTC', null, admin)).find((c) => c.id !== otcCust.id && c.waste_types.includes('OTC'));
+      if (other) {
+        const tk = await call('POST', '/tasks', { waste_type: 'OTC', customer_id: other.id, date: today, note: 'taken at once' }, admin);
+        const aliTok = (await call('POST', '/login', { username: 'ali', password: DRIVER_PW })).token;
+        await call('POST', `/driver/runs/${today}/t${tk.id}/claim`, { vehicle_no: 'GBA1234X' }, aliTok);
+        await pageB.goto(BASE + '/driver');
+        await pageB.locator(`[data-testid=new-today]`).waitFor();
+        const banner2 = await pageB.locator('[data-testid=new-today]').innerText();
+        check(banner2.includes(otcCust.name) && !banner2.includes(other.name), '"New today" leaves out a task another driver already took', banner2);
+      }
     }
     await pageA.goto(`${BASE}/driver/job/${today}/${RB.job}`);
     await pageA.waitForSelector('[data-testid=run]');
+    // DRV-1: Ali is on a stop form (not the run view) when the office takes the route back.
+    await pageA.click('[data-testid=next-stop]');
+    await pageA.waitForSelector('[data-testid=result-form]');
     await call('POST', `/runs/${today}/${RB.job}/release`, { mark_missed: false }, admin);
     await pageA.waitForTimeout(5500); // past the 5 s staleTime, then a visibility change refetches (else the 30 s poll)
     await pageA.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
     await pageA.waitForURL(/\/driver$/, { timeout: 40000 });
     const tookBack = await pageA.locator('.toast').innerText().catch(() => '');
-    check(/Office took back/.test(tookBack), `office Release: Ali's phone returns to Today ("Office took back ${RB.code}")`, tookBack);
+    check(/Office took back/.test(tookBack), `office Release while on a stop form: Ali's phone returns to Today ("Office took back ${RB.code}")`, tookBack);
 
     // ---- 8. zh switch keeps working on the phone ------------------------------------------------------
     await pageB.goto(BASE + '/driver');
@@ -546,6 +583,32 @@ async function main() {
     });
     check(!!zhTab, 'language switch to 中文 on the phone', zhTab);
     await shot(pageB, '09-zh');
+
+    // ---- 9. A language tapped on the sign-in page carries over (DRV-8; Chong's account is English) -----
+    console.log('sign-in language');
+    const ctxC = await browser.newContext(phone);
+    const pageC = await ctxC.newPage();
+    await pageC.goto(BASE + '/driver/login');
+    await pageC.getByRole('button', { name: '中文' }).click();
+    await pageC.fill('input[name=username]', 'chong');
+    await pageC.fill('input[name=password]', SEED_DRIVER_PW);
+    await pageC.click('button[type=submit]');
+    await pageC.waitForURL('**/password');
+    const pwHead = await pageC.locator('h1, h2').first().innerText();
+    check(/设置新密码/.test(pwHead), 'the forced password page stays in 中文', pwHead);
+    await pageC.fill('input[name=old]', SEED_DRIVER_PW);
+    await pageC.fill('input[name=new]', DRIVER_PW);
+    await pageC.fill('input[name=again]', DRIVER_PW);
+    await pageC.click('button[type=submit]');
+    await pageC.waitForURL(/\/driver$/);
+    const tabC = await until(async () => {
+      const x = await pageC.locator('.dtabs button').first().innerText();
+      return /路线/.test(x) ? x : null;
+    });
+    check(!!tabC, 'Today is in 中文 after the sign-in', tabC);
+    const chong = await until(async () => (await call('GET', '/users', null, admin)).find((u) => u.username === 'chong' && u.lang === 'zh'));
+    check(!!chong, 'the choice is saved on the user (lang zh)');
+    await ctxC.close();
 
     const unexpected = consoleErrors.filter((e) => !/Failed to load resource|ERR_INTERNET_DISCONNECTED|net::ERR_FAILED|status of 409|status of 4\d\d/.test(e));
     check(unexpected.length === 0, 'no unexpected console errors', unexpected);

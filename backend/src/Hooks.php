@@ -14,7 +14,8 @@
 //       request's release_run. Use it for the R26 run invariant (throw ApiError RUN_EXISTS or move
 //       runs to dropped_runs / append run.removed), R9 override cleanup/purge, etc.
 //   user_deactivated fn(Ctx $c, array $user): void
-//       Runs when an admin sets active=false on a user (R24: release every job a driver holds).
+//       Runs when an admin sets active=false on a user, or changes a driver's role to another role
+//       (R24: release every job a driver holds).
 //
 // Adding a hook with an existing (event, name) replaces it.
 final class Hooks

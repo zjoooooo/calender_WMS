@@ -104,13 +104,17 @@ final class Runs
         return null;
     }
 
-    /** Closes every open hold with $end at $at and clears the holder (R24). */
-    private static function closeHold(array $run, string $end, string $at): array
+    /**
+     * Closes every open hold with $end at $at and clears the holder (R24). closed_by is the principal who
+     * closed it (the driver, or the office), so RunSummary.left_by can tell "left by Ali" from "taken back".
+     */
+    private static function closeHold(array $run, string $end, string $at, string $by): array
     {
         foreach (($run['holds'] ?? null) ?: [] as $k => $h) {
             if (($h['to'] ?? null) === null) {
                 $run['holds'][$k]['to'] = $at;
                 $run['holds'][$k]['end'] = $end;
+                $run['holds'][$k]['closed_by'] = $by;
             }
         }
         $run['driver_id'] = null;
@@ -231,7 +235,7 @@ final class Runs
         }
         $counts = self::counts($stops, $run);
         if (($run['driver_id'] ?? null) !== null || self::openHold($run) !== null) {
-            $run = self::closeHold($run, $counts['pending'] === 0 ? 'finished' : $endIfPending, $c->nowIso);
+            $run = self::closeHold($run, $counts['pending'] === 0 ? 'finished' : $endIfPending, $c->nowIso, $c->principal());
         }
         $day['runs'][$job] = $run;
         return [$day, self::resultOf($counts)];
@@ -257,7 +261,7 @@ final class Runs
             }
             $stops = self::stopIds(Schedule::jobOccurrence($plan, $day, $date, $job, $c->today));
             if (self::counts($stops, $run)['pending'] === 0) {
-                $day['runs'][$job] = self::closeHold($run, 'finished', $c->nowIso);
+                $day['runs'][$job] = self::closeHold($run, 'finished', $c->nowIso, $c->principal());
             }
         }
         return $day;
@@ -437,6 +441,7 @@ final class Runs
                 'name' => $o['name'], 'note' => $o['note'], 'stops' => count($o['stops']),
                 'first_customers' => array_map(static fn ($s) => $name($s['customer_id']), array_slice($o['stops'], 0, 3)),
                 'status' => $o['run_status'], 'driver' => $sum['driver'] ?? null, 'left_by' => $sum['left_by'] ?? null,
+                'released_by_office' => $sum['released_by_office'] ?? false,
                 'collected' => $sum['collected'] ?? 0, 'missed' => $sum['missed'] ?? 0, 'pending' => $pending,
                 'can_take' => in_array($o['run_status'], ['not_started', 'open'], true) && $pending >= 1,
             ];
@@ -591,7 +596,7 @@ final class Runs
             }
             $run = Calendar::runsOf($day)[$job] ?? self::newRun($job);
             if ($holder !== null) {
-                $run = self::closeHold($run, 'reassigned', $c->nowIso);
+                $run = self::closeHold($run, 'reassigned', $c->nowIso, $c->principal());
             }
             $run['holds'][] = ['driver_id' => $x, 'vehicle_no' => null, 'by' => $c->principal(), 'from' => $c->nowIso, 'to' => null, 'end' => null];
             $run['driver_id'] = $x;
@@ -603,7 +608,10 @@ final class Runs
         return ['run' => Calendar::runSummary($run, $visits, Calendar::counts($j['stops'], $visits), $users), 'gave_back' => $gave];
     }
 
-    /** Hooks::USER_DEACTIVATED (R24): deactivating a driver releases every job they hold today (end = released). */
+    /**
+     * Hooks::USER_DEACTIVATED (R24): deactivating a driver, or changing their role away from driver, releases
+     * every job they hold today (end = released).
+     */
     public static function onUserDeactivated(Ctx $c, array $user): void
     {
         $date = $c->today;
@@ -646,17 +654,18 @@ final class Runs
         $users = self::usersById($c);
         $holder = $run['driver_id'] ?? null;
         $hold = self::openHold($run);
+        $lang = (string) ($c->user['lang'] ?? 'zh');
 
         $stops = [];
         if ($kind === 'route') {
             foreach ($occ['stops'] as $s) {
-                $stops[] = self::jobStop($ix, $x, $job, $occ, (int) $s['seq'], (int) $s['customer_id'], (string) $s['note'], true, $visits);
+                $stops[] = self::jobStop($ix, $x, $job, $occ, (int) $s['seq'], (int) $s['customer_id'], (string) $s['note'], true, $visits, $lang);
             }
             foreach ($occ['off_plan'] ?? [] as $op) {
-                $stops[] = self::jobStop($ix, $x, $job, $occ, count($stops) + 1, (int) $op['customer_id'], '', false, $visits);
+                $stops[] = self::jobStop($ix, $x, $job, $occ, count($stops) + 1, (int) $op['customer_id'], '', false, $visits, $lang);
             }
         } else {
-            $stops[] = self::jobStop($ix, $x, $job, $occ, 1, (int) $occ['customer_id'], '', true, $visits);
+            $stops[] = self::jobStop($ix, $x, $job, $occ, 1, (int) $occ['customer_id'], '', true, $visits, $lang);
         }
         $counts = Calendar::counts(self::stopIds($occ), $visits);
         $out = [
@@ -691,7 +700,7 @@ final class Runs
         return $out;
     }
 
-    private static function jobStop(array $ix, array $x, string $job, array $occ, int $seq, int $cid, string $note, bool $onPlan, array $visits): array
+    private static function jobStop(array $ix, array $x, string $job, array $occ, int $seq, int $cid, string $note, bool $onPlan, array $visits, string $lang): array
     {
         $cu = $ix['customers'][$cid] ?? null;
         $weigh = $occ['kind'] === 'task' ? [(string) $occ['waste_type']] : Visits::routeWeighTypes($ix['types'], $cu, !$onPlan);
@@ -704,7 +713,7 @@ final class Runs
                 'address' => (string) ($cu['address'] ?? ''), 'phone' => (string) ($cu['phone'] ?? ''), 'note' => (string) ($cu['note'] ?? '')],
             'weigh_types' => $weigh,
             'ticket_types' => array_values(array_filter($weigh, static fn ($t) => ($ix['types'][$t]['weigh_method'] ?? '') === 'weighbridge')),
-            'also_on' => self::alsoOn($ix, $x, $job, $cid),
+            'also_on' => self::alsoOn($ix, $x, $job, $cid, $lang),
             'visit' => $v === null ? null : [
                 'outcome' => $v['outcome'] ?? null, 'weights' => (object) (($v['weights'] ?? null) ?: []),
                 'tickets' => (object) (($v['tickets'] ?? null) ?: []), 'photos' => array_values(($v['photos'] ?? null) ?: []),
@@ -715,15 +724,18 @@ final class Runs
         ];
     }
 
-    /** R31: the other jobs that day for the same customer: [{job, label, outcome}]. */
-    private static function alsoOn(array $ix, array $x, string $job, int $cid): array
+    /**
+     * R31: the other jobs that day for the same customer: [{job, kind, label, outcome}]. A task's label is
+     * "<type> task" in the reader's language (zh: "<type> 任务"); a route's label is its code.
+     */
+    private static function alsoOn(array $ix, array $x, string $job, int $cid, string $lang): array
     {
         $out = [];
         foreach ($x['tasks'] as $o) {
             $j = 't' . $o['task_id'];
             if ($j !== $job && empty($o['orphan']) && (int) $o['customer_id'] === $cid && ($o['status'] === 'scheduled' || $o['run'] !== null)) {
                 $abbr = $ix['types'][$o['waste_type']]['abbr'] ?? $o['waste_type'];
-                $out[] = ['job' => $j, 'label' => $abbr . ' task', 'outcome' => $o['visit']['outcome'] ?? null];
+                $out[] = ['job' => $j, 'kind' => 'task', 'label' => $abbr . ($lang === 'en' ? ' task' : ' 任务'), 'outcome' => $o['visit']['outcome'] ?? null];
             }
         }
         foreach ($x['routes'] as $o) {
@@ -733,7 +745,7 @@ final class Runs
             }
             foreach ($o['stops'] as $s) {
                 if ((int) $s['customer_id'] === $cid) {
-                    $out[] = ['job' => $j, 'label' => $o['code'], 'outcome' => $s['visit']['outcome'] ?? null];
+                    $out[] = ['job' => $j, 'kind' => 'route', 'label' => $o['code'], 'outcome' => $s['visit']['outcome'] ?? null];
                     break;
                 }
             }

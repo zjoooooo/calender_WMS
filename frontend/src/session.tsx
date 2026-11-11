@@ -4,6 +4,10 @@
 // Rollover: when any response carries a `today` different from meta.today, or when the timer set from
 // meta.day_ends_at fires, EVERY query is invalidated (calendar ranges, lists, drawers, the driver's jobs)
 // and /api/meta is fetched again, which re-arms the timer from the new day_ends_at.
+//
+// Language: the user's stored language wins at sign-in, except when the person picked a language on the
+// sign-in page itself (the 中文 | EN switch while signed out): that explicit choice carries over and is
+// saved on the user (at once, or right after a forced password change, when PATCH /api/me is allowed).
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as api from './api';
@@ -37,6 +41,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const qc = useQueryClient();
   const { setLang } = useI18n();
   const [token, setTokenState] = useState<string | null>(() => api.getToken());
+  /** Language picked on the sign-in page (signed out), not yet applied to a user. */
+  const loginPick = useRef<Lang | null>(null);
+  /** A sign-in-page pick still to save on the user (after the forced password change). */
+  const langToSave = useRef<Lang | null>(null);
 
   const meQ = useQuery({
     queryKey: ME_KEY,
@@ -63,6 +71,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [me?.lang, setLang]);
 
   const signOut = useCallback(() => {
+    langToSave.current = null;
     api.setToken(null);
     setTokenState(null);
     qc.clear();
@@ -94,8 +103,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       qc.clear();
       api.setToken(r.token);
       setTokenState(r.token);
-      qc.setQueryData(ME_KEY, r.user);
-      setLang(r.user.lang);
+      const pick = loginPick.current;
+      loginPick.current = null;
+      const lang = pick ?? r.user.lang;
+      qc.setQueryData(ME_KEY, { ...r.user, lang });
+      setLang(lang);
+      if (pick && pick !== r.user.lang) {
+        if (r.user.must_change_password) langToSave.current = pick;
+        else void api.patchMe({ lang: pick }).then((u) => qc.setQueryData(ME_KEY, u)).catch(() => undefined);
+      }
     },
     [qc, setLang],
   );
@@ -107,7 +123,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       // The change is done: drop the flag now, so the guards do not bounce back to /password while
       // /api/me is refetched.
       qc.setQueryData<User>(ME_KEY, (u) => (u ? { ...u, must_change_password: false } : u));
-      void qc.invalidateQueries();
+      // A language picked on the sign-in page is saved first, so the refetched /api/me already has it.
+      const lang = langToSave.current;
+      langToSave.current = null;
+      const saved = lang ? api.patchMe({ lang }).then((u) => void qc.setQueryData(ME_KEY, u)).catch(() => undefined) : Promise.resolve();
+      void saved.then(() => qc.invalidateQueries());
     },
     [qc],
   );
@@ -121,9 +141,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     async (lang: Lang) => {
       setLang(lang);
       // Signed out, or a password change is pending (the server refuses PATCH /api/me until then):
-      // the choice stays in this browser only.
+      // the choice stays in this browser only; on the sign-in page it is applied to the user who signs in.
       const cur = qc.getQueryData<User>(ME_KEY);
-      if (!api.getToken() || !cur || cur.must_change_password) return;
+      if (!api.getToken() || !cur) {
+        loginPick.current = lang;
+        return;
+      }
+      if (cur.must_change_password) {
+        langToSave.current = lang;
+        qc.setQueryData<User>(ME_KEY, { ...cur, lang });
+        return;
+      }
       const u = await api.patchMe({ lang });
       qc.setQueryData(ME_KEY, u);
       void qc.invalidateQueries({ queryKey: META_KEY });

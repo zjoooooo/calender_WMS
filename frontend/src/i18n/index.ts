@@ -38,9 +38,13 @@ export function interpolate(text: string, vars?: Vars): string {
   return text.replace(/\{(\w+)\}/g, (m, k: string) => (k in vars ? String(vars[k]) : m));
 }
 
-/** Translates `key`; an unknown key returns the key itself (so a missing text is visible). */
+/**
+ * Translates `key`; an unknown key returns the key itself (so a missing text is visible).
+ * Singular: with `n` = 1, a `<key>_one` text is used when the dictionary has one ("1 task", not "1 tasks").
+ */
 export function translate(lang: Lang, key: string, vars?: Vars): string {
-  const text = DICTS[lang][key] ?? DICTS.zh[key];
+  const k = vars && Number(vars.n) === 1 && DICTS[lang][key + '_one'] !== undefined ? key + '_one' : key;
+  const text = DICTS[lang][k] ?? DICTS.zh[k];
   return text === undefined ? key : interpolate(text, vars);
 }
 

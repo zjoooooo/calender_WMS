@@ -278,6 +278,70 @@ return (static function (): array {
             T::eq([], $e->doc('plan')['route_overrides']);
             T::err($e->call('GET', '/api/routes/5', null, 'mei'), 404, 'NOT_FOUND');
         },
+        'split route (OFF-3/OFF-4): "from today" edits and Delete route reach every segment that runs today or later' => function () use ($env, $stops, $route, $occ, $noRuns) {
+            // an ended N1 segment (id 3) runs up to 1 Nov, the day before N1 (id 5) starts
+            $fx = json_decode((string) file_get_contents(__DIR__ . '/../fixtures/basic.json'), true);
+            $routes = $fx['plan']['routes'];
+            array_unshift($routes, ['id' => 3, 'code' => 'N1', 'color' => 1, 'type' => 'regular', 'name' => 'North 1', 'note' => '', 'rev' => 1,
+                'start' => '2026-10-05', 'end' => '2026-11-01', 'days' => [1, 3, 5], 'stops' => $stops(12)]);
+            $e = $env(['days' => $noRuns, 'plan' => ['routes' => $routes]]);
+            // two "following" saves and a planned schedule change: 5 (.. 12 Nov), 45 (13-19 Nov), 46 (20-29 Nov), 47 (30 Nov .., Mon/Wed)
+            T::ok($e->call('PUT', '/api/routes/5/dates/2026-11-13', ['rev' => 4, 'scope' => 'following', 'stops' => $stops(40)], 'mei'));
+            T::ok($e->call('PUT', '/api/routes/45/dates/2026-11-20', ['rev' => 1, 'scope' => 'following', 'stops' => $stops(40, 12)], 'mei'));
+            T::ok($e->call('POST', '/api/routes/46/change-schedule', ['rev' => 1, 'from' => '2026-11-30', 'days' => [1, 3]], 'mei'));
+            T::subset(['end' => '2026-11-19', 'rev' => 2], $route($e, 45));
+            T::subset(['start' => '2026-11-20', 'end' => '2026-11-29', 'rev' => 2], $route($e, 46));
+
+            // OFF-4: Edit route on 25 Nov (segment 46), "from today": a new name and Saturday added
+            $r = T::ok($e->call('PATCH', '/api/routes/46', ['rev' => 2, 'name' => 'North 1 renamed', 'days' => [1, 3, 5, 6]], 'mei'));
+            T::subset(['id' => 46, 'name' => 'North 1 renamed', 'days' => [1, 3, 5, 6], 'start' => '2026-11-20', 'rev' => 3], $r);
+            T::subset(['name' => 'North 1 renamed', 'days' => [1, 3, 5, 6], 'end' => '2026-11-12', 'rev' => 6], $route($e, 5));
+            T::subset(['name' => 'North 1 renamed', 'days' => [1, 3, 5, 6], 'stops' => [['customer_id' => 40]], 'rev' => 3], $route($e, 45), 'stops stay per segment');
+            T::subset(['name' => 'North 1 renamed', 'days' => [1, 3, 6], 'start' => '2026-11-30', 'rev' => 2], $route($e, 47),
+                'the planned Mon/Wed schedule is kept and gains Saturday');
+            T::subset(['name' => 'North 1', 'days' => [1, 3, 5], 'rev' => 1], $route($e, 3), 'an ended segment is history');
+            T::eq('North 1 renamed', $occ($e, '2026-11-13', 45)['name']);
+            T::subset(['name' => 'North 1 renamed', 'status' => 'scheduled'], $occ($e, '2026-11-14', 45), 'Sat 14 Nov now runs');
+            T::subset(['name' => 'North 1 renamed', 'status' => 'scheduled'], $occ($e, '2026-11-21', 46));
+            T::subset(['name' => 'North 1 renamed', 'status' => 'scheduled'], $occ($e, '2026-12-05', 47));
+            T::eq(null, $occ($e, '2026-12-04', 47), 'Fri is still not in the planned schedule');
+            // an edit of the ended segment stays on it
+            T::ok($e->call('PATCH', '/api/routes/3', ['rev' => 1, 'note' => 'archive'], 'mei'));
+            T::eq('', $route($e, 46)['note']);
+            // a code change is checked on every segment, all or nothing: A1 (12 Nov) overlaps segment 5 only
+            T::subset(['details' => ['route' => ['id' => 41]]], T::err($e->call('PATCH', '/api/routes/45', ['rev' => 3, 'code' => 'A1'], 'mei'), 422, 'CODE_IN_USE'));
+            T::eq(['N1', 'N1', 'N1', 'N1'], [$route($e, 5)['code'], $route($e, 45)['code'], $route($e, 46)['code'], $route($e, 47)['code']]);
+            T::ok($e->call('PATCH', '/api/routes/45', ['rev' => 3, 'code' => 'nx', 'color' => 7], 'mei'));
+            T::eq(['NX', 'NX', 'NX', 'NX', 'N1'], [$route($e, 5)['code'], $route($e, 45)['code'], $route($e, 46)['code'], $route($e, 47)['code'], $route($e, 3)['code']]);
+            T::eq([7, 7, 7], [$route($e, 5)['color'], $route($e, 46)['color'], $route($e, 47)['color']]);
+
+            // OFF-3: Delete route on 10 Dec (segment 47) deletes every segment that runs today or later, with their overrides
+            T::ok($e->call('PUT', '/api/routes/46/dates/2026-11-23', ['rev' => 4, 'scope' => 'this', 'note' => 'small truck'], 'mei'));
+            T::eq(204, $e->call('DELETE', '/api/routes/47?rev=3', null, 'mei')['status']);
+            T::eq([3, 7, 8, 41, 42, 44], array_column($e->doc('plan')['routes'], 'id'), 'the ended segment 3 stays');
+            T::eq([], $e->doc('plan')['route_overrides']);
+            foreach (['2026-11-11' => 5, '2026-11-13' => 45, '2026-11-23' => 46, '2026-12-02' => 47] as $d => $id) {
+                T::eq(null, $occ($e, $d, $id), "no N1 on $d");
+            }
+            // deleting an ended segment deletes only that segment
+            T::ok($e->call('POST', '/api/routes', ['type' => 'regular', 'code' => 'N1', 'name' => 'North 1 again', 'start' => '2026-11-16', 'days' => [1], 'stops' => []], 'mei'), 201);
+            T::eq(204, $e->call('DELETE', '/api/routes/3?rev=2', null, 'mei')['status']);
+            T::eq('North 1 again', $route($e, 48)['name']);
+        },
+        'R11/R13 (API-2): a one-off route dated before today is frozen: PATCH and DELETE return PAST_DATE_LOCKED' => function () use ($env, $route, $stops) {
+            $e = $env(['now' => '2026-11-13T03:30:00+08:00']); // op_date is still Thu 12 Nov: A1 (id 41, 12 Nov) can be edited
+            T::subset(['note' => 'night shift', 'rev' => 2], T::ok($e->call('PATCH', '/api/routes/41', ['rev' => 1, 'note' => 'night shift'], 'mei')));
+            $e->setNow('2026-11-13T04:00:00+08:00'); // 12 Nov has ended and is frozen
+            $err = T::err($e->call('PATCH', '/api/routes/41', ['rev' => 2, 'name' => 'changed after the day', 'stops' => $stops(40)], 'mei'), 422, 'PAST_DATE_LOCKED');
+            T::subset(['field' => 'date', 'details' => ['date' => '2026-11-12', 'today' => '2026-11-13']], $err);
+            T::err($e->call('PATCH', '/api/routes/41', ['rev' => 2, 'date' => '2026-11-16'], 'mei'), 422, 'PAST_DATE_LOCKED');
+            T::err($e->call('DELETE', '/api/routes/41?rev=2', null, 'mei'), 422, 'PAST_DATE_LOCKED');
+            T::subset(['name' => 'Adhoc 12 Nov', 'note' => 'night shift', 'rev' => 2, 'stops' => [['customer_id' => 12]]], $route($e, 41));
+            T::subset(['id' => 41, 'name' => 'Adhoc 12 Nov'], T::ok($e->call('GET', '/api/routes/41', null, 'mei')));
+            // one-offs dated today or later are still edited and deleted as before
+            T::ok($e->call('PATCH', '/api/routes/44', ['rev' => 1, 'name' => 'PH Sunday'], 'mei'));
+            T::eq(204, $e->call('DELETE', '/api/routes/44?rev=2', null, 'mei')['status']);
+        },
         'GET /api/routes (list) and /api/routes/{id}' => function () use ($env) {
             $e = $env();
             $list = T::ok($e->call('GET', '/api/routes', null, 'mei'));

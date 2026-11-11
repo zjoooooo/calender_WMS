@@ -92,6 +92,7 @@ const common = {
 
   'err.VALIDATION': '输入有误，请检查',
   'err.VALIDATION_field': '输入有误：{field}',
+  'err.required_field': '请填写{field}',
   'err.NOT_FOUND': '找不到这条记录（可能已被删除）',
   'err.UNAUTHORIZED': '请重新登录',
   'err.FORBIDDEN': '你的账号没有权限做这件事',

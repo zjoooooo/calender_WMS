@@ -4,11 +4,15 @@
 // ↑ ↓ or "move to #", stop notes, the occurrence note). The draft has an amber outline, keeps removed rows
 // struck through (with Undo), survives the 30 s refetch and is saved only by [Save]: a one-off saves
 // directly, a recurring route asks the scope (only this date / this date and following).
+// R20: the draft keeps the server version (rev, stops, note) it was started from. A clean draft follows
+// every refetch; an edited one keeps its base, says when someone else saved meanwhile, and its save sends
+// the base rev, so the server answers STALE_REVISION instead of silently dropping the other change. After
+// that answer the next [Save] replaces the other version on purpose (or [Discard] loads it).
 // Footer: run actions (assign, release, close out, re-plan) and a menu: skip / restore / reset, copy to
 // date, edit route / schedule, end from date, delete. Past dates are a read-only plan; results can still be
 // entered or corrected (click a customer).
 import { useEffect, useMemo, useState } from 'react';
-import { deleteRoute, patchRoute, putRouteDate, resetRouteDate, type RouteOccurrence, type Stop } from '../api';
+import { deleteRoute, isApiError, patchRoute, putRouteDate, resetRouteDate, type RouteOccurrence, type Stop } from '../api';
 import { fmtDay, fmtWeight, useI18n } from '../i18n';
 import { useSession } from '../session';
 import { TypeTag } from '../ui/Chip';
@@ -41,17 +45,25 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
   const routable = types.filter((x) => x.routable && x.active).map((x) => x.code);
 
   // ---- draft (survives refetches; re-synced from the server only while it is clean) ----
+  // baseStops / baseNote: the server's current version; `base`: the version the draft was started from.
   const baseStops: Stop[] = useMemo(() => occ.stops.map((s) => ({ customer_id: s.customer_id, note: s.note ?? '' })), [occ.stops]);
   const baseNote = (occ.recurring ? occ.occurrence_note : occ.route_note) ?? (occ.recurring ? '' : occ.note);
   const [draft, setDraft] = useState(() => draftFrom(baseStops, baseNote));
-  const sig = JSON.stringify([baseStops, baseNote]);
+  const [base, setBase] = useState(() => ({ rev: occ.rev, stops: baseStops, note: baseNote }));
+  const sig = JSON.stringify([baseStops, baseNote, occ.rev]);
   const [baseSig, setBaseSig] = useState(sig);
-  const dirty = isDirty(draft, { stops: baseStops, note: baseNote });
+  const dirty = isDirty(draft, base);
+  const reload = () => {
+    setDraft(draftFrom(baseStops, baseNote));
+    setBase({ rev: occ.rev, stops: baseStops, note: baseNote });
+  };
   useEffect(() => {
     if (sig === baseSig) return;
     setBaseSig(sig);
-    if (!dirty || (sameStops(draft.stops, baseStops) && draft.note === baseNote)) setDraft(draftFrom(baseStops, baseNote));
+    if (!dirty || (sameStops(draft.stops, baseStops) && draft.note === baseNote)) reload();
   }, [sig]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Someone else saved this date while the draft was being edited (R20).
+  const changedMeanwhile = dirty && (base.rev !== occ.rev || !sameStops(base.stops, baseStops) || base.note !== baseNote);
 
   const [picking, setPicking] = useState(false);
   const [extraCust, setExtraCust] = useState<Record<number, PickedCustomer>>({});
@@ -132,24 +144,36 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
       extra: extra.length ? extra : undefined,
       locked: !!v?.outcome,
       done: !!v?.outcome,
-      isNew: !baseStops.some((b) => b.customer_id === s.customer_id),
+      isNew: !base.stops.some((b) => b.customer_id === s.customer_id),
       onOpen: canResult ? () => openResult(s.customer_id) : undefined,
     };
   };
 
   // ---- writes ----
-  const stopsChanged = !sameStops(draft.stops, baseStops);
-  const noteChanged = draft.note !== baseNote;
+  // Only what this draft changed is sent, with the rev it is based on (R20).
+  const stopsChanged = !sameStops(draft.stops, base.stops);
+  const noteChanged = draft.note !== base.note;
   const save = (scope: Scope) =>
     w.run(
-      (rel) =>
-        putRouteDate(occ.route_id, occ.date, {
-          rev: occ.rev,
-          scope,
-          ...(stopsChanged ? { stops: draft.stops } : {}),
-          ...(noteChanged ? { note: draft.note } : {}),
-          ...(rel ? { release_run: true } : {}),
-        }),
+      async (rel) => {
+        try {
+          return await putRouteDate(occ.route_id, occ.date, {
+            rev: base.rev,
+            scope,
+            ...(stopsChanged ? { stops: draft.stops } : {}),
+            ...(noteChanged ? { note: draft.note } : {}),
+            ...(rel ? { release_run: true } : {}),
+          });
+        } catch (e) {
+          if (isApiError(e, 'STALE_REVISION')) {
+            // Shown and refetched: the draft stays, and the next [Save] replaces the other version on purpose.
+            const current = Number((e.details as { current?: unknown } | null)?.current);
+            setBase((b) => ({ ...b, rev: Number.isFinite(current) && current > 0 ? current : occ.rev }));
+            setScopeOpen(false);
+          }
+          throw e;
+        }
+      },
       (r) => {
         for (const x of r.warnings) toast(t(`warn.${x.code}`), 'warn');
         toast(scope === 'following' && occ.recurring ? t('rd.savedFollowing', { date: fmtDay(occ.date, lang) }) : t('rd.savedThis', { date: fmtDay(occ.date, lang) }));
@@ -226,6 +250,9 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
   };
 
   const diff = draftDiff(baseStops, draft);
+  const nameOf = (id: number) => custOf(id)?.name ?? `#${id}`;
+  const theyAdded = baseStops.filter((s) => !base.stops.some((b) => b.customer_id === s.customer_id)).map((s) => nameOf(s.customer_id));
+  const theyRemoved = base.stops.filter((b) => !baseStops.some((s) => s.customer_id === b.customer_id)).map((s) => nameOf(s.customer_id));
   const offPlan = occ.off_plan ?? [];
   return (
     <>
@@ -273,7 +300,7 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
                 <button type="button" className="btn primary" disabled={w.busy} onClick={onSave}>
                   {t('common.save')}
                 </button>
-                <button type="button" className="btn" onClick={() => setDraft(draftFrom(baseStops, baseNote))}>
+                <button type="button" className="btn" onClick={reload}>
                   {t('common.discard')}
                 </button>
               </div>
@@ -297,6 +324,13 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
           )
         }
       >
+        {changedMeanwhile && (
+          <div className="banner warn" role="status" data-testid="changed-meanwhile">
+            <div>{t('rd.changedMeanwhile')}</div>
+            {theyAdded.length > 0 && <div className="small">{t('rd.theyAdded', { names: theyAdded.join(', ') })}</div>}
+            {theyRemoved.length > 0 && <div className="small">{t('rd.theyRemoved', { names: theyRemoved.join(', ') })}</div>}
+          </div>
+        )}
         <div className={dirty ? 'stoplist dirty' : 'stoplist'} tabIndex={-1} data-autofocus aria-label={t('rd.stops')}>
           <StopList
             stops={draft.stops}

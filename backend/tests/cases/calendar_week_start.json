@@ -1,0 +1,95 @@
+[
+  {
+    "name": "week_start=sun: the week view runs Sunday to Saturday, prev/next one week apart",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "steps": [
+      { "call": { "method": "GET", "path": "/api/calendar?view=week&anchor=2026-11-11&week_start=sun", "as": "mei" },
+        "expect": { "status": 200, "data_subset": {
+          "view": "week", "week_start": "sun", "from": "2026-11-08", "to": "2026-11-14", "today": "2026-11-11",
+          "prev_anchor": "2026-11-01", "next_anchor": "2026-11-15",
+          "days": [
+            { "date": "2026-11-08", "dow": 7, "class": "rest", "past": true },
+            { "date": "2026-11-09", "dow": 1, "class": "rest", "holiday": "Deepavali (observed)" },
+            { "date": "2026-11-10", "dow": 2 },
+            { "date": "2026-11-11", "dow": 3, "past": false, "can_create": ["regular", "adhoc", "task"] },
+            { "date": "2026-11-12", "dow": 4 },
+            { "date": "2026-11-13", "dow": 5 },
+            { "date": "2026-11-14", "dow": 6, "class": "work" }
+          ] } } },
+      { "call": { "method": "GET", "path": "/api/calendar?view=week&anchor=2026-11-15&week_start=sun", "as": "mei" },
+        "expect": { "status": 200, "data_subset": { "from": "2026-11-15", "to": "2026-11-21", "prev_anchor": "2026-11-08", "next_anchor": "2026-11-22" } } },
+      { "call": { "method": "GET", "path": "/api/calendar?view=week&anchor=2026-11-14&week_start=sun", "as": "mei" },
+        "expect": { "status": 200, "data_subset": { "from": "2026-11-08", "to": "2026-11-14" } } },
+      { "call": { "method": "GET", "path": "/api/calendar?view=week&anchor=2027-01-01&week_start=sun", "as": "mei" },
+        "expect": { "status": 200, "data_subset": { "from": "2026-12-27", "to": "2027-01-02", "prev_anchor": "2026-12-20", "next_anchor": "2027-01-03", "days": { "$len": 7 } } } },
+      { "call": { "method": "GET", "path": "/api/calendar?view=week&week_start=sun", "as": "mei" },
+        "expect": { "status": 200, "data_subset": { "from": "2026-11-08" } } }
+    ]
+  },
+  {
+    "name": "week_start=mon (explicit or default) keeps the Monday-first ranges",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "steps": [
+      { "call": { "method": "GET", "path": "/api/calendar?view=week&anchor=2026-11-15&week_start=mon", "as": "mei" },
+        "expect": { "status": 200, "data_subset": { "week_start": "mon", "from": "2026-11-09", "to": "2026-11-15", "prev_anchor": "2026-11-02", "next_anchor": "2026-11-16" } } },
+      { "call": { "method": "GET", "path": "/api/calendar?view=week&anchor=2026-11-15", "as": "mei" },
+        "expect": { "status": 200, "data_subset": { "week_start": "mon", "from": "2026-11-09", "to": "2026-11-15" } } },
+      { "call": { "method": "GET", "path": "/api/calendar?view=month&anchor=2026-11-11", "as": "mei" },
+        "expect": { "status": 200, "data_subset": { "week_start": "mon", "from": "2026-10-26", "to": "2026-12-06", "days": { "$len": 42 } } } }
+    ]
+  },
+  {
+    "name": "week_start=sun month: a month whose 1st is a Sunday starts on the 1st (6 x 7 days)",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "steps": [
+      { "call": { "method": "GET", "path": "/api/calendar?view=month&anchor=2026-11-20&week_start=sun", "as": "mei" },
+        "expect": { "status": 200, "data_subset": {
+          "view": "month", "week_start": "sun", "from": "2026-11-01", "to": "2026-12-12",
+          "prev_anchor": "2026-10-01", "next_anchor": "2026-12-01", "days": { "$len": 42 } } } },
+      { "call": { "method": "GET", "path": "/api/calendar?view=month&anchor=2026-11-20&week_start=sun", "as": "mei" },
+        "expect": { "data_subset": { "days": { "$contains": [
+          { "date": "2026-11-01", "dow": 7, "in_month": true },
+          { "date": "2026-11-30", "dow": 1, "in_month": true },
+          { "date": "2026-12-01", "in_month": false },
+          { "date": "2026-12-12", "dow": 6, "in_month": false } ] } } } },
+      { "call": { "method": "GET", "path": "/api/calendar?view=month&anchor=2026-11-20&week_start=sun", "as": "mei" },
+        "expect": { "data_subset": { "days": { "$not_contains": [ { "date": "2026-10-31" } ] } } } }
+    ]
+  },
+  {
+    "name": "week_start=sun month: a month whose 1st is a Saturday starts on the Sunday before",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "steps": [
+      { "call": { "method": "GET", "path": "/api/calendar?view=month&anchor=2027-05-01&week_start=sun", "as": "mei" },
+        "expect": { "status": 200, "data_subset": {
+          "from": "2027-04-25", "to": "2027-06-05", "prev_anchor": "2027-04-01", "next_anchor": "2027-06-01",
+          "days": { "$len": 42 } } } },
+      { "call": { "method": "GET", "path": "/api/calendar?view=month&anchor=2027-05-31&week_start=sun", "as": "mei" },
+        "expect": { "data_subset": { "days": { "$contains": [
+          { "date": "2027-04-25", "dow": 7, "in_month": false },
+          { "date": "2027-04-30", "dow": 5, "in_month": false },
+          { "date": "2027-05-01", "dow": 6, "in_month": true },
+          { "date": "2027-05-31", "dow": 1, "in_month": true },
+          { "date": "2027-06-05", "in_month": false } ] } } } },
+      { "call": { "method": "GET", "path": "/api/calendar?view=month&anchor=2026-08-15&week_start=sun", "as": "mei" },
+        "expect": { "status": 200, "data_subset": { "from": "2026-07-26", "to": "2026-09-05", "prev_anchor": "2026-07-01", "next_anchor": "2026-09-01" } } },
+      { "call": { "method": "GET", "path": "/api/calendar?view=month&anchor=2027-01-01&week_start=sun", "as": "mei" },
+        "expect": { "status": 200, "data_subset": { "from": "2026-12-27", "to": "2027-02-06", "prev_anchor": "2026-12-01", "next_anchor": "2027-02-01" } } }
+    ]
+  },
+  {
+    "name": "week_start must be mon or sun",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "steps": [
+      { "call": { "method": "GET", "path": "/api/calendar?view=week&week_start=tue", "as": "mei" }, "expect": { "status": 422, "code": "VALIDATION" } },
+      { "call": { "method": "GET", "path": "/api/calendar?view=month&week_start=SUN", "as": "mei" }, "expect": { "status": 422, "code": "VALIDATION" } },
+      { "call": { "method": "GET", "path": "/api/calendar?view=month&week_start=", "as": "mei" }, "expect": { "status": 422, "code": "VALIDATION" } },
+      { "call": { "method": "GET", "path": "/api/calendar?view=month&week_start=sun", "as": "ali" }, "expect": { "status": 403, "code": "FORBIDDEN" } }
+    ]
+  }
+]
