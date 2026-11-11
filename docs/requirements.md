@@ -58,4 +58,7 @@
 - Today's date is shown in BLUE; public-holiday dates are shown in RED.
 ## Round 6 (after the split-route fixes)
 - Split routes, later planned changes: the user chose option A. When an edit applies from today or from a date D, a later part of the route that already has its own planned change (e.g. "Tue/Thu from 21 Dec", or customers added or removed from a later date) KEEPS it; only what the clerk changed is carried into it. The screen must SAY SO before saving, and name what is kept.
-- Deployment: run it with GitHub Actions. Every push runs the tests on GitHub; a push to main that passes the tests deploys to the Linux VPS (section 11.4 of Project.md) over SSH, using deploy/update.sh. The server, domain and SSH secrets are still to be provided by the user.
+- Deployment with GitHub Actions. Every push runs the tests on GitHub.
+- Then the user narrowed it: "deploy only the frontend, the calendar part" and "no login, but give me a demo of the calendar's routes".
+  - So the deploy is a read-only DEMO of the office calendar on GitHub Pages: demo routes, no login, no backend on GitHub. Month and week views, collapse/expand, clicking a route shows it; changes are not possible in the demo.
+  - No automatic deploy to a server for now. The production design of section 11.4 stays for later.
