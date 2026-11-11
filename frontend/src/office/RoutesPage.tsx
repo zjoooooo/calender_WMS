@@ -2,6 +2,10 @@
 // status) with a filter that shows ended routes; the template editor (the same StopList as the route drawer:
 // drag and drop, ↑ ↓, move to #); actions [Edit route…], [Change schedule from date…], [End], [Delete].
 // A template save applies from today (PATCH stops) or from a later date D (change-schedule with stops, R14).
+// A split route (R12 / R14) has one record per part. Its rows stay together, each marked "part k of n";
+// edit, end and delete act on the whole route (the delete dialog names every part it removes, an end goes
+// to the part that runs on that date). Each part has its own customer list: the template editor's note
+// names the other parts' dates and says whether a change from today reaches them (SPLIT-UI-08).
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -27,6 +31,7 @@ import { addDays } from './calendarModel';
 import { EndDialog } from './CopyDialog';
 import { CustomerPicker, type PickedCustomer } from './CustomerPicker';
 import { MenuButton, routeRuleText, useGuardedWrite } from './officeShared';
+import { chainPeriod, endTarget, liveChain, routeChain, segmentLive, segmentOn, segmentPeriods, useAllRoutes } from './routeChain';
 import { RouteForm } from './RouteForm';
 import { StopList } from './StopList';
 import { addStop, draftFrom, isDirty, removeStop, restoreStop, setStopNote } from './stopDraft';
@@ -55,6 +60,23 @@ export default function RoutesPage() {
   }, [q.data, filter]);
 
   const status = (r: RouteListItem) => (r.today_status ? t(`status.${r.today_status}`) : '–');
+  // Parts of split routes among the listed rows: id -> {k, n, split dates}.
+  const parts = useMemo(() => {
+    const m = new Map<number, { k: number; n: number; dates: string[] }>();
+    for (const r of q.data ?? []) {
+      if (m.has(r.id)) continue;
+      const c = routeChain(q.data ?? [], r.id);
+      if (c.length < 2) continue;
+      c.forEach((x, i) => m.set(x.id, { k: i + 1, n: c.length, dates: c.slice(1).map((y) => y.start ?? '') }));
+    }
+    return m;
+  }, [q.data]);
+  // A part of a split route shows the route's next date (its own part may have none left).
+  const nextOf = (r: RouteListItem) => (r.route_next_date !== undefined && parts.has(r.id) ? r.route_next_date : r.next_date);
+  const endedPart = (r: RouteListItem) => !!r.ended && parts.has(r.id) && routeChain(q.data ?? [], r.id).some((x) => segmentLive(x, today));
+  const fmtShort = (d: string) => fmtDay(d, lang, { weekday: false });
+  const livePeriods = (id: number) => liveChain(q.data ?? [], id, today);
+  const delParts = dlg?.kind === 'delete' ? livePeriods(dlg.r.id) : [];
   return (
     <>
       <div className="page-head">
@@ -95,7 +117,12 @@ export default function RoutesPage() {
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.id} className={r.ended ? 'dim clickable' : 'clickable'} onClick={() => setDlg({ kind: 'template', id: r.id })}>
+                <tr
+                  key={r.id}
+                  className={[r.ended ? 'dim' : '', 'clickable', (parts.get(r.id)?.k ?? 1) > 1 ? 'chain-cont' : ''].filter(Boolean).join(' ')}
+                  data-code={r.code}
+                  onClick={() => setDlg({ kind: 'template', id: r.id })}
+                >
                   <td>
                     <span className="rcode code" style={rcStyle(r.color)}>
                       {r.type === 'adhoc' ? '⚡' : ''}
@@ -109,9 +136,21 @@ export default function RoutesPage() {
                   <td className="small">{routeRuleText({ ...r, recurring: r.recurring ?? !r.date }, t, lang).split(' · ').slice(1).join(' · ')}</td>
                   <td className="small nowrap">
                     {r.date ? fmtDay(r.date, lang) : `${fmtDay(r.start ?? '', lang, { weekday: false })} – ${r.end ? fmtDay(r.end, lang, { weekday: false }) : '…'}`}
+                    {parts.has(r.id) && (
+                      <>
+                        {' '}
+                        <span
+                          className="tag"
+                          data-testid="part"
+                          title={t('routes.partTitle', { code: r.code, date: parts.get(r.id)!.dates.map((d) => fmtDay(d, lang)).join(', ') })}
+                        >
+                          {t('routes.part', { k: parts.get(r.id)!.k, n: parts.get(r.id)!.n })}
+                        </span>
+                      </>
+                    )}
                   </td>
                   <td className="num">{r.stop_count}</td>
-                  <td className="small nowrap">{r.next_date ? fmtDay(r.next_date, lang) : '–'}</td>
+                  <td className="small nowrap">{nextOf(r) ? fmtDay(nextOf(r)!, lang) : '–'}</td>
                   <td className="small">{status(r)}</td>
                   <td className="actions" onClick={(e) => e.stopPropagation()}>
                     <MenuButton
@@ -119,7 +158,8 @@ export default function RoutesPage() {
                       label="⋯"
                       items={[
                         { label: t('routes.editStops'), onClick: () => setDlg({ kind: 'template', id: r.id }) },
-                        { label: r.date ? t('rd.editOneOff') : t('rd.editRoute'), onClick: () => setDlg({ kind: 'edit', id: r.id }) },
+                        // An ended part of a route that still runs is history: the route is edited from a current part.
+                        ...(endedPart(r) ? [] : [{ label: r.date ? t('rd.editOneOff') : t('rd.editRoute'), onClick: () => setDlg({ kind: 'edit', id: r.id }) }]),
                         ...(r.date || r.ended ? [] : [{ label: t('routes.changeSchedule'), onClick: () => setDlg({ kind: 'edit', id: r.id, fromD: true }) }]),
                         ...(r.date || r.ended ? [] : [{ label: t('rd.end'), onClick: () => setDlg({ kind: 'end', r }) }]),
                         { label: t('common.delete'), onClick: () => setDlg({ kind: 'delete', r }), danger: true },
@@ -158,15 +198,16 @@ export default function RoutesPage() {
           min={today}
           busy={w.busy}
           error={w.error}
-          onSubmit={(from) =>
+          onSubmit={(from) => {
+            const target = endTarget(livePeriods(dlg.r.id), from) ?? dlg.r;
             void w.run(
-              (rel) => patchRoute(dlg.r.id, { rev: dlg.r.rev, end: addDays(from, -1), ...(rel ? { release_run: true } : {}) }),
+              (rel) => patchRoute(target.id, { rev: target.rev, end: addDays(from, -1), ...(rel ? { release_run: true } : {}) }),
               () => {
                 toast(t('rd.ended', { date: fmtDay(from, lang) }));
                 setDlg(null);
               },
-            )
-          }
+            );
+          }}
           onClose={() => setDlg(null)}
         />
       )}
@@ -189,7 +230,15 @@ export default function RoutesPage() {
           }
           onClose={() => setDlg(null)}
         >
-          <p style={{ margin: 0 }}>{t('rd.deleteRouteText')}</p>
+          <p style={{ margin: 0 }} data-testid="delete-text">
+            {delParts.length > 1
+              ? t('rd.deleteSplitText', {
+                  code: dlg.r.code,
+                  n: delParts.length,
+                  periods: segmentPeriods(delParts, fmtShort, (d) => t('rule.from', { date: d })).join(', '),
+                })
+              : t('rd.deleteRouteText')}
+          </p>
         </ConfirmDialog>
       )}
       {dlg?.kind === 'template' && <TemplateEditor id={dlg.id} onClose={() => setDlg(null)} />}
@@ -206,6 +255,7 @@ function TemplateEditor({ id, onClose }: { id: number; onClose: () => void }) {
   const w = useGuardedWrite();
   const today = meta?.today ?? '';
   const routeQ = useQuery({ queryKey: ['route', id], queryFn: () => getRoute(id) });
+  const allQ = useAllRoutes();
   const custQ = useQuery({ queryKey: ['customers', { archived: 'all' }], queryFn: () => listCustomers({ archived: 'all' }), staleTime: 60_000 });
   const route = routeQ.data;
   const base: Stop[] = useMemo(() => route?.stops ?? [], [route]);
@@ -229,13 +279,22 @@ function TemplateEditor({ id, onClose }: { id: number; onClose: () => void }) {
   const ended = !!route && ((route.end && route.end < today) || (route.date && route.date < today));
   const editable = !!route && !ended;
   const dirty = !!route && isDirty(draft, { stops: base, note: '' });
+  // A split route: the whole route's period for the header; the other live parts keep their own list.
+  const chain = route && route.recurring && allQ.data ? routeChain(allQ.data.map((x) => (x.id === route.id ? { ...x, ...route } : x)), route.id) : [];
+  const live = route && route.recurring && allQ.data ? liveChain(allQ.data.map((x) => (x.id === route.id ? { ...x, ...route } : x)), route.id, today) : [];
+  const others = live.filter((x) => x.id !== route?.id);
+  const fmtShort = (d: string) => fmtDay(d, lang, { weekday: false });
+  const fromWord = (d: string) => t('rule.from', { date: d });
 
   const save = () => {
     if (!route) return;
     if (route.recurring && apply === 'from') {
       if (!fromDate) return w.setError(t('err.required_field', { field: t('rf.fromDate') }));
+      // A split route: the schedule change goes to the part that runs on D.
+      const seg = segmentOn(live, fromDate);
+      const target = seg && seg.id !== route.id ? { id: seg.id, rev: seg.rev } : { id: route.id, rev: route.rev };
       return w.run(
-        (rel) => changeRouteSchedule(route.id, { rev: route.rev, from: fromDate, stops: draft.stops, ...(rel ? { release_run: true } : {}) }),
+        (rel) => changeRouteSchedule(target.id, { rev: target.rev, from: fromDate, stops: draft.stops, ...(rel ? { release_run: true } : {}) }),
         (r) => {
           for (const x of r.warnings) toast(t(`warn.${x.code}`), 'warn');
           toast(t('rd.savedFollowing', { date: fmtDay(fromDate, lang) }));
@@ -273,8 +332,23 @@ function TemplateEditor({ id, onClose }: { id: number; onClose: () => void }) {
       header={
         route && (
           <>
-            <div className="rd-rule">{routeRuleText({ ...route, recurring: !!route.recurring }, t, lang, true)}</div>
-            <div className="status-box">{ended ? t('routes.endedNote') : route.recurring ? t('routes.templateNote') : t('routes.oneOffNote')}</div>
+            <div className="rd-rule">{routeRuleText({ ...route, recurring: !!route.recurring, ...(chain.length ? chainPeriod(chain) : {}) }, t, lang, true)}</div>
+            <div className="status-box" data-testid="template-note">
+              {ended
+                ? t('routes.endedNote')
+                : !route.recurring
+                  ? t('routes.oneOffNote')
+                  : !others.length
+                    ? t('routes.templateNote')
+                    : typeof route.series === 'number'
+                      ? // A server that links the parts (series) carries a template change into every live part.
+                        t('routes.chainNote', { code: route.code, periods: segmentPeriods(live, fmtShort, fromWord).join(', ') })
+                      : t('routes.segmentNote', {
+                          code: route.code,
+                          period: segmentPeriods([route], fmtShort, fromWord)[0],
+                          others: segmentPeriods(others, fmtShort, fromWord).join(', '),
+                        })}
+            </div>
           </>
         )
       }

@@ -11,7 +11,7 @@ final class Schedule
 {
     /**
      * Lookup tables built once per plan (pass the result to the other functions when calling them in a loop).
-     * @return array{holidays:array<string,string>,customers:array<int,array>,types:array<string,array>,route_ov:array<string,array>,task_ov:array<string,array>,type_order:array<string,int>}
+     * @return array{holidays:array<string,string>,route_period:array<int,array{0:string,1:?string}>,customers:array<int,array>,types:array<string,array>,route_ov:array<string,array>,task_ov:array<string,array>,type_order:array<string,int>}
      */
     public static function index(array $plan): array
     {
@@ -28,8 +28,18 @@ final class Schedule
             $taskOv[$o['task_id'] . '@' . $o['date']] = $o;
         }
         $types = Usage::typesByCode($plan);
+        // R12/R14: the real period of a split route (first record's start, last record's end), per route id
+        $series = Usage::seriesMap($plan);
+        $periods = Usage::seriesPeriods($plan, $series);
+        $routePeriod = [];
+        foreach ($series as $id => $sid) {
+            if (isset($periods[$sid])) {
+                $routePeriod[$id] = $periods[$sid];
+            }
+        }
         return [
             'holidays' => Dates::holidayMap($plan),
+            'route_period' => $routePeriod,
             'customers' => $customers,
             'types' => $types,
             'type_order' => array_flip(array_keys($types)),
@@ -166,6 +176,9 @@ final class Schedule
             'ph' => (!$oneOff && $route['type'] === 'special') ? !empty($route['ph']) : null,
             'start' => $oneOff ? null : ($route['start'] ?? null),
             'end' => $oneOff ? null : ($route['end'] ?? null),
+            // start / end are this record's; route_start / route_end the route's real period when it was split (R14)
+            'route_start' => $oneOff ? null : ($ix['route_period'][(int) $route['id']][0] ?? $route['start'] ?? null),
+            'route_end' => $oneOff ? null : (isset($ix['route_period'][(int) $route['id']]) ? $ix['route_period'][(int) $route['id']][1] : ($route['end'] ?? null)),
             'status' => $status,
             'edited' => $ov !== null,
             // §5.2: the occurrence note wins when set; route_note / occurrence_note are given separately too.

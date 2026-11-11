@@ -571,6 +571,11 @@ async function main() {
     await pageA.waitForURL(/\/driver$/, { timeout: 40000 });
     const tookBack = await pageA.locator('.toast').innerText().catch(() => '');
     check(/Office took back/.test(tookBack), `office Release while on a stop form: Ali's phone returns to Today ("Office took back ${RB.code}")`, tookBack);
+    // K5 / SPLIT-UI-09: the card says the office took it back (not just "Needs driver").
+    const rbStatus = pageA.locator(`.jcard[data-job="${RB.job}"] [data-testid=status]`);
+    await rbStatus.waitFor({ timeout: 10000 });
+    const rbText = await rbStatus.innerText();
+    check(/Needs driver .*taken back by office/.test(rbText), `the ${RB.code} card reads "⇄ Needs driver n/m · taken back by office"`, rbText);
 
     // ---- 8. zh switch keeps working on the phone ------------------------------------------------------
     await pageB.goto(BASE + '/driver');

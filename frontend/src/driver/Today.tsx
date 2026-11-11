@@ -323,7 +323,7 @@ function RouteCard({ card, myId, isNew, switching }: { card: DriverRouteCard; my
         </span>
         {card.note && <span className="jmeta">{card.note}</span>}
         <span className={`jst ${card.status}`} data-testid="status">
-          {statusText(t, card.status, { mine, driver: (driverName(card.driver) ?? '') || null, resolved, total: resolved + card.pending, leftBy: card.left_by, kind: 'route' })}
+          {statusText(t, card.status, { mine, driver: (driverName(card.driver) ?? '') || null, resolved, total: resolved + card.pending, leftBy: card.left_by, byOffice: !!card.released_by_office, kind: 'route' })}
         </span>
       </span>
     </button>

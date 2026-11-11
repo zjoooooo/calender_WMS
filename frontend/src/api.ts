@@ -396,6 +396,8 @@ export interface RunSummary {
   vehicle_no: string | null;
   holders: string[];
   left_by: string | null;
+  /** Additive: the office took the job back (release, reassign, deactivation); left_by is then null. */
+  released_by_office?: boolean;
   collected: number;
   missed: number;
   pending: number;
@@ -427,6 +429,9 @@ export interface RouteOccurrence {
   ph: boolean | null;
   start?: IsoDate | null;
   end?: IsoDate | null;
+  /** Additive: the real period of a split route (R12 / R14); start / end are this record's. */
+  route_start?: IsoDate | null;
+  route_end?: IsoDate | null;
   status: OccurrenceStatus;
   edited: boolean;
   frozen: boolean;
@@ -530,6 +535,10 @@ export interface Route {
   date?: IsoDate | null;
   copied_from?: { route_id: number; date: IsoDate } | null;
   stops: Stop[];
+  /** Additive: the split route (R12 / R14) this record belongs to (its first record's id) and its real period. */
+  series?: number | null;
+  route_start?: IsoDate | null;
+  route_end?: IsoDate | null;
 }
 
 export interface RouteOverride {
@@ -566,6 +575,11 @@ export interface RouteListItem {
   rev: number;
   /** Additive: the route no longer reaches today (listed only with ended=1). */
   ended?: boolean;
+  /** Additive: the split route (R12 / R14) this record belongs to, its real period and its next date. */
+  series?: number | null;
+  route_start?: IsoDate | null;
+  route_end?: IsoDate | null;
+  route_next_date?: IsoDate | null;
 }
 
 export type RouteCreate =
@@ -1059,6 +1073,8 @@ export interface DriverRouteCard {
   status: RunStatus;
   driver: { id: number; name: string } | string | null;
   left_by: string | null;
+  /** Additive: the office took the job back (K5). */
+  released_by_office?: boolean;
   collected: number;
   missed: number;
   pending: number;

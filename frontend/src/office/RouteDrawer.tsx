@@ -11,6 +11,9 @@
 // Footer: run actions (assign, release, close out, re-plan) and a menu: skip / restore / reset, copy to
 // date, edit route / schedule, end from date, delete. Past dates are a read-only plan; results can still be
 // entered or corrected (click a customer).
+// A split route (R12 / R14) is one route here: the header shows the whole route's period, the delete dialog
+// names every part it removes, and "End route from D" goes to the part that runs on D (routeChain).
+// The End and Delete dialogs show their own error; it is cleared when a dialog opens or closes.
 import { useEffect, useMemo, useState } from 'react';
 import { deleteRoute, isApiError, patchRoute, putRouteDate, resetRouteDate, type RouteOccurrence, type Stop } from '../api';
 import { fmtDay, fmtWeight, useI18n } from '../i18n';
@@ -26,6 +29,7 @@ import { CustomerPicker, type PickedCustomer } from './CustomerPicker';
 import { MenuButton, routeRuleText, runDetailText, useGuardedWrite, workDone, type MenuItem } from './officeShared';
 import { ResultDialog, type ResultTarget } from './ResultDialog';
 import { RouteForm } from './RouteForm';
+import { chainPeriod, endTarget, liveChain, routeChain, segmentPeriods, useAllRoutes } from './routeChain';
 import { RunPanel } from './RunActions';
 import { ScopeDialog, type Scope } from './ScopeDialog';
 import { StopList, type StopRowView } from './StopList';
@@ -68,7 +72,11 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
   const [picking, setPicking] = useState(false);
   const [extraCust, setExtraCust] = useState<Record<number, PickedCustomer>>({});
   const [scopeOpen, setScopeOpen] = useState(false);
-  const [dlg, setDlg] = useState<'edit' | 'end' | 'delete' | null>(null);
+  const [dlg, setDlgState] = useState<'edit' | 'end' | 'delete' | null>(null);
+  const setDlg = (d: 'edit' | 'end' | 'delete' | null) => {
+    w.setError(null);
+    setDlgState(d);
+  };
   const [result, setResult] = useState<ResultTarget | null>(null);
 
   const dateOcc = useMemo(() => data.routes.filter((o) => o.date === occ.date), [data.routes, occ.date]);
@@ -80,6 +88,16 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
   const job = jobOf(occ);
   const holderId = occ.run?.driver?.id ?? null;
   const typeAbbr = (code: string) => types.find((x) => x.code === code)?.abbr || code;
+  // The whole route when it is split (R12 / R14): its parts, and the ones an end or a delete reaches.
+  const allQ = useAllRoutes(occ.recurring && !occ.orphan);
+  const chain = useMemo(() => (occ.recurring && allQ.data ? routeChain(allQ.data, occ.route_id) : []), [allQ.data, occ.recurring, occ.route_id]);
+  const live = useMemo(() => (occ.recurring && allQ.data ? liveChain(allQ.data, occ.route_id, today) : []), [allQ.data, occ.recurring, occ.route_id, today]);
+  const period =
+    occ.route_start !== undefined && occ.route_end !== undefined
+      ? { start: occ.route_start, end: occ.route_end }
+      : chain.length
+        ? chainPeriod(chain)
+        : { start: occ.start ?? null, end: occ.end ?? null };
 
   const openResult = (cid: number) => {
     const c = custOf(cid);
@@ -191,14 +209,18 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
       () => toast(cancelled ? t('rd.skipped', { date: fmtDay(occ.date, lang) }) : t('rd.restored')),
     );
   const reset = () => w.run((rel) => resetRouteDate(occ.route_id, occ.date, occ.rev, rel), () => toast(t('rd.reset')));
-  const endFrom = (from: string) =>
-    w.run(
-      (rel) => patchRoute(occ.route_id, { rev: occ.rev, end: addDays(from, -1), ...(rel ? { release_run: true } : {}) }),
+  const endFrom = (from: string) => {
+    // The part that runs on D gets end = D − 1 (opened from a later part, D can be in an earlier one).
+    const seg = endTarget(live, from);
+    const target = seg && seg.id !== occ.route_id ? { id: seg.id, rev: seg.rev } : { id: occ.route_id, rev: occ.rev };
+    return w.run(
+      (rel) => patchRoute(target.id, { rev: target.rev, end: addDays(from, -1), ...(rel ? { release_run: true } : {}) }),
       () => {
         toast(t('rd.ended', { date: fmtDay(from, lang) }));
         setDlg(null);
       },
     );
+  };
   const remove = () =>
     w.run(
       (rel) => deleteRoute(occ.route_id, occ.rev, rel),
@@ -275,7 +297,7 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
         header={
           <>
             <div className="rd-rule">
-              {fmtDay(occ.date, lang)} · {routeRuleText(occ, t, lang, true)}
+              {fmtDay(occ.date, lang)} · {routeRuleText({ ...occ, ...period }, t, lang, true)}
               {occ.route_note && (occ.recurring || !editable) ? ` · ${occ.route_note}` : ''}
             </div>
             <div className="status-box" role="status">
@@ -307,7 +329,7 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
             </>
           ) : (
             <>
-              {w.error && (
+              {w.error && !dlg && (
                 <div className="form-error" role="alert">
                   {w.error}
                 </div>
@@ -430,7 +452,17 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
         onConfirm={() => void remove()}
         onClose={() => setDlg(null)}
       >
-        <p style={{ margin: 0 }}>{occ.recurring ? t('rd.deleteRouteText') : t('rd.deleteOneOffText')}</p>
+        <p style={{ margin: 0 }} data-testid="delete-text">
+          {!occ.recurring
+            ? t('rd.deleteOneOffText')
+            : live.length > 1
+              ? t('rd.deleteSplitText', {
+                  code: occ.code,
+                  n: live.length,
+                  periods: segmentPeriods(live, (d) => fmtDay(d, lang, { weekday: false }), (d) => t('rule.from', { date: d })).join(', '),
+                })
+              : t('rd.deleteRouteText')}
+        </p>
       </ConfirmDialog>
       {result && <ResultDialog target={result} onClose={() => setResult(null)} />}
       {w.dialog}

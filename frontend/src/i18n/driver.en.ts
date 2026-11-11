@@ -46,6 +46,7 @@ const driver: { [K in keyof typeof zh]: string } = {
   'driver.st.available': 'Available',
   'driver.st.open': 'Needs driver',
   'driver.st.leftBy': 'left by {name}',
+  'driver.st.byOffice': 'taken back by office',
   'driver.st.mine': 'Mine',
   'driver.st.taken': 'Taken',
   'driver.st.done': 'Done',

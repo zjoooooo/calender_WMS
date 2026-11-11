@@ -235,6 +235,214 @@ async function monthChecks(page, { today, tomorrow, workDay, ph }) {
   await page.setViewportSize({ width: 1440, height: 1000 });
 }
 
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** "20 Nov" (the office's short English date). */
+const short = (d) => `${Number(d.slice(8, 10))} ${MON[Number(d.slice(5, 7)) - 1]}`;
+async function poll(page, fn, ms = 6000) {
+  const end = Date.now() + ms;
+  let v;
+  while (Date.now() < end) {
+    v = await fn();
+    if (v) return v;
+    await page.waitForTimeout(100);
+  }
+  return v;
+}
+/** The first date >= from (up to 3 weeks) on which `code` is scheduled. */
+async function scheduledOn(code, from, before = null) {
+  let d = from;
+  for (let i = 0; i < 21; i++, d = addDays(d, 1)) {
+    if (before && d >= before) return null;
+    const o = (await occOn(d, code)).occ[0];
+    if (o && o.status === 'scheduled') return d;
+  }
+  return null;
+}
+
+/**
+ * A split route is one route in the office's forms and dialogs (K2, K3, K4, K5, SPLIT-UI-03..12). K1 is split
+ * by a schedule change; E1 (Bala, work done today) is released by the office and split too.
+ */
+async function splitRouteChecks(page, { today, consoleErrors }) {
+  console.log('split route: one route in the forms and dialogs');
+  const k1 = (await api('GET', '/routes')).find((r) => r.code === 'K1');
+  const split = await scheduledOn('K1', addDays(today, 8));
+  await api('POST', `/routes/${k1.id}/change-schedule`, { rev: k1.rev, from: split, days: k1.days });
+  const before = await scheduledOn('K1', addDays(today, 1), split);
+  const after = await scheduledOn('K1', addDays(split, 1));
+  const k1Segs = async () => (await api('GET', '/routes')).filter((r) => r.code === 'K1').sort((a, b) => a.start.localeCompare(b.start));
+  check((await k1Segs()).length === 2, `K1 split at ${split} (two route records)`);
+  const openK1 = async (date) => {
+    await page.goto(`${BASE}/?view=week&anchor=${date}`);
+    await page.locator(`.week .day[data-date="${date}"] .occ[data-code="K1"] .nm`).click();
+    const dr = page.locator('.drawer');
+    await dr.locator('.rd-rule').waitFor();
+    return dr;
+  };
+  const openForm = async (dr) => {
+    await dr.getByRole('button', { name: /Menu/ }).click();
+    await page.getByRole('menuitem', { name: 'Edit route / schedule…' }).click();
+    const rf = page.locator('.dialog', { hasText: 'Edit route K1' });
+    await rf.locator('form').waitFor();
+    return rf;
+  };
+  const formDates = (rf) => rf.locator('label.field input[type=date]').evaluateAll((els) => els.map((e) => e.value));
+
+  // K3 / SPLIT-UI-04: opened from the later part, the header and the form show the route's real start.
+  let dr = await openK1(after);
+  const rule = await poll(page, async () => {
+    const x = await dr.locator('.rd-rule').innerText();
+    return x.includes(`from ${short(k1.start)}`) ? x : null;
+  });
+  check(!!rule && !/until/.test(rule), `K3: the header of ${after} reads "from ${short(k1.start)}" (the route's start), no "until"`, rule || (await dr.locator('.rd-rule').innerText()));
+  let rf = await openForm(dr);
+  const [st, en] = await formDates(rf);
+  check(st === k1.start && en === '', `K3: Edit route / schedule shows Start ${k1.start} and no End (not the part's ${split})`, [st, en]);
+
+  // K4 / SPLIT-UI-11: another clerk renames K1 while this form is open; the form keeps only its own change.
+  await rf.locator('label.field', { hasText: 'Note' }).locator('textarea').fill('clerk 1 note');
+  const segs0 = await k1Segs();
+  await api('PATCH', `/routes/${segs0[0].id}`, { rev: segs0[0].rev, name: 'Kallang (clerk 2)' });
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  await rf.locator('.form-error').waitFor();
+  check(/Someone else changed this/.test(await rf.locator('.form-error').innerText()), 'K4: the first Save is refused (STALE_REVISION)');
+  const nameIn = rf.locator('label.field', { hasText: 'Name' }).locator('input');
+  const reloaded = await poll(page, async () => (await nameIn.inputValue()) === 'Kallang (clerk 2)');
+  check(reloaded, "K4: the untouched Name now shows the other clerk's value", await nameIn.inputValue());
+  const banner = rf.locator('[data-testid=changed-meanwhile]');
+  check((await banner.count()) === 1 && /Name/.test(await banner.innerText()), 'K4: a banner names what the other clerk changed', (await banner.count()) && (await banner.innerText()));
+  check((await rf.locator('label.field', { hasText: 'Note' }).locator('textarea').inputValue()) === 'clerk 1 note', 'K4: the own change (note) is kept');
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  await rf.waitFor({ state: 'detached' });
+  const segs1 = await k1Segs();
+  check(segs1.every((r) => r.name === 'Kallang (clerk 2)' && r.note === 'clerk 1 note'), "K4: the second Save keeps the other clerk's name on every part and adds the note", segs1.map((r) => [r.name, r.note]));
+  await page.keyboard.press('Escape');
+  await dr.waitFor({ state: 'detached' });
+
+  // SPLIT-UI-05: opened from the earlier part, no "until" (the split boundary is not the route's end); Save
+  // with nothing changed writes nothing.
+  dr = await openK1(before);
+  const rule2 = await poll(page, async () => {
+    const x = await dr.locator('.rd-rule').innerText();
+    return !/until/.test(x) ? x : null;
+  });
+  check(!!rule2, `SPLIT-UI-05: the header of ${before} has no "until ${short(addDays(split, -1))}"`, rule2 || (await dr.locator('.rd-rule').innerText()));
+  rf = await openForm(dr);
+  const [st2, en2] = await formDates(rf);
+  check(st2 === k1.start && en2 === '', 'SPLIT-UI-05: End is empty on the earlier part', [st2, en2]);
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  await rf.waitFor({ state: 'detached' });
+  const segs2 = await k1Segs();
+  check(JSON.stringify(segs2.map((r) => [r.id, r.rev, r.start, r.end])) === JSON.stringify(segs1.map((r) => [r.id, r.rev, r.start, r.end])), 'SPLIT-UI-05: saving it unchanged writes nothing', segs2.map((r) => [r.rev, r.start, r.end]));
+  await page.keyboard.press('Escape');
+  await dr.waitFor({ state: 'detached' });
+
+  // K2 / SPLIT-UI-03: the delete dialog names both parts.
+  dr = await openK1(after);
+  await dr.getByRole('button', { name: /Menu/ }).click();
+  await page.getByRole('menuitem', { name: 'Delete route…' }).click();
+  const del = page.locator('.dialog', { hasText: 'Delete route K1' });
+  const delText = await poll(page, async () => {
+    const x = await del.locator('[data-testid=delete-text]').innerText();
+    return /runs as 2 schedules/.test(x) ? x : null;
+  });
+  check(!!delText && delText.includes(`from ${short(split)}`) && delText.includes(short(k1.start)), 'K2: "Delete route K1?" says both schedules are deleted', delText);
+  await del.getByRole('button', { name: 'Cancel' }).click();
+
+  // SPLIT-UI-12: an End error shows only in the End dialog and is gone after Cancel.
+  const errsBefore = consoleErrors.length;
+  await dr.getByRole('button', { name: /Menu/ }).click();
+  await page.getByRole('menuitem', { name: 'End route from date…' }).click();
+  const endDlg = page.locator('.dialog', { hasText: 'End route K1' });
+  await endDlg.locator('input[type=date]').fill(addDays(today, -5));
+  await endDlg.getByRole('button', { name: 'End', exact: true }).click();
+  await endDlg.locator('.form-error').waitFor();
+  check((await dr.locator('.form-error').count()) === 0, 'SPLIT-UI-12: the End error shows in the dialog only, not also in the drawer footer');
+  await endDlg.getByRole('button', { name: 'Cancel' }).click();
+  await endDlg.waitFor({ state: 'detached' });
+  check((await dr.locator('.form-error').count()) === 0, 'SPLIT-UI-12: after Cancel the drawer footer has no stale error');
+  consoleErrors.splice(errsBefore, consoleErrors.length - errsBefore, ...consoleErrors.slice(errsBefore).filter((e) => !/status of 422/.test(e)));
+  await page.keyboard.press('Escape');
+  await dr.waitFor({ state: 'detached' });
+
+  // SPLIT-UI-06: opened on the split date itself, "From date" (pre-filled with it) changes the schedule from
+  // that date (no "must start after the route starts"): K1 stops running on Fridays from the split on.
+  dr = await openK1(split);
+  rf = await openForm(dr);
+  await rf.getByRole('button', { name: 'Fri', exact: true }).click();
+  await rf.locator('input[type=radio]').nth(1).check();
+  check((await rf.locator('input[aria-label="From date"]').inputValue()) === split, `SPLIT-UI-06: "From date" is pre-filled with ${split}`);
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  const saved06 = await rf.waitFor({ state: 'detached', timeout: 10000 }).then(() => true, () => false);
+  check(saved06, 'SPLIT-UI-06: the schedule change from the split date is saved', saved06 ? '' : await rf.locator('.form-error').innerText());
+  await page.keyboard.press('Escape');
+  await dr.waitFor({ state: 'detached' });
+  const dow = (d) => new Date(d + 'T00:00:00Z').getUTCDay();
+  let friAfter = split;
+  while (dow(friAfter) !== 5) friAfter = addDays(friAfter, 1);
+  let friBefore = addDays(today, 1);
+  while (dow(friBefore) !== 5) friBefore = addDays(friBefore, 1);
+  const kAfter = (await occOn(friAfter, 'K1')).occ.length;
+  const kBefore = (await occOn(friBefore, 'K1')).occ.length;
+  check(kAfter === 0 && (friBefore >= split || kBefore === 1), `SPLIT-UI-06: no K1 on Fri ${friAfter}; Fri ${friBefore} (before the split) keeps it`, { kAfter, kBefore });
+
+  // SPLIT-UI-08: the Routes page keeps the two K1 rows together as parts of one route.
+  await page.goto(BASE + '/routes');
+  await page.locator('table tbody tr').first().waitFor();
+  await page.locator('input.search').fill('K1');
+  const rows = page.locator('table tbody tr[data-code="K1"]');
+  const parts = await rows.locator('[data-testid=part]').allInnerTexts();
+  check(parts.join('|') === 'part 1 of 2|part 2 of 2', 'SPLIT-UI-08: the K1 rows read "part 1 of 2", "part 2 of 2"', parts);
+  // SPLIT-7: every part shows the route's next date (part 1 may have none of its own left).
+  const nextCells = await rows.locator('td:nth-child(7)').allInnerTexts();
+  const k1Next = (await api('GET', '/routes')).find((r) => r.code === 'K1').route_next_date;
+  check(nextCells.length === 2 && nextCells[0] === nextCells[1] && !!k1Next && nextCells[0] !== '–', "SPLIT-7: both K1 rows show the route's next date", { nextCells, k1Next });
+  await rows.first().click();
+  const tnote = page.locator('.drawer [data-testid=template-note]');
+  await tnote.waitFor();
+  const tn = await poll(page, async () => {
+    const x = await tnote.innerText();
+    return x.includes(`from ${short(split)}`) ? x : null;
+  });
+  check(!!tn, 'SPLIT-UI-08: the customer-list editor names the other part\'s dates', tn || (await tnote.innerText()));
+  await page.keyboard.press('Escape');
+  await rows.nth(1).locator('td.actions button').click();
+  await page.getByRole('menuitem', { name: 'Delete' }).click();
+  const del2 = page.locator('.dialog', { hasText: 'Delete route K1' });
+  check(/runs as 2 schedules/.test(await del2.locator('[data-testid=delete-text]').innerText()), 'K2: the Routes page delete dialog names both parts too', await del2.locator('[data-testid=delete-text]').innerText());
+  await del2.getByRole('button', { name: 'Cancel' }).click();
+
+  // K5 / SPLIT-UI-09: the office takes E1 back from Bala (3 done): "taken back by office".
+  const e1 = (await occOn(today, 'E1')).occ[0];
+  if (e1 && e1.run && e1.run.driver && e1.run.collected + e1.run.missed > 0) {
+    await api('POST', `/runs/${today}/r${e1.route_id}/release`, { mark_missed: false });
+    await page.goto(`${BASE}/?view=week&anchor=${today}`);
+    await page.locator(`.week .day[data-date="${today}"] .occ[data-code="E1"] .nm`).click();
+    const box = await page.locator('.drawer .status-box').innerText();
+    check(/Needs driver · taken back by office · \d+\/\d+/.test(box), 'K5: the drawer reads "Needs driver · taken back by office · n/m"', box);
+    const tip = await page.locator(`.week .day[data-date="${today}"] .occ[data-code="E1"] .sg`).getAttribute('title');
+    check(/taken back by office/.test(tip || ''), 'K5: the week row tooltip says it too', tip);
+    await page.keyboard.press('Escape');
+    // SPLIT-UI-10: deleting E1 from a later part is refused; the dialog names the work done, not "nobody".
+    const e1r = (await api('GET', '/routes')).find((r) => r.code === 'E1');
+    await api('POST', `/routes/${e1r.id}/change-schedule`, { rev: e1r.rev, from: split, days: e1r.days });
+    await page.goto(`${BASE}/?view=week&anchor=${after}`);
+    await page.locator(`.week .day[data-date="${after}"] .occ[data-code="E1"] .nm`).click();
+    await page.locator('.drawer').getByRole('button', { name: /Menu/ }).click();
+    await page.getByRole('menuitem', { name: 'Delete route…' }).click();
+    await page.locator('.dialog', { hasText: 'Delete route E1' }).getByRole('button', { name: 'Delete', exact: true }).click();
+    const re = page.locator('.dialog', { hasText: 'Work is already done on this job today' });
+    await re.waitFor();
+    const reText = await re.innerText();
+    check(/Refused: \d+ stops of E1 are already done today/.test(reText) && !/nobody/.test(reText), 'SPLIT-UI-10: "Refused: n stops of E1 are already done today", not "nobody has done"', reText);
+    await re.getByRole('button', { name: 'Close', exact: true }).last().click();
+    check((await occOn(after, 'E1')).occ.length === 1, 'E1 is not deleted');
+    await page.keyboard.press('Escape');
+  } else {
+    check(false, 'E1 is held by Bala with work done (seed)', e1 && e1.run);
+  }
+}
+
 async function main() {
   fs.rmSync(DATA, { recursive: true, force: true });
   const env = { ...process.env, WMS_DATA_DIR: DATA };
@@ -539,7 +747,9 @@ async function main() {
     await urgent.waitFor({ state: 'detached' });
     const adhoc = (await occOn(tomorrow, ucode)).occ[0];
     check(adhoc && adhoc.type === 'adhoc' && adhoc.stops.length === 2, `urgent pickup created adhoc ${ucode} on ${tomorrow} with 2 stops`, adhoc && [adhoc.type, adhoc.stops.length]);
-    check((await page.locator(`.week .day[data-date="${tomorrow}"] .occ.adhoc[data-code="${ucode}"]`).count()) === 1, 'it shows in the week view (dashed ⚡A)');
+    // (waits for the calendar refetch that follows the create)
+    const adhocShown = await page.locator(`.week .day[data-date="${tomorrow}"] .occ.adhoc[data-code="${ucode}"]`).waitFor({ timeout: 10000 }).then(() => true, () => false);
+    check(adhocShown, 'it shows in the week view (dashed ⚡A)');
 
     // 6. OTC task on a Sunday.
     console.log('OTC task on Sunday');
@@ -583,6 +793,8 @@ async function main() {
     console.log('task drawer');
     // 4 tasks on that Sunday now: the group is collapsed to one line (> 3) and expands in place.
     const group = sun.locator('button.tgroup');
+    // The calendar refetches after the create; wait for the collapsed group (slow under parallel load).
+    await sun.locator('button.tgroup', { hasText: 'Tasks 4' }).waitFor({ timeout: 15000 }).catch(() => {});
     check((await group.count()) === 1 && /Tasks 4/.test(await group.innerText()), 'more than 3 tasks collapse into one line', (await group.count()) && (await group.innerText()));
     if (await group.count()) await group.click();
     const comp = sun.locator('.trow', { hasText: 'Jurong' });
@@ -812,7 +1024,10 @@ async function main() {
     await page.locator('table tbody tr').first().waitFor();
     check((await page.locator('table tbody tr').count()) >= 8, 'Tasks page lists the tasks');
 
-    // The browser logs every non-2xx response; the 409 RUN_EXISTS above is expected.
+    // 11. Split routes (R12 / R14) in the office's forms and dialogs; the office takes a job back.
+    await splitRouteChecks(page, { today, consoleErrors });
+
+    // The browser logs every non-2xx response; the 409 RUN_EXISTS and STALE_REVISION above are expected.
     const real = consoleErrors.filter((e) => !/status of 409/.test(e));
     check(real.length === 0, 'no console errors', real.slice(0, 3));
   } finally {

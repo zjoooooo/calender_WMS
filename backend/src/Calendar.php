@@ -171,7 +171,8 @@ final class Calendar
         return array_merge([
             'key' => 'r' . ($e['route_id'] ?? 0) . '@' . $d, 'kind' => 'route', 'route_id' => 0, 'code' => '', 'color' => 1,
             'type' => 'regular', 'name' => '', 'recurring' => false, 'days' => null, 'sun' => null, 'ph' => null,
-            'start' => null, 'end' => null, 'status' => 'scheduled', 'edited' => false, 'note' => '',
+            'start' => null, 'end' => null, 'route_start' => $e['start'] ?? null, 'route_end' => $e['end'] ?? null,
+            'status' => 'scheduled', 'edited' => false, 'note' => '',
             'route_note' => '', 'occurrence_note' => '', 'copied_from' => null,
         ], $e, [
             'route_id' => (int) ($e['route_id'] ?? 0),
@@ -228,7 +229,7 @@ final class Calendar
             }
             return $base + ['key' => "r$id@$d", 'kind' => 'route', 'route_id' => $id, 'code' => $r['code'] ?? $job,
                 'color' => (int) ($r['color'] ?? 1), 'type' => $r['type'] ?? 'regular', 'name' => (string) ($r['name'] ?? ''),
-                'sun' => null, 'ph' => null, 'route_note' => '', 'stops' => $stops];
+                'sun' => null, 'ph' => null, 'route_start' => null, 'route_end' => null, 'route_note' => '', 'stops' => $stops];
         }
         $t = null;
         foreach ($this->plan['tasks'] ?? [] as $x) {

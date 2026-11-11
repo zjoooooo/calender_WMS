@@ -142,7 +142,7 @@ final class WasteTypes
                     continue;
                 }
                 foreach (Usage::routeStops($plan, $cu['id'], $today) as $ref) {
-                    $routes[$ref['route_id']] ??= ['route_id' => $ref['route_id'], 'code' => $ref['code'], 'name' => $ref['name'], 'type' => $ref['type']];
+                    $routes[$ref['series']] ??= ['route_id' => $ref['route_id'], 'code' => $ref['code'], 'name' => $ref['name'], 'type' => $ref['type']];
                 }
             }
             if ($routes !== []) {

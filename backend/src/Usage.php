@@ -18,6 +18,51 @@ final class Usage
         return ($r['end'] ?? null) === null || $r['end'] >= $today;
     }
 
+    /**
+     * route id => series id. A "following" save (R12) or a schedule change (R14) ends a recurring route at
+     * D - 1 and continues it as a new record from D; to the office the records are ONE route, linked by the
+     * `series` the split writes (the id of the route's first record). A route created by POST starts its own
+     * series, so a new route that reuses an ended route's code is never part of it. A one-off is its own series.
+     * A record without `series` (stored before it existed, or written by the seed) is its own series: membership
+     * is never guessed from code and dates, because "End route" followed by a new route with the same code looks
+     * exactly like a split.
+     * @return array<int,int>
+     */
+    public static function seriesMap(array $plan): array
+    {
+        $map = [];
+        foreach ($plan['routes'] ?? [] as $r) {
+            $id = (int) $r['id'];
+            $map[$id] = (!self::isOneOff($r) && isset($r['series'])) ? (int) $r['series'] : $id;
+        }
+        return $map;
+    }
+
+    /**
+     * The real period of every series as the office sees it: series id => [first start, last end or null].
+     * @param array<int,int>|null $map seriesMap($plan)
+     * @return array<int,array{0:string,1:?string}>
+     */
+    public static function seriesPeriods(array $plan, ?array $map = null): array
+    {
+        $map ??= self::seriesMap($plan);
+        $out = [];
+        foreach ($plan['routes'] ?? [] as $r) {
+            if (self::isOneOff($r)) {
+                continue;
+            }
+            $sid = $map[(int) $r['id']];
+            $end = $r['end'] ?? null;
+            if (!isset($out[$sid])) {
+                $out[$sid] = [(string) $r['start'], $end];
+                continue;
+            }
+            [$s, $e] = $out[$sid];
+            $out[$sid] = [min($s, (string) $r['start']), ($e === null || $end === null) ? null : max($e, $end)];
+        }
+        return $out;
+    }
+
     public static function stopsHave(array $stops, int $cid): bool
     {
         foreach ($stops as $s) {
@@ -59,26 +104,28 @@ final class Usage
     {
         $out = [];
         $byId = [];
+        $map = self::seriesMap($plan);
         foreach ($plan['routes'] ?? [] as $r) {
             $byId[$r['id']] = $r;
             if (self::routeLive($r, $today) && self::stopsHave($r['stops'] ?? [], $cid)) {
                 $oneOff = self::isOneOff($r);
-                $out[] = self::routeRef($r, $oneOff ? 'one-off' : 'template', $oneOff ? $r['date'] : null);
+                $out[] = self::routeRef($r, $oneOff ? 'one-off' : 'template', $oneOff ? $r['date'] : null, $map);
             }
         }
         foreach ($plan['route_overrides'] ?? [] as $o) {
             $r = $byId[$o['route_id']] ?? null;
             if ($r !== null && $o['date'] >= $today && is_array($o['stops'] ?? null) && self::stopsHave($o['stops'], $cid)) {
-                $out[] = self::routeRef($r, 'override', $o['date']);
+                $out[] = self::routeRef($r, 'override', $o['date'], $map);
             }
         }
         return $out;
     }
 
-    private static function routeRef(array $r, string $where, ?string $date): array
+    /** "series" groups the records of one split route (seriesMap): callers list such a route once. */
+    private static function routeRef(array $r, string $where, ?string $date, array $map): array
     {
         return ['kind' => 'route', 'route_id' => $r['id'], 'code' => $r['code'], 'name' => $r['name'] ?? '',
-            'type' => $r['type'], 'where' => $where, 'date' => $date];
+            'type' => $r['type'], 'where' => $where, 'date' => $date, 'series' => $map[(int) $r['id']] ?? (int) $r['id']];
     }
 
     /** customer_id => list of route codes whose stop lists dated >= today hold it (customer list endpoint). */

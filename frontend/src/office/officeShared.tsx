@@ -248,7 +248,13 @@ export function runDetailText(
       return parts.filter(Boolean).join(' · ');
     }
     case 'open':
-      return [t('status.open'), run?.left_by ? t('run.leftBy', { name: run.left_by }) : '', run ? `${resolved}/${run.total}` : ''].filter(Boolean).join(' · ');
+      return [
+        t('status.open'),
+        run?.left_by ? t('run.leftBy', { name: run.left_by }) : run?.released_by_office ? t('run.byOffice') : '',
+        run ? `${resolved}/${run.total}` : '',
+      ]
+        .filter(Boolean)
+        .join(' · ');
     case 'done': {
       const parts = [t('status.done')];
       if (run?.missed) parts.push(t('run.missedN', { n: run.missed }));

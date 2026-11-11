@@ -270,3 +270,6 @@ button.sn:hover { text-decoration: underline; }
   .stop { grid-template-columns: auto 26px minmax(0, 1fr); }
   .stop .ops { grid-column: 3; }
 }
+
+/* Routes page: the parts of a split route (R12 / R14) stay together; a dashed line joins them (SPLIT-UI-08). */
+.table tr.chain-cont > td { border-top-style: dashed; }

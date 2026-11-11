@@ -38,8 +38,8 @@ return (static function (): array {
             T::subset(['id' => 45, 'code' => 'W1', 'type' => 'regular', 'recurring' => true, 'days' => [3, 5], 'start' => '2026-11-16',
                 'end' => null, 'date' => null, 'sun' => null, 'rev' => 1, 'stops' => [['customer_id' => 12, 'note' => '']]], $r);
             T::eq(['id' => 45, 'code' => 'W1', 'color' => 3, 'type' => 'regular', 'name' => 'West 1', 'note' => 'n', 'rev' => 1,
-                'start' => '2026-11-16', 'end' => null, 'days' => [3, 5], 'stops' => [['customer_id' => 12, 'note' => '']]],
-                $e->doc('plan')['routes'][6], 'stored shape (§4.4)');
+                'start' => '2026-11-16', 'end' => null, 'days' => [3, 5], 'series' => 45, 'stops' => [['customer_id' => 12, 'note' => '']]],
+                $e->doc('plan')['routes'][6], 'stored shape (§4.4); a created route starts its own series');
             T::eq(45, $e->doc('plan')['seq']['route']);
             T::err($post($e, ['type' => 'regular', 'code' => 'W2', 'name' => 'x', 'date' => '2026-11-12', 'stops' => []]), 422, 'DAY_CLASS_VIOLATION');
         },

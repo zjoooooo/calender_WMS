@@ -45,6 +45,7 @@ const driver = {
   'driver.st.available': '可以领取',
   'driver.st.open': '待接手',
   'driver.st.leftBy': '{name} 留下',
+  'driver.st.byOffice': '办公室已收回',
   'driver.st.mine': '我的',
   'driver.st.taken': '已被领取',
   'driver.st.done': '已完成',

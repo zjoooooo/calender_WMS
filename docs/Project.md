@@ -893,7 +893,8 @@ for t in plan.tasks:
 - (•) **Only Wed 18 Nov**: writes `override.stops` and note.
 - ( ) **Wed 18 Nov and all following**: per R12, a template replace (when 18 Nov is the next date the route runs) or a split from 18 Nov (R14, same code, so the calendar looks the same).
 - "Only this date" is pre-selected, except when the date inherits an empty list (a route just created, before its first customers): then "and all following" is pre-selected, so the first customers become the route's list on every date it runs.
-- The dialog lists "Not changed: Mon 23 Nov, Fri 27 Nov (they have their own list)".
+- On a route that was already split (§6.5), "and all following" also reaches its later records: the customers added, removed, moved or re-noted on D are applied to their lists too. A later record that already had its own changes (for example a customer added from 2 Dec) keeps them: a list equal to the one the clerk started from becomes the new list, any other list gets only the clerk's changes.
+- The dialog lists "Not changed: Mon 23 Nov, Fri 27 Nov (they have their own list)". `GET /api/routes/{id}` returns the overrides of every live record of a split route, so these dates are named whichever record the drawer was opened on.
 - For today's container with a run, it adds the driver impact, computed client-side from the loaded payload. Example: "N1 (Ali, 3/8) will get 1 new stop".
 
 ### 6.3 Skip / restore / reset / delete
@@ -929,6 +930,12 @@ for t in plan.tasks:
   - ( ) from date D…: R14.
 - "End route from date D" sets `end = D − 1`.
 - "Delete route" removes the route and its overrides. Past days are unaffected, because they are frozen. R26 applies.
+- **Split routes are one route.** A "following" save (R12) or a schedule change (R14) ends the route record at D − 1 and continues it as a new record from D. The new record gets the same `series` as the old one (the id of the route's first record); a route created with `POST /api/routes` starts its own series, so a new route that reuses the code of an ended route is never part of it. A record stored without `series` (before it existed, or written by the seed) is its own route: membership is never guessed from code and dates, because "End route" followed by a new route with the same code looks exactly like a split. Such a record gets `series` (its own id) at its next split. One rule then holds for every operation on a record that runs today or later: **it applies to the whole live route from its date on**, whichever record the clerk opened (a drawer date, a Routes row):
+  - **Edit route from today** (code, colour, name, note, weekdays or Sunday/PH, the template's stop list) changes every live record. Weekdays and customers added or removed are added to or removed from each record, so a planned schedule change (Tue/Thu from 21 Dec) or a customer planned from a later date is kept. A record left with no weekday takes the new ones.
+  - **End route from D** (`end = D − 1`, or an end typed in Edit route) ends the route: the record that runs on D − 1 gets the end, and the later records, which have not started yet, are deleted with their overrides. A cleared end (no end) is removed from the last record. A start typed in Edit route is the route's first start (a form that resends the route's real start changes nothing).
+  - **Change schedule from D** splits the record that runs on D, which may be a later one than the record opened; when D is the first day of a later record, that record takes the new schedule (nothing to split). The later records get the same weekday and stop-list changes. The `end` of the request is the route's end; an `end` equal to the route's current end is no change. The form sends `end` only when the clerk changed it, so an end that equals a split boundary is applied.
+  - **Delete route** deletes every live record. An ended record is history: an edit or delete of it stays on it. The Routes page offers no "Edit route" on an ended part of a route that still runs; over the API, moving such a part's end into a later part is refused (422 VALIDATION, field `end`), not reported as CODE_IN_USE against the route's own record.
+  - API payloads carry `series` and the route's real period, `route_start` / `route_end` (the first record's start, the last record's end), next to the record's own `start` / `end`, so the drawer header, Edit route and the Routes page can show one route.
 
 ### 6.6 "+ Route" in a day cell (only `can_create`)
 - **Work day**: [Regular · repeats weekly] or [⚡ Adhoc · this date only].
@@ -1277,22 +1284,34 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
   - **Clicks**: a route line opens that route's drawer (§6.1: edit stops, reorder, …); a task line opens the task drawer; the day number opens the **day drawer** (about 460 px), which renders the same column as the week view. Today and later cells get a **"+"** at the top left (shown on hover or focus, always on touch screens) with the same create menu as the week view's footer (the route kinds of `can_create`, and + Task), so routes are added without leaving the month view.
 - **Route drawer**: §6.1.
 - **Task drawer**: §6.8.
+- **Split routes** (R12 / R14): a route split by a "following" save or a schedule change is stored as several records with the same code, but every office screen treats it as **one route**. The records are grouped by the server's `series` (or, for data without it, by code, type and periods that follow each other), and the route's real period is `route_start` / `route_end` (or the first record's start and the last one's end).
+  - The route drawer header shows the route's period ("Regular · Mon Wed Fri · from 11 Nov"), never the split boundary ("until 19 Nov") of the record the date belongs to.
+  - "End route from D" is sent to the record that runs on D.
+  - The delete dialog names every part it removes: "E2 runs as 2 schedules (11 Nov – 19 Nov, from 20 Nov): all of them are deleted, with every per-date change. Past days are frozen and stay as they were."
+  - The End and Delete dialogs show their own error. It is cleared when a dialog opens or closes, and the drawer footer does not repeat it.
+- **Job taken back by the office**: when the office released or reassigned a job (`released_by_office`), the status detail (drawer, tooltips) reads "Needs driver · taken back by office · 3/10" / "待接手 · 办公室已收回 · 3/10", as "left by Bala" does after a driver leaves.
 - **Dialogs**:
   - Scope
   - Copy to date
-  - Edit route / schedule
+  - Edit route / schedule:
+    - Start and End are the whole route's (the first part's start and the route's end), also when the form is opened from a later part of a split route. Only the fields the clerk changed are sent. A changed end goes to the part that runs on that date, and a changed start to the first part that still runs. Code, colour, name, note and weekdays go to the opened record, and the server carries them to the other parts. "From date D" goes to the part that runs on D.
+    - R20: the form keeps the version it was loaded from. When someone else saves the route meanwhile, every field the clerk did not touch takes their value, and a banner names the fields ("Someone else changed this route meanwhile: Name. …"). The first Save is refused once (`STALE_REVISION`); the second one sends only the clerk's own changes, so the other clerk's change is never silently reverted.
   - Route create (one form per type)
   - Urgent pickup
   - Task create / edit
   - Result (visit)
-  - Run exists
+  - Run exists. When no driver holds the job any more but stops are done (the office took it back), the title reads "Work is already done on this job today" and the text "Refused: 3 stops of E1 are already done today (no driver holds it now). Close out, …", never "nobody has done 3".
   - Customer in use / archive result
   - Assign driver
 
 **Routes page.**
 - A table with these columns: colour, code, type, name, schedule, start/end, stops, next date and today's status. A filter shows ended routes.
+- A split route (R12 / R14) has one row per part. Its rows stay together (joined by a dashed line), and each one is tagged "part 1 of 2", "part 2 of 2" (tooltip: "E2 is one route, split by a schedule change on Fri 20 Nov: edit, end and delete apply to the whole route.").
 - The template editor: an ordered stop list (customer and stop note; routable type tags only), reordered by drag and drop, ↑ ↓ or move to # (the same `StopList` as the route drawer, §6.1). A change from a later date goes through [Change schedule from date…].
-- Actions: [Change schedule from date…], [End], [Delete].
+  - Its header shows the whole route's period.
+  - For a part of a split route, the note names the other parts' dates. When the server links the parts (`series`), "Change the list from today" reaches every part: "The route's default list. It applies from today to every part of E2 (11 Nov – 19 Nov, from 20 Nov); …". Without it, the note says which dates keep their own list: "This list is used 11 Nov – 19 Nov; … E2 has a separate list on its other dates (from 20 Nov): this change does not reach them."
+  - "From date D" goes to the part that runs on D.
+- Actions: [Change schedule from date…], [End], [Delete]. On a split route they act on the whole route: [Delete] names every part it removes, and [End] goes to the part that runs on the chosen date.
 
 **Tasks page.**
 - A table with these columns: type, customer, schedule ("Once Sat 15 Nov" / "Tue, Fri from 17 Nov"), end, next date, note and today's status.
@@ -1326,7 +1345,7 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
 - **Top bar**: the op_date (between 00:00 and the rollover: "Wed 11 Nov · night shift until {time}. Thu 12 Nov jobs appear at {time}", §9.1), the driver's name, and a sync pill: "Synced 10:14" / "2 unsent" / "Offline · data from 10:12".
 - **My work**: a "Continue N1 3/8" card and one card per held task. Jobs assigned by the office show an "Assigned by office" tag.
 - **Tabs**: [Routes (12)] [Tasks (4)].
-  - **Route card** (72 px): colour bar, **CODE in 20 px mono**, type tag, name, "8 stops", the first 3 customers, the note and the status. A taken route is grey and cannot be tapped ("Chong 4/10").
+  - **Route card** (72 px): colour bar, **CODE in 20 px mono**, type tag, name, "8 stops", the first 3 customers, the note and the status. A taken route is grey and cannot be tapped ("Chong 4/10"). A route the office took back reads "⇄ Needs driver 3/10 · taken back by office" / "办公室已收回" (`released_by_office`); one a driver gave back reads "· left by Bala".
   - **Task card**: the abbr badge (`OTC` / `COMPACTOR`), "↻" for a recurring task, the customer name and address, the note, the status, and "also on your route N1" where it applies.
 - **Banners**: "New today" for new jobs this driver can still act on (not done, not taken by someone else). The "Not sent: show the office" list appears when it is not empty.
 
@@ -1443,11 +1462,14 @@ GET /api/calendar?view=week|month&anchor=2026-11-11[&week_start=mon|sun] ->
 - `ops` is present only for today and past days.
 - `customers` covers every customer referenced in the range, archived ones included.
 - Occurrences are already sorted per §5.8.
+- A recurring route occurrence also carries `route_start` / `route_end`: the route's real period when a split (R12/R14) made it several records (§6.5); `start` / `end` are the record's own. Both are null for a one-off.
 
 ### 10.5 Routes and containers (office)
 ```
-GET    /api/routes?ended=0      -> [{"id","code","color","type","name","days"|"sun","ph"|"date","start","end","stop_count","next_date","today_status","rev"}]
-GET    /api/routes/{id}         -> Route + "overrides":[override dated >= today]
+GET    /api/routes?ended=0      -> [{"id","code","color","type","name","days"|"sun","ph"|"date","start","end","series","route_start","route_end",
+                                     "stop_count","next_date","route_next_date","today_status","rev"}]
+       (one row per route record; the records of a split route share "series" and route_next_date is the route's next date)
+GET    /api/routes/{id}         -> Route + "overrides":[override dated >= today, of every live record of a split route] + "next_date","route_next_date"
 POST   /api/routes
   {"type":"regular","code":"N1","color":null,"name":"North 1","note":"","start":"2026-11-16","end":null,"days":[1,3,5],"stops":[{"customer_id":12,"note":"3 bins"}]}
   {"type":"special","code":"S1","name":"Sunday Market","start":"2026-11-15","sun":true,"ph":true,"stops":[…]}
@@ -1455,10 +1477,14 @@ POST   /api/routes
   {"type":"adhoc","code":"A1","name":"Adhoc 12 Nov","note":"Call 11 Nov: overflow","date":"2026-11-12","stops":[…]}
   -> 201 Route (color auto-assigned when null) ; warning EMPTY_ROUTE
 PATCH  /api/routes/{id} {"rev":4,"code"?,"color"?,"name"?,"note"?,"days"?,"sun"?,"ph"?,"start"?,"end"?,"date"?,"stops"?,"release_run"?} -> Route
-       (stops = the full template list)
-POST   /api/routes/{id}/change-schedule {"rev":4,"from":"2026-12-01","days":[2,4],"stops"?:[…]} -> {"ended":Route,"created":Route}
-       (schedule fields and stops are optional; the "following" save of R12 sends only stops)
-DELETE /api/routes/{id}?rev=4[&release_run=1] -> 204
+       (stops = the full template list. On a live record of a split route the edit reaches every live record, "end" is the
+        route's end and "start" its first start (§6.5); the result is the record, or the record that now holds the end
+        when the end deleted the opened one)
+POST   /api/routes/{id}/change-schedule {"rev":4,"from":"2026-12-01","days":[2,4],"end"?:null,"stops"?:[…]} -> {"ended":Route,"created":Route}
+       (schedule fields and stops are optional; the "following" save of R12 sends only stops. "from" may be in any live
+        record of a split route; when it is a record's first day, "created" is that record with the new schedule and
+        "ended" the record before it. "end" is the route's end, ignored when equal to the route's current end)
+DELETE /api/routes/{id}?rev=4[&release_run=1] -> 204   (a split route: every live record)
 PUT    /api/routes/{id}/dates/{date}
        {"rev":4,"scope":"this"|"following","stops":[{"customer_id":40,"note":""}]?,"note":"use small truck"?,"cancelled":false?,"release_run":false?}
        -> {"route":Route,"occurrence":RouteOccurrence}   (scope ignored for one-offs; cancelled only with scope "this";

@@ -81,7 +81,8 @@ final class Customers
         $cu = $plan['customers'][self::mustFind($plan, $c->intParam('id'))];
         $routes = [];
         foreach (Usage::routeStops($plan, $cu['id'], $c->today) as $ref) {
-            $routes[$ref['route_id']] ??= ['route_id' => $ref['route_id'], 'code' => $ref['code'], 'name' => $ref['name'], 'type' => $ref['type']];
+            // a split route (R12/R14) is one route: listed once, by its first record that holds the customer
+            $routes[$ref['series']] ??= ['route_id' => $ref['route_id'], 'code' => $ref['code'], 'name' => $ref['name'], 'type' => $ref['type']];
         }
         $tasks = [];
         foreach (Usage::liveTasksOf($plan, $cu['id'], $c->today) as $t) {
@@ -256,12 +257,20 @@ final class Customers
         $removed = [];
         if ($routesToo) {
             $byId = [];
+            $series = Usage::seriesMap($plan);
+            $listed = [];
             foreach ($plan['routes'] as $k => $r) {
                 $byId[$r['id']] = $k;
                 if (Usage::routeLive($r, $today) && Usage::stopsHave($r['stops'] ?? [], $cid)) {
                     $plan['routes'][$k]['stops'] = self::withoutCustomer($r['stops'], $cid);
                     $plan['routes'][$k]['rev'] = (int) ($r['rev'] ?? 0) + 1;
                     $oneOff = Usage::isOneOff($r);
+                    // the template of a split route (R12/R14) is listed once, although each record is changed
+                    $sid = $series[(int) $r['id']] ?? (int) $r['id'];
+                    if (!$oneOff && isset($listed[$sid])) {
+                        continue;
+                    }
+                    $listed[$sid] = true;
                     $removed[] = ['kind' => 'route', 'route_id' => $r['id'], 'code' => $r['code'], 'name' => $r['name'] ?? '',
                         'where' => $oneOff ? 'one-off' : 'template', 'date' => $oneOff ? $r['date'] : null];
                 }

@@ -162,14 +162,19 @@ export function RouteHead({ code, color, type, name, children }: { code: string 
 export function statusText(
   t: (k: string, v?: Record<string, string | number>) => string,
   status: RunStatus | null,
-  opts: { mine: boolean; driver?: string | null; resolved?: number; total?: number; leftBy?: string | null; kind: 'route' | 'task' },
+  opts: { mine: boolean; driver?: string | null; resolved?: number; total?: number; leftBy?: string | null; byOffice?: boolean; kind: 'route' | 'task' },
 ): string {
   const count = opts.kind === 'route' && opts.total ? ` ${opts.resolved ?? 0}/${opts.total}` : '';
   switch (status) {
     case 'not_started':
       return '○ ' + t('driver.st.available');
     case 'open':
-      return '⇄ ' + t('driver.st.open') + count + (opts.leftBy ? ' · ' + t('driver.st.leftBy', { name: opts.leftBy }) : '');
+      return (
+        '⇄ ' +
+        t('driver.st.open') +
+        count +
+        (opts.leftBy ? ' · ' + t('driver.st.leftBy', { name: opts.leftBy }) : opts.byOffice ? ' · ' + t('driver.st.byOffice') : '')
+      );
     case 'active':
       return '◑ ' + (opts.mine ? t('driver.st.mine') : opts.driver || t('driver.st.taken')) + count;
     case 'done':
