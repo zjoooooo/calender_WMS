@@ -38,8 +38,9 @@
 .day.rest { background: color-mix(in srgb, var(--rest) 45%, var(--surface)); }
 .day.today { border-color: var(--cal-today); box-shadow: 0 0 0 1px var(--cal-today); }
 .dh { padding: 8px 10px 6px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
-.dh .d1 { display: flex; align-items: baseline; gap: 6px; }
-.dh .dow { font-weight: 600; }
+.dh .d1 { display: flex; align-items: baseline; gap: 2px 6px; flex-wrap: wrap; }
+.dh .dow { font-weight: 600; white-space: nowrap; }
+.dh .dow, .dh .dt { flex-shrink: 0; white-space: nowrap; }
 .dh .dt { font-family: var(--font-head); font-weight: 700; font-size: 17px; border: 0; background: none; padding: 0; color: var(--fg); }
 .dh .dt:hover { text-decoration: underline; }
 /* same date marks as the month grid: today blue (white on a blue pill), a public holiday red */
