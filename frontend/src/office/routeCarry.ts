@@ -105,7 +105,7 @@ export function carry(t: RoutePart, old: RoutePart, neu: RoutePart, stops: boole
 }
 
 type SchedFields = { days?: number[]; sun?: boolean | null; ph?: boolean | null };
-export type PartsPatch = SchedFields & { end?: IsoDate | null; stops?: Stop[] };
+export type PartsPatch = SchedFields & { start?: IsoDate; end?: IsoDate | null; stops?: Stop[] };
 export type PartsSchedule = SchedFields & { from: IsoDate; end?: IsoDate | null; stops?: Stop[] | null };
 
 /** Plan::applyRecurring for the schedule fields sent. */
@@ -136,8 +136,9 @@ function partOn<T extends { start: IsoDate }>(parts: readonly T[], d: IsoDate): 
 
 /**
  * PATCH /api/routes/{id} on a live record (Plan::patchRoute): weekdays or Sunday / PH and the template list
- * change on that record and are carried into every other part; a new end is the route's end. Start, code,
- * colour, name and note do not change what a part runs or lists, so they are not mirrored.
+ * change on that record and are carried into every other part; a new start is the route's start (the first
+ * part's, setChainStart) and a new end the route's end. Code, colour, name and note do not change what a part
+ * runs or lists, so they are not mirrored.
  */
 export function afterPatch(parts: readonly RoutePart[], id: number, body: PartsPatch): RoutePart[] {
   const old = parts.find((p) => p.id === id);
@@ -146,6 +147,7 @@ export function afterPatch(parts: readonly RoutePart[], id: number, body: PartsP
   if (body.stops !== undefined) r.stops = cleanStops(body.stops);
   if (parts.length === 1 && body.end !== undefined) r.end = body.end;
   const out = parts.map((p) => (p.id === id ? r : carry(p, old, r, body.stops !== undefined)));
+  if (body.start !== undefined) out[0] = { ...out[0], start: body.start };
   return parts.length > 1 && body.end !== undefined ? withEnd(out, body.end) : out;
 }
 

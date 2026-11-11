@@ -60,5 +60,6 @@
 - Split routes, later planned changes: the user chose option A. When an edit applies from today or from a date D, a later part of the route that already has its own planned change (e.g. "Tue/Thu from 21 Dec", or customers added or removed from a later date) KEEPS it; only what the clerk changed is carried into it. The screen must SAY SO before saving, and name what is kept.
 - Deployment with GitHub Actions. Every push runs the tests on GitHub.
 - Then the user narrowed it: "deploy only the frontend, the calendar part" and "no login, but give me a demo of the calendar's routes".
-  - So the deploy is a read-only DEMO of the office calendar on GitHub Pages: demo routes, no login, no backend on GitHub. Month and week views, collapse/expand, clicking a route shows it; changes are not possible in the demo.
-  - No automatic deploy to a server for now. The production design of section 11.4 stays for later.
+  - Offered read-only / editable / connected to a server, the user chose an EDITABLE demo. It is the office calendar on GitHub Pages, with no login and sample routes. The real backend runs in the visitor's browser (php-wasm), so editing works exactly as in the real system. Changes stay only in that browser, and the visitor can reset them.
+  - Offered a private link or GitHub Pages for a private repo (which needs a paid plan), the user chose to make the repository PUBLIC, so GitHub Pages works on the free plan.
+  - No automatic deploy to a server for now (the user's choice). The production design of section 11.4 stays for later.
