@@ -1,0 +1,239 @@
+{
+ "about": "Split routes (§6.5, Round 6): what an edit does to the other parts of the route (Plan::carry / Plan::mergeStops). Each case: the route's live parts as GET /api/routes/{id} returns them (\"parts\"), one call (PATCH /api/routes/{id}, POST /api/routes/{id}/change-schedule or PUT /api/routes/{id}/dates/{date} with scope \"following\"), and the parts afterwards (a part the call creates has id 0). Checked against the server by backend/tests/unit/plan_split_chain_test.php and against the office's mirror by frontend/src/office/routeCarry.test.ts (for \"following\", the parts after the date).",
+ "now": "2026-11-11T10:00:00+08:00",
+ "today": "2026-11-11",
+ "cases": [
+  {
+   "name": "T2 (SPLIT-4): Mon/Wed from 25 Nov; the later part's own Tue/Thu from 21 Dec is kept",
+   "type": "regular",
+   "parts": [
+    {"id": 101, "start": "2026-11-11", "end": "2026-12-01", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 102, "start": "2026-12-02", "end": "2026-12-20", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]},
+    {"id": 103, "start": "2026-12-21", "end": null, "days": [2, 4], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]}
+   ],
+   "call": {"kind": "schedule", "id": 101, "body": {"from": "2026-11-25", "days": [1, 3]}},
+   "after": [
+    {"id": 101, "start": "2026-11-11", "end": "2026-11-24", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 0, "start": "2026-11-25", "end": "2026-12-01", "days": [1, 3], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 102, "start": "2026-12-02", "end": "2026-12-20", "days": [1, 3], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]},
+    {"id": 103, "start": "2026-12-21", "end": null, "days": [2, 4], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]}
+   ]
+  },
+  {
+   "name": "T2 (SPLIT-4): from 9 Dec in a later part, Wed only, with the route's end",
+   "type": "regular",
+   "parts": [
+    {"id": 101, "start": "2026-11-11", "end": "2026-11-24", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 104, "start": "2026-11-25", "end": "2026-12-01", "days": [1, 3], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 102, "start": "2026-12-02", "end": "2026-12-20", "days": [1, 3], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]},
+    {"id": 103, "start": "2026-12-21", "end": null, "days": [2, 4], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]}
+   ],
+   "call": {"kind": "schedule", "id": 104, "body": {"from": "2026-12-09", "days": [3], "end": "2027-01-31"}},
+   "after": [
+    {"id": 101, "start": "2026-11-11", "end": "2026-11-24", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 104, "start": "2026-11-25", "end": "2026-12-01", "days": [1, 3], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 102, "start": "2026-12-02", "end": "2026-12-08", "days": [1, 3], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]},
+    {"id": 0, "start": "2026-12-09", "end": "2026-12-20", "days": [3], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]},
+    {"id": 103, "start": "2026-12-21", "end": "2027-01-31", "days": [2, 4], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]}
+   ]
+  },
+  {
+   "name": "E2 (SPLIT-UI-07 A): Friday removed from today also leaves the later part",
+   "type": "regular",
+   "parts": [
+    {"id": 111, "start": "2026-11-11", "end": "2026-11-19", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 112, "start": "2026-11-20", "end": null, "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]}
+   ],
+   "call": {"kind": "patch", "id": 111, "body": {"days": [1, 3]}},
+   "after": [
+    {"id": 111, "start": "2026-11-11", "end": "2026-11-19", "days": [1, 3], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 112, "start": "2026-11-20", "end": null, "days": [1, 3], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]}
+   ]
+  },
+  {
+   "name": "E2 (SPLIT-UI-07 A): Friday added again from Mon 16 Nov reaches the later part",
+   "type": "regular",
+   "parts": [
+    {"id": 111, "start": "2026-11-11", "end": "2026-11-19", "days": [1, 3], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 112, "start": "2026-11-20", "end": null, "days": [1, 3], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]}
+   ],
+   "call": {"kind": "schedule", "id": 111, "body": {"from": "2026-11-16", "days": [1, 3, 5]}},
+   "after": [
+    {"id": 111, "start": "2026-11-11", "end": "2026-11-15", "days": [1, 3], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 0, "start": "2026-11-16", "end": "2026-11-19", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 112, "start": "2026-11-20", "end": null, "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]}
+   ]
+  },
+  {
+   "name": "C2 (SPLIT-UI-07 B): from a date in the later part, that part is split",
+   "type": "regular",
+   "parts": [
+    {"id": 121, "start": "2026-11-11", "end": "2026-11-20", "days": [2, 4, 6], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 122, "start": "2026-11-21", "end": null, "days": [2, 4, 6], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]}
+   ],
+   "call": {"kind": "schedule", "id": 121, "body": {"from": "2026-11-24", "days": [2, 4]}},
+   "after": [
+    {"id": 121, "start": "2026-11-11", "end": "2026-11-20", "days": [2, 4, 6], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 122, "start": "2026-11-21", "end": "2026-11-23", "days": [2, 4, 6], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]},
+    {"id": 0, "start": "2026-11-24", "end": null, "days": [2, 4], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]}
+   ]
+  },
+  {
+   "name": "C2 (SPLIT-UI-07 B): no Saturday from 17 Nov: every later part loses Saturday",
+   "type": "regular",
+   "parts": [
+    {"id": 121, "start": "2026-11-11", "end": "2026-11-20", "days": [2, 4, 6], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 122, "start": "2026-11-21", "end": "2026-11-23", "days": [2, 4, 6], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]},
+    {"id": 123, "start": "2026-11-24", "end": null, "days": [2, 4], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]}
+   ],
+   "call": {"kind": "schedule", "id": 121, "body": {"from": "2026-11-17", "days": [2, 4]}},
+   "after": [
+    {"id": 121, "start": "2026-11-11", "end": "2026-11-16", "days": [2, 4, 6], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 0, "start": "2026-11-17", "end": "2026-11-20", "days": [2, 4], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 122, "start": "2026-11-21", "end": "2026-11-23", "days": [2, 4], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]},
+    {"id": 123, "start": "2026-11-24", "end": null, "days": [2, 4], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]}
+   ]
+  },
+  {
+   "name": "T5 (SPLIT-6): customer 70 added on the next date, and following: the later part keeps its own 21",
+   "type": "regular",
+   "parts": [
+    {"id": 131, "start": "2026-11-11", "end": "2026-12-01", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 132, "start": "2026-12-02", "end": "2026-12-20", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}, {"customer_id": 21, "note": ""}]},
+    {"id": 133, "start": "2026-12-21", "end": null, "days": [2, 4], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}, {"customer_id": 21, "note": ""}]}
+   ],
+   "call": {"kind": "following", "id": 131, "date": "2026-11-11", "body": {"stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}, {"customer_id": 70, "note": ""}]}},
+   "after": [
+    {"id": 131, "start": "2026-11-11", "end": "2026-12-01", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}, {"customer_id": 70, "note": ""}]},
+    {"id": 132, "start": "2026-12-02", "end": "2026-12-20", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}, {"customer_id": 21, "note": ""}, {"customer_id": 70, "note": ""}]},
+    {"id": 133, "start": "2026-12-21", "end": null, "days": [2, 4], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}, {"customer_id": 21, "note": ""}, {"customer_id": 70, "note": ""}]}
+   ]
+  },
+  {
+   "name": "T5 (SPLIT-6): list [70] from 25 Nov: 12 and 40 leave the later parts, their own 21 stays",
+   "type": "regular",
+   "parts": [
+    {"id": 131, "start": "2026-11-11", "end": "2026-12-01", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}, {"customer_id": 70, "note": ""}]},
+    {"id": 132, "start": "2026-12-02", "end": "2026-12-20", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}, {"customer_id": 21, "note": ""}, {"customer_id": 70, "note": ""}]},
+    {"id": 133, "start": "2026-12-21", "end": null, "days": [2, 4], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}, {"customer_id": 21, "note": ""}, {"customer_id": 70, "note": ""}]}
+   ],
+   "call": {"kind": "following", "id": 131, "date": "2026-11-25", "body": {"stops": [{"customer_id": 70, "note": ""}]}},
+   "after": [
+    {"id": 131, "start": "2026-11-11", "end": "2026-11-24", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}, {"customer_id": 70, "note": ""}]},
+    {"id": 0, "start": "2026-11-25", "end": "2026-12-01", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 70, "note": ""}]},
+    {"id": 132, "start": "2026-12-02", "end": "2026-12-20", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 21, "note": ""}, {"customer_id": 70, "note": ""}]},
+    {"id": 133, "start": "2026-12-21", "end": null, "days": [2, 4], "sun": null, "ph": null, "stops": [{"customer_id": 21, "note": ""}, {"customer_id": 70, "note": ""}]}
+   ]
+  },
+  {
+   "name": "T6 (SPLIT-6): a reorder and following reaches a later part whose list was the same",
+   "type": "regular",
+   "parts": [
+    {"id": 141, "start": "2026-11-11", "end": "2026-12-06", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}, {"customer_id": 21, "note": ""}]},
+    {"id": 142, "start": "2026-12-07", "end": null, "days": [1, 3], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}, {"customer_id": 21, "note": ""}]}
+   ],
+   "call": {"kind": "following", "id": 141, "date": "2026-11-20", "body": {"stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}, {"customer_id": 21, "note": ""}]}},
+   "after": [
+    {"id": 141, "start": "2026-11-11", "end": "2026-11-19", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}, {"customer_id": 21, "note": ""}]},
+    {"id": 0, "start": "2026-11-20", "end": "2026-12-06", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}, {"customer_id": 21, "note": ""}]},
+    {"id": 142, "start": "2026-12-07", "end": null, "days": [1, 3], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}, {"customer_id": 21, "note": ""}]}
+   ]
+  },
+  {
+   "name": "T6 (SPLIT-6): the template editor from today reaches every part",
+   "type": "regular",
+   "parts": [
+    {"id": 141, "start": "2026-11-11", "end": "2026-11-19", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}, {"customer_id": 21, "note": ""}]},
+    {"id": 143, "start": "2026-11-20", "end": "2026-12-06", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}, {"customer_id": 21, "note": ""}]},
+    {"id": 142, "start": "2026-12-07", "end": null, "days": [1, 3], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}, {"customer_id": 21, "note": ""}]}
+   ],
+   "call": {"kind": "patch", "id": 141, "body": {"stops": [{"customer_id": 40, "note": ""}, {"customer_id": 21, "note": ""}]}},
+   "after": [
+    {"id": 141, "start": "2026-11-11", "end": "2026-11-19", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 21, "note": ""}]},
+    {"id": 143, "start": "2026-11-20", "end": "2026-12-06", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 21, "note": ""}]},
+    {"id": 142, "start": "2026-12-07", "end": null, "days": [1, 3], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 21, "note": ""}]}
+   ]
+  },
+  {
+   "name": "an edit from today opened on the later part also reaches the part that runs now",
+   "type": "regular",
+   "parts": [
+    {"id": 151, "start": "2026-11-11", "end": "2026-11-30", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 152, "start": "2026-12-01", "end": null, "days": [2, 4], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}, {"customer_id": 21, "note": ""}]}
+   ],
+   "call": {"kind": "patch", "id": 152, "body": {"days": [2, 4, 6], "stops": [{"customer_id": 21, "note": ""}, {"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}, {"customer_id": 70, "note": ""}]}},
+   "after": [
+    {"id": 151, "start": "2026-11-11", "end": "2026-11-30", "days": [1, 3, 5, 6], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}, {"customer_id": 70, "note": ""}]},
+    {"id": 152, "start": "2026-12-01", "end": null, "days": [2, 4, 6], "sun": null, "ph": null, "stops": [{"customer_id": 21, "note": ""}, {"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}, {"customer_id": 70, "note": ""}]}
+   ]
+  },
+  {
+   "name": "a part left with no weekday takes the new ones; the new end removes a later part",
+   "type": "regular",
+   "parts": [
+    {"id": 161, "start": "2026-11-11", "end": "2026-11-30", "days": [2, 4], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}]},
+    {"id": 162, "start": "2026-12-01", "end": "2026-12-20", "days": [4], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}]},
+    {"id": 163, "start": "2026-12-21", "end": null, "days": [1, 4], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}]}
+   ],
+   "call": {"kind": "patch", "id": 161, "body": {"days": [2], "end": "2026-12-15"}},
+   "after": [
+    {"id": 161, "start": "2026-11-11", "end": "2026-11-30", "days": [2], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}]},
+    {"id": 162, "start": "2026-12-01", "end": "2026-12-15", "days": [2], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}]}
+   ]
+  },
+  {
+   "name": "special: Sunday dropped; a part left with neither Sunday nor PH takes the new choice",
+   "type": "special",
+   "parts": [
+    {"id": 171, "start": "2026-11-15", "end": "2026-12-05", "days": null, "sun": true, "ph": true, "stops": [{"customer_id": 21, "note": ""}]},
+    {"id": 172, "start": "2026-12-06", "end": null, "days": null, "sun": true, "ph": false, "stops": [{"customer_id": 21, "note": ""}]}
+   ],
+   "call": {"kind": "patch", "id": 171, "body": {"sun": false}},
+   "after": [
+    {"id": 171, "start": "2026-11-15", "end": "2026-12-05", "days": null, "sun": false, "ph": true, "stops": [{"customer_id": 21, "note": ""}]},
+    {"id": 172, "start": "2026-12-06", "end": null, "days": null, "sun": false, "ph": true, "stops": [{"customer_id": 21, "note": ""}]}
+   ]
+  },
+  {
+   "name": "special: PH dropped from Sun 22 Nov also leaves the later part",
+   "type": "special",
+   "parts": [
+    {"id": 171, "start": "2026-11-15", "end": "2026-12-05", "days": null, "sun": true, "ph": true, "stops": [{"customer_id": 21, "note": ""}]},
+    {"id": 172, "start": "2026-12-06", "end": null, "days": null, "sun": false, "ph": true, "stops": [{"customer_id": 21, "note": ""}]}
+   ],
+   "call": {"kind": "schedule", "id": 171, "body": {"from": "2026-11-22", "sun": true, "ph": false}},
+   "after": [
+    {"id": 171, "start": "2026-11-15", "end": "2026-11-21", "days": null, "sun": true, "ph": true, "stops": [{"customer_id": 21, "note": ""}]},
+    {"id": 0, "start": "2026-11-22", "end": "2026-12-05", "days": null, "sun": true, "ph": false, "stops": [{"customer_id": 21, "note": ""}]},
+    {"id": 172, "start": "2026-12-06", "end": null, "days": null, "sun": true, "ph": false, "stops": [{"customer_id": 21, "note": ""}]}
+   ]
+  },
+  {
+   "name": "stops: changed notes follow, moved customers take the new order in their slots, an added one goes before its successor",
+   "type": "regular",
+   "parts": [
+    {"id": 181, "start": "2026-11-11", "end": "2026-11-30", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": "gate"}, {"customer_id": 21, "note": ""}]},
+    {"id": 182, "start": "2026-12-01", "end": null, "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 21, "note": ""}, {"customer_id": 40, "note": "own"}]}
+   ],
+   "call": {"kind": "following", "id": 181, "date": "2026-11-11", "body": {"stops": [{"customer_id": 40, "note": "gate"}, {"customer_id": 70, "note": ""}, {"customer_id": 12, "note": "  back door "}]}},
+   "after": [
+    {"id": 181, "start": "2026-11-11", "end": "2026-11-30", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": "gate"}, {"customer_id": 70, "note": ""}, {"customer_id": 12, "note": "back door"}]},
+    {"id": 182, "start": "2026-12-01", "end": null, "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 40, "note": "own"}, {"customer_id": 70, "note": ""}, {"customer_id": 12, "note": "back door"}]}
+   ]
+  },
+  {
+   "name": "stops from D (template editor): the later part keeps its own customer, the added one goes before its successor",
+   "type": "regular",
+   "parts": [
+    {"id": 191, "start": "2026-11-11", "end": "2026-11-30", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 192, "start": "2026-12-01", "end": null, "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 21, "note": ""}, {"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]}
+   ],
+   "call": {"kind": "schedule", "id": 191, "body": {"from": "2026-11-18", "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 70, "note": ""}, {"customer_id": 40, "note": ""}]}},
+   "after": [
+    {"id": 191, "start": "2026-11-11", "end": "2026-11-17", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 0, "start": "2026-11-18", "end": "2026-11-30", "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 12, "note": ""}, {"customer_id": 70, "note": ""}, {"customer_id": 40, "note": ""}]},
+    {"id": 192, "start": "2026-12-01", "end": null, "days": [1, 3, 5], "sun": null, "ph": null, "stops": [{"customer_id": 21, "note": ""}, {"customer_id": 70, "note": ""}, {"customer_id": 40, "note": ""}, {"customer_id": 12, "note": ""}]}
+   ]
+  }
+ ]
+}

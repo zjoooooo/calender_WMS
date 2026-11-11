@@ -5,7 +5,9 @@
 // A split route (R12 / R14) has one record per part. Its rows stay together, each marked "part k of n";
 // edit, end and delete act on the whole route (the delete dialog names every part it removes, an end goes
 // to the part that runs on that date). Each part has its own customer list: the template editor's note
-// names the other parts' dates and says whether a change from today reaches them (SPLIT-UI-08).
+// names the other parts' dates and says whether a change from today reaches them (SPLIT-UI-08). Round 6:
+// before a save, each other part whose customers after it differ from the list being saved is named, with
+// the customers it also has and the ones it does not have (routeCarry, the server's rule).
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -31,6 +33,7 @@ import { addDays } from './calendarModel';
 import { EndDialog } from './CopyDialog';
 import { CustomerPicker, type PickedCustomer } from './CustomerPicker';
 import { MenuButton, routeRuleText, useGuardedWrite } from './officeShared';
+import { keptListsTemplate, keptListText } from './routeCarry';
 import { chainPeriod, endTarget, liveChain, routeChain, segmentLive, segmentOn, segmentPeriods, useAllRoutes } from './routeChain';
 import { RouteForm } from './RouteForm';
 import { StopList } from './StopList';
@@ -285,6 +288,15 @@ function TemplateEditor({ id, onClose }: { id: number; onClose: () => void }) {
   const others = live.filter((x) => x.id !== route?.id);
   const fmtShort = (d: string) => fmtDay(d, lang, { weekday: false });
   const fromWord = (d: string) => t('rule.from', { date: d });
+  // What the other parts keep after this save (from today: every other part; from D: the parts from D on),
+  // once the customer names are loaded.
+  const kept = useMemo(
+    () =>
+      dirty && route?.recurring && !custQ.isPending && (apply === 'today' || fromDate)
+        ? keptListsTemplate(route.parts ?? [], route.id, draft.stops, apply === 'from' ? fromDate : null, today)
+        : [],
+    [dirty, route, custQ.isPending, apply, fromDate, draft.stops, today],
+  );
 
   const save = () => {
     if (!route) return;
@@ -366,6 +378,11 @@ function TemplateEditor({ id, onClose }: { id: number; onClose: () => void }) {
               </label>
             </div>
           )}
+          {kept.map((k) => (
+            <div key={k.part.id} className="banner info" data-testid="kept-list">
+              {keptListText(k, today, t, lang, (cid) => custOf(cid)?.name ?? `#${cid}`)}
+            </div>
+          ))}
           <div className="acts">
             {dirty && <span className="tag warn">{t('common.unsaved')}</span>}
             <button type="button" className="btn primary" disabled={!dirty || w.busy} onClick={() => void save()}>

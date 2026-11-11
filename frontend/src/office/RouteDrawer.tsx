@@ -428,7 +428,18 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
       </Drawer>
 
       {scopeOpen && (
-        <ScopeDialog occ={occ} today={today} added={diff.added.length} removed={diff.removed.length} busy={w.busy} error={w.error} onSave={(s) => void save(s)} onClose={() => setScopeOpen(false)} />
+        <ScopeDialog
+          occ={occ}
+          today={today}
+          stops={draft.stops}
+          nameOf={(id) => custOf(id)?.name}
+          added={diff.added.length}
+          removed={diff.removed.length}
+          busy={w.busy}
+          error={w.error}
+          onSave={(s) => void save(s)}
+          onClose={() => setScopeOpen(false)}
+        />
       )}
       {dlg === 'edit' && <RouteForm mode="edit" routeId={occ.route_id} date={occ.date > today ? occ.date : undefined} onClose={() => setDlg(null)} />}
       {dlg === 'end' && (

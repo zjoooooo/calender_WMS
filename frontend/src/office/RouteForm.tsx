@@ -13,6 +13,10 @@
 // version's rev. When someone else saves meanwhile, the fields the clerk did not touch take their values
 // (and a banner names them); the first Save is answered with STALE_REVISION, the second one saves the
 // clerk's own changes on top of theirs (K4, SPLIT-UI-11).
+// Round 6: on a split route, a later part that has a schedule of its own keeps it; only the weekdays (or
+// Sunday / PH) the clerk adds or removes reach it. Before the save the form names each such part and what it
+// will run, computed with the server's rule (routeCarry) from the writes the form would send, live while the
+// clerk ticks weekdays or picks the date.
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -25,6 +29,7 @@ import {
   suggestRouteCode,
   type Route,
   type RouteCreate,
+  type RoutePart,
 } from '../api';
 import { fmtDay, useI18n, weekdayName, weekdayOf } from '../i18n';
 import { useSession } from '../session';
@@ -36,6 +41,7 @@ import { useToast } from '../ui/Toast';
 import type { CreateKind } from './calendarContext';
 import { addDays } from './calendarModel';
 import { useGuardedWrite } from './officeShared';
+import { afterPatch, afterSplit, keptSchedules, keptScheduleText } from './routeCarry';
 import { useAllRoutes } from './routeChain';
 import { afterStep, mergeServer, planEdit, snapOf, type Field, type FormVals, type Snap } from './routeFormModel';
 
@@ -137,6 +143,17 @@ export function RouteForm(props: Props) {
   }, [suggestQ.data, codeTouched]);
 
   const first = useMemo(() => (type === 'regular' && !oneOff ? firstRun(start, days) : null), [type, oneOff, start, days]);
+
+  // The other parts of a split route with a schedule of their own, and what each runs after this save.
+  const kept = useMemo(() => {
+    const parts = route?.parts;
+    if (!route || !form.base?.linked || oneOff || !parts || parts.length < 2 || (apply === 'from' && !fromDate)) return [];
+    let after: RoutePart[] | null = parts;
+    for (const s of planEdit(vals, form.base, { type: route.type, oneOff, apply, fromDate })) {
+      if (after) after = s.kind === 'patch' ? afterPatch(after, s.id, s.body) : afterSplit(after, s.body, today);
+    }
+    return keptSchedules(parts, after, route.id, apply === 'from' ? fromDate : null);
+  }, [route, form.base, oneOff, apply, fromDate, vals, today]);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -313,6 +330,11 @@ export function RouteForm(props: Props) {
                       </label>
                     </div>
                     {apply === 'from' && <span className="hint">{t('rf.applyFromHint')}</span>}
+                    {kept.map((k) => (
+                      <div key={`${k.part.id}-${k.replacedFrom ?? ''}`} className="banner info" data-testid="kept-plan">
+                        {keptScheduleText(k, today, t, lang)}
+                      </div>
+                    ))}
                   </div>
                 )}
               </>

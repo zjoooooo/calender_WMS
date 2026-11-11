@@ -5,6 +5,7 @@
 //
 // Env (defaults): BACKEND_PORT=8280  FRONT_PORT=5280  WMS_DATA_DIR=/tmp/wms-test-shell
 //                 E2E_SHOTS=<dir> to save screenshots   KEEP_DATA=1 to keep the data dir
+//                 WMS_FAKE_NOW=<ISO 8601 time> pins the server clock; CI uses 2026-11-11T10:00:00+08:00
 // Needs `playwright` resolvable by require() (preinstalled globally here) and PHP 8.3 on PATH.
 // The data dir is WIPED at the start.
 /* eslint-disable no-console */
@@ -87,6 +88,12 @@ async function shot(page, name) {
 async function main() {
   // 1. Fresh data dir, first start (prints and stores the admin password).
   fs.rmSync(DATA, { recursive: true, force: true });
+  // WMS_FAKE_NOW pins the server clock, so a run does not depend on the day or hour it starts (CI sets it).
+  // The backend honours it only with a .demo marker in the data dir (R1); php -S gets it through env.
+  if (process.env.WMS_FAKE_NOW) {
+    fs.mkdirSync(DATA, { recursive: true });
+    fs.writeFileSync(path.join(DATA, '.demo'), '');
+  }
   const env = { ...process.env, WMS_DATA_DIR: DATA };
   execFileSync('php', [path.join(ROOT, 'backend/tools/init.php')], { env, stdio: 'pipe' });
   const adminFile = path.join(DATA, 'initial-admin.txt');
@@ -181,6 +188,8 @@ async function main() {
     await page.getByRole('dialog').getByRole('button', { name: 'OTC', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: '保存' }).click();
     await page.getByRole('dialog').waitFor({ state: 'detached' });
+    // The list refetches after the dialog closes: wait for the new tags (up to 10 s) before reading them.
+    await row.locator('.wtag', { hasText: 'OTC' }).waitFor({ state: 'detached', timeout: 10000 }).catch(() => {});
     check((await row.locator('.wtag').allInnerTexts()).join(',') === 'REL', 'edit removed OTC');
     await row.click();
     await page.getByRole('dialog').getByRole('button', { name: 'OTC', exact: true }).click();
@@ -202,20 +211,30 @@ async function main() {
     await page.locator('tr', { hasText: 'Kopi Tiam 88' }).waitFor();
     check(true, 'restore brings it back');
 
-    // 6. Holidays: seeded year, past locked, add one.
+    // 6. Holidays: seeded year, past locked, add one. The dates come from the server's today, so the test runs
+    // on any day the holiday seed covers (2026, 2027): a new holiday on 31 Dec, and the seeded Christmas Day
+    // of the same year (after 25 Dec, both in the next year).
     console.log('holidays');
+    const metaTok = (await api('POST', '/api/login', null, { username: 'admin', password: NEW_PW })).data.token;
+    const today = (await api('GET', '/api/meta', metaTok)).data.today;
+    const Y = Number(today.slice(0, 4)) + (today.slice(5) > '12-25' ? 1 : 0);
+    const NEW_HOL = `${Y}-12-31`;
+    const XMAS = `${Y}-12-25`;
+    const dow = new Date(NEW_HOL + 'T00:00:00Z').getUTCDay();
+    const addDays = (d, n) => new Date(Date.parse(d + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10);
     await page.getByRole('link', { name: '公共假日' }).click();
     await page.getByRole('heading', { name: '公共假日' }).waitFor();
     const christmas = page.locator('tr', { hasText: 'Christmas Day' });
     await christmas.waitFor();
-    check(true, 'seeded 2026 holidays listed');
+    check(true, `seeded holidays of ${today.slice(0, 4)} listed`);
     check(/已过，只读/.test(await page.locator('tr', { hasText: "New Year's Day" }).innerText()), 'past holiday shows the lock');
-    await page.locator('input[type=date]').fill('2026-12-31');
+    await page.locator('input[type=date]').fill(NEW_HOL);
     await page.getByLabel('名称', { exact: true }).fill('E2E Test Holiday');
     await page.getByRole('button', { name: '+ 添加' }).click();
     const added = page.locator('tr', { hasText: 'E2E Test Holiday' });
     await added.waitFor();
-    check(/12月31日 周四/.test(await added.innerText()), 'new holiday row formatted "12月31日 周四"');
+    const zhDate = `12月31日 周${'日一二三四五六'[dow]}`;
+    check((await added.innerText()).includes(zhDate), `new holiday row formatted "${zhDate}"`);
     await shot(page, '03-holidays');
     await added.getByRole('button', { name: '改名' }).click();
     await page.getByRole('dialog').getByLabel('名称').fill('E2E Renamed');
@@ -226,12 +245,12 @@ async function main() {
     await page.getByRole('dialog').getByRole('button', { name: '删除' }).click();
     await page.locator('tr', { hasText: 'E2E Renamed' }).waitFor({ state: 'detached' });
     check(true, 'holiday deleted');
-    await page.locator('input[type=date]').fill('2026-12-31');
+    await page.locator('input[type=date]').fill(NEW_HOL);
     await page.getByLabel('名称', { exact: true }).fill('E2E Test Holiday');
     await page.getByRole('button', { name: '+ 添加' }).click();
     await added.waitFor();
     // "+ 添加" on a date that already has a holiday is refused on screen (no silent rename, OFF-6).
-    await page.locator('input[type=date]').fill('2026-12-25');
+    await page.locator('input[type=date]').fill(XMAS);
     await page.getByLabel('名称', { exact: true }).fill('Dup');
     const dupMsg = await page.locator('[data-testid=holiday-exists]').innerText();
     check((await page.getByRole('button', { name: '+ 添加' }).isDisabled()) && /已经是假日/.test(dupMsg) && dupMsg.includes('Christmas Day'), 'adding an existing holiday date is refused: "+ 添加" disabled, it names Christmas Day', dupMsg);
@@ -243,17 +262,17 @@ async function main() {
     await page.getByRole('link', { name: '日历' }).click();
     await page.locator('.month .mcell').first().waitFor();
     check((await page.locator('.month .mh').allInnerTexts()).join(' ') === '周日 周一 周二 周三 周四 周五 周六', 'calendar opens in the month view, 周日 first');
-    check(/^\d{4}年\d{1,2}月$/.test((await page.locator('.cal-title').innerText()).trim()), 'month title "2026年11月"', await page.locator('.cal-title').innerText());
+    check(/^\d{4}年\d{1,2}月$/.test((await page.locator('.cal-title').innerText()).trim()), 'month title "YYYY年M月"', await page.locator('.cal-title').innerText());
     const todayNum = page.locator('.month .dnum.today');
     check((await todayNum.count()) === 1 && (await todayNum.evaluate((e) => getComputedStyle(e).backgroundColor)) === 'rgb(37, 99, 235)', "today's number has the blue circle");
-    await page.goto(BASE + '/?anchor=2026-12-31');
-    const phCell = page.locator('.month .mcell[data-date="2026-12-31"]');
+    await page.goto(BASE + '/?anchor=' + NEW_HOL);
+    const phCell = page.locator(`.month .mcell[data-date="${NEW_HOL}"]`);
     await phCell.locator('.mph').waitFor();
     check((await phCell.locator('.dnum').evaluate((e) => getComputedStyle(e).color)) === 'rgb(220, 38, 38)' && /★\s*E2E Test Holiday/.test(await phCell.locator('.mph').innerText()), 'the new holiday: red number and "★ E2E Test Holiday" bar');
-    await page.goto(BASE + '/?view=week&anchor=2026-12-31');
+    await page.goto(BASE + '/?view=week&anchor=' + NEW_HOL);
     await page.locator('.week .day').first().waitFor();
     const wk = await page.locator('.week .day').evaluateAll((els) => els.map((e) => e.dataset.date));
-    check(wk[0] === '2026-12-27' && wk[6] === '2027-01-02', 'week view runs Sunday to Saturday', wk);
+    check(wk[0] === addDays(NEW_HOL, -dow) && wk[6] === addDays(NEW_HOL, 6 - dow), 'week view runs Sunday to Saturday', wk);
     await shot(page, '03b-calendar');
 
     // 7. Settings: rollover (admin), trucks, waste types.
@@ -278,6 +297,7 @@ async function main() {
     await page.getByRole('dialog').getByLabel('称重方式').selectOption('weighbridge');
     await page.getByRole('dialog').getByRole('button', { name: '保存' }).click();
     await page.getByRole('dialog').waitFor({ state: 'detached' });
+    await page.locator('tr', { hasText: 'OTC' }).filter({ hasText: '地磅' }).waitFor({ timeout: 10000 }).catch(() => {}); // refetch
     check(/地磅/.test(await page.locator('tr', { hasText: 'OTC' }).innerText()), 'OTC switched to weighbridge');
     await shot(page, '04-settings');
 
@@ -300,8 +320,8 @@ async function main() {
     const tok = (await api('POST', '/api/login', null, { username: 'admin', password: NEW_PW })).data.token;
     const custs = (await api('GET', '/api/customers?q=kopi', tok)).data;
     check(custs.length === 1 && custs[0].waste_types.join(',') === 'REL,OTC', 'API: customer has REL + OTC');
-    const hol = (await api('GET', '/api/holidays?year=2026', tok)).data;
-    check(hol.some((h) => h.date === '2026-12-31' && h.name === 'E2E Test Holiday'), 'API: holiday 2026-12-31 stored');
+    const hol = (await api('GET', `/api/holidays?year=${Y}`, tok)).data;
+    check(hol.some((h) => h.date === NEW_HOL && h.name === 'E2E Test Holiday'), `API: holiday ${NEW_HOL} stored`);
     const trucks = (await api('GET', '/api/trucks', tok)).data;
     check(trucks.some((t) => t.plate === 'SBA1234X' && t.active), 'API: truck stored');
     const me = (await api('GET', '/api/me', tok)).data;

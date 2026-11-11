@@ -6,8 +6,10 @@
 //
 // Env (defaults): BACKEND_PORT=8281  FRONT_PORT=5281  WMS_DATA_DIR=/tmp/wms-test-office
 //                 E2E_SHOTS=<dir> to save screenshots   KEEP_DATA=1 to keep the data dir
+//                 WMS_FAKE_NOW=<ISO 8601 time> pins the server clock; CI uses 2026-11-11T10:00:00+08:00
 // Dates are taken from the server (today, next work day, the next Mon–Sat PH, the next Sunday), so the
-// test works on any day. The data dir is WIPED at the start (and at the end unless KEEP_DATA=1).
+// test works on any Mon–Sat work day: today must have the seeded live runs, so it fails on a Sunday or a PH
+// (CI pins WMS_FAKE_NOW). The data dir is WIPED at the start (and at the end unless KEEP_DATA=1).
 /* eslint-disable no-console */
 const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
@@ -443,8 +445,160 @@ async function splitRouteChecks(page, { today, consoleErrors }) {
   }
 }
 
+/**
+ * Round 6 (§6.5): a later part of a split route keeps its own planned change (Tue Thu from D2, a customer added
+ * from D1); only what the clerk changes reaches it. Edit route / schedule, the scope dialog and the template
+ * editor say so before the save, and each notice is compared with what the server stored, read back over the API.
+ */
+async function keptPlanChecks(page, { today }) {
+  console.log('split route: what a later part keeps is named before the save');
+  const WD = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const dowOf = (d) => new Date(d + 'T00:00:00Z').getUTCDay() || 7;
+  const long = (d) => `${WD[dowOf(d)]} ${short(d)}`;
+  const daysText = (days) => days.map((d) => WD[d]).join(' ');
+  const nextDow = (from, days) => {
+    let d = from;
+    while (!days.includes(dowOf(d))) d = addDays(d, 1);
+    return d;
+  };
+  const when = (p) => (p.end && p.start <= today ? `until ${long(p.end)}` : p.end ? `from ${long(p.start)} to ${long(p.end)}` : `from ${long(p.start)}`);
+  const custs = (await api('GET', '/customers')).filter((c) => c.active !== false && c.waste_types.includes('REL'));
+  const [A, B, C, D] = custs;
+  const nameOf = (id) => custs.find((c) => c.id === id).name;
+  const S = (...cs) => cs.map((c) => ({ customer_id: c.id, note: '' }));
+  /** The notice for a part whose stored list (after the save) differs from the saved list, built from the API. */
+  const listNotice = (part, saved) => {
+    const ids = part.stops.map((s) => s.customer_id);
+    const also = ids.filter((x) => !saved.includes(x)).map(nameOf).join(', ');
+    const lacks = saved.filter((x) => !ids.includes(x)).map(nameOf).join(', ');
+    if (!also && !lacks) return null;
+    const diff = also && lacks ? `It also has ${also} and does not have ${lacks}.` : also ? `It also has ${also}.` : `It does not have ${lacks}.`;
+    return `Already planned ${when(part)}: that part keeps its own list. ${diff}`;
+  };
+  const openDrawer = async (code, date) => {
+    await page.goto(`${BASE}/?view=week&anchor=${date}`);
+    await page.locator(`.week .day[data-date="${date}"] .occ[data-code="${code}"] .nm`).click();
+    const dr = page.locator('.drawer');
+    await dr.locator('.rd-rule').waitFor();
+    return dr;
+  };
+  const openEdit = async (code, date) => {
+    const dr = await openDrawer(code, date);
+    await dr.getByRole('button', { name: /Menu/ }).click();
+    await page.getByRole('menuitem', { name: 'Edit route / schedule…' }).click();
+    const rf = page.locator('.dialog', { hasText: `Edit route ${code}` });
+    await rf.locator('form').waitFor();
+    return { dr, rf };
+  };
+  const notes = (loc, id) => poll(page, async () => {
+    const x = await loc.locator(`[data-testid=${id}]`).allInnerTexts();
+    return x.length ? x : null;
+  });
+  const closeAll = async (dr) => {
+    await page.keyboard.press('Escape');
+    await dr.waitFor({ state: 'detached' });
+  };
+
+  // KP1 runs Mon Wed Fri from today; from D1 it is a part with its own list; from D2 it runs Tue Thu (planned).
+  const D1 = nextDow(addDays(today, 14), [1, 3, 5]);
+  const D2 = nextDow(addDays(D1, 14), [1, 3, 5]);
+  const kp1 = await api('POST', '/routes', { type: 'regular', code: 'KP1', name: 'Kept plan 1', start: today, days: [1, 3, 5], stops: S(A, B) });
+  const p2 = (await api('PUT', `/routes/${kp1.id}/dates/${D1}`, { rev: kp1.rev, scope: 'following', stops: S(A, B, C) })).route;
+  const p3 = (await api('POST', `/routes/${p2.id}/change-schedule`, { rev: p2.rev, from: D2, days: [2, 4] })).created;
+
+  // 1. Edit route / schedule from today: Saturday added, Friday removed. The notice updates as the chips change.
+  let { dr, rf } = await openEdit('KP1', await scheduledOn('KP1', addDays(today, 1), D1));
+  let t = await notes(rf, 'kept-plan');
+  check(JSON.stringify(t) === JSON.stringify([`Already planned: from ${long(D2)} this route runs Tue Thu. That plan is kept.`]), 'Edit route: the later Tue Thu plan is named as kept (the part with the same weekdays is not)', t);
+  await rf.getByRole('button', { name: 'Sat', exact: true }).click();
+  await rf.getByRole('button', { name: 'Fri', exact: true }).click();
+  t = await poll(page, async () => {
+    const x = await rf.locator('[data-testid=kept-plan]').allInnerTexts();
+    return x.length === 1 && /it runs/.test(x[0]) ? x : null;
+  });
+  await shot(page, '40-kept-plan-route-form');
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  await rf.waitFor({ state: 'detached' });
+  await closeAll(dr);
+  let parts = (await api('GET', `/routes/${kp1.id}`)).parts;
+  let stored = parts.find((p) => p.id === p3.id);
+  check(
+    !!t && t[0] === `Already planned: from ${long(D2)} this route runs Tue Thu. That plan is kept; the weekdays you add or remove apply to it too, so from ${long(stored.start)} it runs ${daysText(stored.days)}.` && daysText(stored.days) === 'Tue Thu Sat',
+    `Edit route from today: the notice's result is what the server stored from ${D2} (${daysText(stored.days)})`,
+    { t, stored: stored.days },
+  );
+  check(daysText(parts.find((p) => p.id === p2.id).days) === 'Mon Wed Sat', 'the part with the same weekdays simply follows (Mon Wed Sat)', parts.map((p) => p.days));
+
+  // 2. Apply from a date F in the first part: Friday back. The base is the part that runs on F.
+  const X2 = await scheduledOn('KP1', addDays(today, 1), D1);
+  const F = addDays(X2, 7) < D1 ? addDays(X2, 7) : addDays(X2, 1);
+  ({ dr, rf } = await openEdit('KP1', X2));
+  await rf.locator('input[type=radio]').nth(1).check();
+  await rf.locator('input[aria-label="From date"]').fill(F);
+  await rf.getByRole('button', { name: 'Fri', exact: true }).click();
+  t = await poll(page, async () => {
+    const x = await rf.locator('[data-testid=kept-plan]').allInnerTexts();
+    return x.length === 1 && /Fri Sat\.$/.test(x[0]) ? x : null;
+  });
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  await rf.waitFor({ state: 'detached' });
+  await closeAll(dr);
+  parts = (await api('GET', `/routes/${kp1.id}`)).parts;
+  stored = parts.find((p) => p.id === p3.id);
+  check(
+    !!t && t[0] === `Already planned: from ${long(D2)} this route runs Tue Thu Sat. That plan is kept; the weekdays you add or remove apply to it too, so from ${long(stored.start)} it runs ${daysText(stored.days)}.` && daysText(stored.days) === 'Tue Thu Fri Sat',
+    `Edit route from ${F}: the notice's result is what the server stored (${daysText(stored.days)})`,
+    { t, stored: stored.days },
+  );
+
+  // 3. The drawer: B removed "and all following" on a date of the first part; the part from D1 keeps C.
+  const kp2 = await api('POST', '/routes', { type: 'regular', code: 'KP2', name: 'Kept plan 2', start: today, days: [1, 3, 5], stops: S(A, B) });
+  const q2 = (await api('PUT', `/routes/${kp2.id}/dates/${D1}`, { rev: kp2.rev, scope: 'following', stops: S(A, B, C) })).route;
+  dr = await openDrawer('KP2', await scheduledOn('KP2', addDays(today, 1), D1));
+  await dr.locator(`.stop[data-cid="${B.id}"]`).getByRole('button', { name: /^Remove from route/ }).click();
+  await dr.getByRole('button', { name: 'Save', exact: true }).click();
+  const sc = page.locator('.dialog', { hasText: 'Apply this change to' });
+  t = await notes(sc, 'kept-list');
+  await shot(page, '41-kept-list-scope');
+  await sc.locator('input[type=radio]').nth(1).check();
+  await sc.getByRole('button', { name: 'Save', exact: true }).click();
+  await dr.waitFor({ state: 'detached' });
+  stored = (await api('GET', `/routes/${q2.id}`)).parts.find((p) => p.id === q2.id);
+  const expect3 = listNotice(stored, [A.id]);
+  check(JSON.stringify(t) === JSON.stringify([expect3]) && expect3 === `Already planned from ${long(D1)}: that part keeps its own list. It also has ${C.name}.`, 'scope dialog: the later part keeps its own customer, as the server then stores', { t, expect3 });
+
+  // 4. The template editor, opened on the part from D1: a customer added from today reaches every other part.
+  await page.goto(BASE + '/routes');
+  await page.locator('table tbody tr').first().waitFor();
+  await page.locator('input.search').fill('KP2');
+  await page.locator('table tbody tr[data-code="KP2"]').last().click();
+  const te = page.locator('.drawer');
+  await poll(page, async () => (await te.locator('.stoplist .stop').count()) === 2);
+  await te.getByRole('button', { name: /Add customer/ }).click();
+  await te.locator('.picker input[type=search]').fill(D.code);
+  await te.locator('.picker-item', { hasText: D.code }).first().click();
+  t = await notes(te, 'kept-list');
+  await shot(page, '42-kept-list-template');
+  await te.getByRole('button', { name: 'Save', exact: true }).click();
+  await te.waitFor({ state: 'detached' });
+  parts = (await api('GET', `/routes/${q2.id}`)).parts;
+  const saved = parts.find((p) => p.id === q2.id).stops.map((s) => s.customer_id);
+  const expect4 = parts.filter((p) => p.id !== q2.id).map((p) => listNotice(p, saved)).filter(Boolean);
+  check(
+    saved.includes(D.id) && expect4.length >= 1 && JSON.stringify([...t].sort()) === JSON.stringify([...expect4].sort()),
+    `template editor: every other part's notice is what the server then stores (${expect4.length} parts)`,
+    { t, expect4 },
+  );
+}
+
 async function main() {
   fs.rmSync(DATA, { recursive: true, force: true });
+  // WMS_FAKE_NOW pins the server clock, so a run does not depend on the day or hour it starts (CI sets it).
+  // The backend honours it only with a .demo marker in the data dir (R1); php -S gets it through env.
+  if (process.env.WMS_FAKE_NOW) {
+    fs.mkdirSync(DATA, { recursive: true });
+    fs.writeFileSync(path.join(DATA, '.demo'), '');
+  }
   const env = { ...process.env, WMS_DATA_DIR: DATA };
   execFileSync('php', [path.join(ROOT, 'backend/tools/init.php')], { env, stdio: 'pipe' });
   const appDir = path.join(ROOT, 'backend/public/app');
@@ -1026,10 +1180,15 @@ async function main() {
 
     // 11. Split routes (R12 / R14) in the office's forms and dialogs; the office takes a job back.
     await splitRouteChecks(page, { today, consoleErrors });
+    // 12. Round 6: what a later part of a split route keeps is named before the save.
+    await keptPlanChecks(page, { today });
 
     // The browser logs every non-2xx response; the 409 RUN_EXISTS and STALE_REVISION above are expected.
     const real = consoleErrors.filter((e) => !/status of 409/.test(e));
     check(real.length === 0, 'no console errors', real.slice(0, 3));
+  } catch (e) {
+    await shot(page, 'zz-failure').catch(() => {}); // the screen at the moment it stopped (E2E_SHOTS, CI artifact)
+    throw e;
   } finally {
     await browser.close();
   }

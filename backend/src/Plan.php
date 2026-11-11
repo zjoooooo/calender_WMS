@@ -760,16 +760,24 @@ final class Plan
     }
 
     /**
-     * GET /api/routes/{id} -> Route + overrides dated >= today + next_date. For a record of a split route the
+     * GET /api/routes/{id} -> Route + overrides dated >= today + next_date + parts. For a record of a split route the
      * overrides are those of every live record (each names its route_id), so the scope dialog (§6.2) names
-     * every later date that has its own list; route_next_date is the route's next date.
+     * every later date that has its own list; route_next_date is the route's next date. "parts" are the records
+     * an edit of this one reaches (liveChain: the live records sorted by start, or only this one when it has
+     * ended), each {id, start, end, days, sun, ph, stops}, so the office can show before a save what a later
+     * part keeps (carry(), §6.5); null for a one-off.
      */
     public static function getRoute(Ctx $c): array
     {
         $plan = $c->plan();
         $i = self::mustRoute($plan, $c->intParam('id'));
         $r = $plan['routes'][$i];
-        $ids = array_flip(self::idsOf($plan, self::liveChain($plan, $i, $c->today)));
+        $live = self::liveChain($plan, $i, $c->today);
+        $parts = Usage::isOneOff($r) ? null : array_map(static function (int $k) use ($plan): array {
+            $o = self::routeOut($plan['routes'][$k]);
+            return ['id' => $o['id'], 'start' => $o['start'], 'end' => $o['end'], 'days' => $o['days'], 'sun' => $o['sun'], 'ph' => $o['ph'], 'stops' => $o['stops']];
+        }, $live);
+        $ids = array_flip(self::idsOf($plan, $live));
         $ix = Schedule::index($plan);
         $ovs = [];
         foreach ($plan['route_overrides'] ?? [] as $o) {
@@ -784,7 +792,8 @@ final class Plan
             $d = self::nextRouteDate($plan['routes'][self::routeIndex($plan, $id)], $c->today, $ix);
             $next = ($d !== null && ($next === null || $d < $next)) ? $d : $next;
         }
-        return self::routeView($plan, $r) + ['overrides' => $ovs, 'next_date' => self::nextRouteDate($r, $c->today, $ix), 'route_next_date' => $next];
+        return self::routeView($plan, $r) + ['overrides' => $ovs, 'next_date' => self::nextRouteDate($r, $c->today, $ix), 'route_next_date' => $next,
+            'parts' => $parts];
     }
 
     /** POST /api/routes -> 201 Route (colour auto-assigned when null; warning EMPTY_ROUTE). */

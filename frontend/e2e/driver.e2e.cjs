@@ -6,6 +6,7 @@
 //
 // Env (defaults): BACKEND_PORT=8282  FRONT_PORT=5282  WMS_DATA_DIR=/tmp/wms-test-driver
 //                 E2E_SHOTS=<dir> to save screenshots   KEEP_DATA=1 to keep the data dir
+//                 WMS_FAKE_NOW=<ISO 8601 time> pins the server clock; CI uses 2026-11-11T10:00:00+08:00
 //                 PWA=1 also builds the app (npm run build) and checks the offline start of the built app
 //                 served by php -S (service worker + cached Today)
 // The routes used are picked from the server's Today list, so the test works on any day with >= 2 routes.
@@ -157,6 +158,12 @@ async function drawSignature(page) {
 
 async function main() {
   fs.rmSync(DATA, { recursive: true, force: true });
+  // WMS_FAKE_NOW pins the server clock, so a run does not depend on the day or hour it starts (CI sets it).
+  // The backend honours it only with a .demo marker in the data dir (R1); php -S gets it through env.
+  if (process.env.WMS_FAKE_NOW) {
+    fs.mkdirSync(DATA, { recursive: true });
+    fs.writeFileSync(path.join(DATA, '.demo'), '');
+  }
   const env = { ...process.env, WMS_DATA_DIR: DATA };
   execFileSync('php', [path.join(ROOT, 'backend/tools/init.php')], { env, stdio: 'pipe' });
   const appDir = path.join(ROOT, 'backend/public/app');
@@ -617,6 +624,11 @@ async function main() {
 
     const unexpected = consoleErrors.filter((e) => !/Failed to load resource|ERR_INTERNET_DISCONNECTED|net::ERR_FAILED|status of 409|status of 4\d\d/.test(e));
     check(unexpected.length === 0, 'no unexpected console errors', unexpected);
+  } catch (e) {
+    // both phones at the moment it stopped (E2E_SHOTS, CI artifact)
+    await shot(pageA, 'zz-failure-A').catch(() => {});
+    await shot(pageB, 'zz-failure-B').catch(() => {});
+    throw e;
   } finally {
     await browser.close();
   }

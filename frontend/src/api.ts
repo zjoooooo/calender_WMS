@@ -549,9 +549,22 @@ export interface RouteOverride {
   note: string;
 }
 
+/** A record of a route that an edit of it reaches (§6.5): its period, schedule and template list. */
+export interface RoutePart {
+  id: number;
+  start: IsoDate;
+  end: IsoDate | null;
+  days: number[] | null; // regular
+  sun: boolean | null; // special
+  ph: boolean | null; // special
+  stops: Stop[];
+}
+
 export interface RouteDetail extends Route {
   overrides: RouteOverride[];
   next_date?: IsoDate | null;
+  /** Additive: the live parts of a split route (sorted by start, this record included); null for a one-off. */
+  parts?: RoutePart[] | null;
 }
 
 export interface RouteListItem {

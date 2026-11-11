@@ -14,6 +14,7 @@
 //   still ended or started as one route.
 import type { ChangeScheduleBody, IsoDate, RouteDetail, RoutePatch, RouteType } from '../api';
 import { addDays } from './calendarModel';
+import { carryDays } from './routeCarry';
 import { chainPeriod, endTarget, routeChain, segmentLive, segmentOn, type Segment } from './routeChain';
 
 export interface FormVals {
@@ -108,14 +109,6 @@ export function mergeServer(vals: FormVals, base: Snap, server: Snap, afterStale
 
 export type Step = { kind: 'patch'; id: number; body: RoutePatch } | { kind: 'schedule'; id: number; body: ChangeScheduleBody };
 
-/** Weekdays added and removed in the form, applied to another segment's own weekdays (as the server does). */
-function withDelta(segDays: number[], baseDays: number[], newDays: number[]): number[] {
-  const add = newDays.filter((d) => !baseDays.includes(d));
-  const rem = baseDays.filter((d) => !newDays.includes(d));
-  const out = sortedDays([...segDays, ...add]).filter((d) => !rem.includes(d));
-  return out.length ? out : sortedDays(newDays);
-}
-
 /** The writes for an edit save (in order). An empty list: nothing changed. */
 export function planEdit(vals: FormVals, base: Snap, opts: { type: RouteType; oneOff: boolean; apply: 'today' | 'from'; fromDate: IsoDate }): Step[] {
   const b = base.vals;
@@ -153,7 +146,8 @@ export function planEdit(vals: FormVals, base: Snap, opts: { type: RouteType; on
     const target = ch('end') ? (vals.end ? endTarget(segs, addDays(vals.end, 1)) : segs[segs.length - 1]) ?? opened : opened;
     const first = segs[0];
     const body: RoutePatch = { rev: revOf(target.id), ...ident };
-    if (opts.type === 'regular' && ch('days')) body.days = target.id === base.id ? sortedDays(vals.days) : withDelta(target.days ?? b.days, b.days, vals.days);
+    // Another segment gets the weekdays added and removed in the form on top of its own (as the server does).
+    if (opts.type === 'regular' && ch('days')) body.days = target.id === base.id ? sortedDays(vals.days) : carryDays(target.days ?? b.days, b.days, sortedDays(vals.days));
     if (opts.type !== 'regular') {
       if (ch('sun')) body.sun = vals.sun;
       if (ch('ph')) body.ph = vals.ph;

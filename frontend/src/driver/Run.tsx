@@ -99,7 +99,9 @@ export default function Run({ loaded, today }: { loaded: Loaded<JobDetail>; toda
       }
       markSelfRelease(job.date, job.job);
       const r = await driverRelease(job.date, job.job, body);
-      void refreshDriver(qc);
+      // The server's new copy first: otherwise S6 shows the job as it was before (for example "6 stops still to
+      // do" after "Mark all not collected") for one round trip, longer on 4G. Driver queries do not retry.
+      await refreshDriver(qc);
       setLeave(false);
       if (then === 'done' || r.result === 'done') nav(`${base}/done`, { replace: true });
       else {

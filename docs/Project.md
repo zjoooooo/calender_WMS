@@ -895,6 +895,7 @@ for t in plan.tasks:
 - "Only this date" is pre-selected, except when the date inherits an empty list (a route just created, before its first customers): then "and all following" is pre-selected, so the first customers become the route's list on every date it runs.
 - On a route that was already split (§6.5), "and all following" also reaches its later records: the customers added, removed, moved or re-noted on D are applied to their lists too. A later record that already had its own changes (for example a customer added from 2 Dec) keeps them: a list equal to the one the clerk started from becomes the new list, any other list gets only the clerk's changes.
 - The dialog lists "Not changed: Mon 23 Nov, Fri 27 Nov (they have their own list)". `GET /api/routes/{id}` returns the overrides of every live record of a split route, so these dates are named whichever record the drawer was opened on.
+- Next to that list it names, before the save, every later record whose customers after an "and all following" save would differ from the list being saved (§6.5, "Said before the save"): "Already planned from Wed 2 Dec: that part keeps its own list. It also has Lim Trading and does not have Tan Hardware." A record that differs only in order is not named.
 - For today's container with a run, it adds the driver impact, computed client-side from the loaded payload. Example: "N1 (Ali, 3/8) will get 1 new stop".
 
 ### 6.3 Skip / restore / reset / delete
@@ -936,6 +937,11 @@ for t in plan.tasks:
   - **Change schedule from D** splits the record that runs on D, which may be a later one than the record opened; when D is the first day of a later record, that record takes the new schedule (nothing to split). The later records get the same weekday and stop-list changes. The `end` of the request is the route's end; an `end` equal to the route's current end is no change. The form sends `end` only when the clerk changed it, so an end that equals a split boundary is applied.
   - **Delete route** deletes every live record. An ended record is history: an edit or delete of it stays on it. The Routes page offers no "Edit route" on an ended part of a route that still runs; over the API, moving such a part's end into a later part is refused (422 VALIDATION, field `end`), not reported as CODE_IN_USE against the route's own record.
   - API payloads carry `series` and the route's real period, `route_start` / `route_end` (the first record's start, the last record's end), next to the record's own `start` / `end`, so the drawer header, Edit route and the Routes page can show one route.
+- **Said before the save** (Round 6, option A). A later record that has its own planned change keeps it, and the clerk is told so before saving. Every screen that makes such an edit names, in English and Chinese, each other record whose result is not simply the clerk's version, and what it will be:
+  - **Edit route / schedule**, Apply from today or from date D (also reached from the Routes page, "Change schedule from date…"). The change starts from the opened record's schedule (from today) or from the schedule of the record that runs on D (from D), and reaches every other record (from today) or the records after D (from D). Each of them whose weekdays (or Sunday / PH) differ from the schedule the change starts from gets a notice that updates while the clerk ticks weekdays or picks the date: "Already planned: from Mon 21 Dec this route runs Tue Thu. That plan is kept; the weekdays you add or remove apply to it too, so from Mon 21 Dec it runs Tue Thu Sat." / "已有安排：12月21日起这条路线是 周二、周四。这个安排会保留；你加上或去掉的星期也会同样改到它上面，所以12月21日起是 周二、周四、周六。" When nothing the clerk changed reaches it, the notice only says that it is kept. A record that runs now is named "until Sun 20 Dec". A record that the new end removes is not named.
+  - With Apply from D, when D falls in another record than the opened one and that record has a schedule of its own, the form's schedule replaces it from D, and the notice says so: "Already planned: from Mon 21 Dec this route runs Tue Thu. From Mon 28 Dec it runs Mon Wed Fri instead, as set here."
+  - **Customer lists**: the scope dialog's "and all following" (§6.2) and the Routes page template editor (from today: every other record; from D: the records after D). Each record whose customers after the save differ from the list being saved is named with the customers it also has and the ones it does not have: "Already planned from Wed 2 Dec: that part keeps its own list. It also has Lim Trading and does not have Tan Hardware." Order differences are not named. When the template editor's D falls in another record than the opened one and that record has customers of its own, its list is replaced from D: "Already planned from Wed 2 Dec to Sun 20 Dec: that part has its own list. It also has Lim Trading. From Mon 7 Dec the list saved here replaces it."
+  - **Exact by construction.** `GET /api/routes/{id}` returns `parts`: the records an edit of this one reaches (the live records, sorted by start; only this one when it has ended), each with `start`, `end`, `days` / `sun`, `ph` and its template `stops`. `frontend/src/office/routeCarry.ts` mirrors `Plan::carry()` and `Plan::mergeStops()` one to one, and what PATCH, change-schedule and PUT … scope=following leave in the parts. Edit route / schedule runs that mirror on the writes the form would send (`planEdit`). The shared cases in `backend/tests/fixtures/split_carry_cases.json` (T2, E2, C2, T5, T6 and more) are run against the server (`plan_split_chain_test.php`) and against the mirror (`routeCarry.test.ts`), and the office e2e compares each notice with what the server stored. Customer names come from the customer list.
 
 ### 6.6 "+ Route" in a day cell (only `can_create`)
 - **Work day**: [Regular · repeats weekly] or [⚡ Adhoc · this date only].
@@ -1291,11 +1297,12 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
   - The End and Delete dialogs show their own error. It is cleared when a dialog opens or closes, and the drawer footer does not repeat it.
 - **Job taken back by the office**: when the office released or reassigned a job (`released_by_office`), the status detail (drawer, tooltips) reads "Needs driver · taken back by office · 3/10" / "待接手 · 办公室已收回 · 3/10", as "left by Bala" does after a driver leaves.
 - **Dialogs**:
-  - Scope
+  - Scope: below "Not changed", one notice per later part whose customers after an "and all following" save differ from the list being saved (§6.2).
   - Copy to date
   - Edit route / schedule:
     - Start and End are the whole route's (the first part's start and the route's end), also when the form is opened from a later part of a split route. Only the fields the clerk changed are sent. A changed end goes to the part that runs on that date, and a changed start to the first part that still runs. Code, colour, name, note and weekdays go to the opened record, and the server carries them to the other parts. "From date D" goes to the part that runs on D.
     - R20: the form keeps the version it was loaded from. When someone else saves the route meanwhile, every field the clerk did not touch takes their value, and a banner names the fields ("Someone else changed this route meanwhile: Name. …"). The first Save is refused once (`STALE_REVISION`); the second one sends only the clerk's own changes, so the other clerk's change is never silently reverted.
+    - Under "Apply schedule changes", one notice per other part of a split route that has a schedule of its own: what it keeps and what it will run after the save ("Already planned: from Mon 21 Dec this route runs Tue Thu. That plan is kept; …"). It updates while the clerk ticks weekdays, switches Apply or picks the date (§6.5, "Said before the save").
   - Route create (one form per type)
   - Urgent pickup
   - Task create / edit
@@ -1311,6 +1318,7 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
   - Its header shows the whole route's period.
   - For a part of a split route, the note names the other parts' dates. When the server links the parts (`series`), "Change the list from today" reaches every part: "The route's default list. It applies from today to every part of E2 (11 Nov – 19 Nov, from 20 Nov); …". Without it, the note says which dates keep their own list: "This list is used 11 Nov – 19 Nov; … E2 has a separate list on its other dates (from 20 Nov): this change does not reach them."
   - "From date D" goes to the part that runs on D.
+  - Before the save, below the Apply choice, one notice per other part whose customers after the save differ from the list being saved, naming the customers it also has and the ones it does not have (§6.5, "Said before the save").
 - Actions: [Change schedule from date…], [End], [Delete]. On a split route they act on the whole route: [Delete] names every part it removes, and [End] goes to the part that runs on the chosen date.
 
 **Tasks page.**
@@ -1470,6 +1478,9 @@ GET    /api/routes?ended=0      -> [{"id","code","color","type","name","days"|"s
                                      "stop_count","next_date","route_next_date","today_status","rev"}]
        (one row per route record; the records of a split route share "series" and route_next_date is the route's next date)
 GET    /api/routes/{id}         -> Route + "overrides":[override dated >= today, of every live record of a split route] + "next_date","route_next_date"
+                                   + "parts":[{"id","start","end","days","sun","ph","stops"}]
+       (parts: the records an edit of this one reaches, sorted by start: the live records of a split route, or only
+        this one when it has ended; null for a one-off. The office predicts from them what a later part keeps, §6.5)
 POST   /api/routes
   {"type":"regular","code":"N1","color":null,"name":"North 1","note":"","start":"2026-11-16","end":null,"days":[1,3,5],"stops":[{"customer_id":12,"note":"3 bins"}]}
   {"type":"special","code":"S1","name":"Sunday Market","start":"2026-11-15","sun":true,"ph":true,"stops":[…]}
@@ -2037,6 +2048,7 @@ WantedBy=timers.target
     - `api.ts` mappers;
     - the search and highlight filter;
     - `StopList` reordering: a drag end, ↑ ↓ and "move to #" produce the same draft order (`arrayMove`);
+    - `routeCarry.ts`, the mirror of `Plan::carry()` / `Plan::mergeStops()`: the shared cases of `backend/tests/fixtures/split_carry_cases.json` (also run against the server by `plan_split_chain_test.php`) and the kept-plan notices in English and Chinese;
     - the rollover refetch: a poll response (or the `day_ends_at` timer) with a new `today` triggers a `/api/meta` refetch, a Today reload, and the invalidation of every query, including a calendar range that does not contain today;
     - i18n key parity.
 - **Drag and drop, manual**: reorder a 30-stop route in the drawer with a mouse (Chrome, Edge), with touch on a tablet (press and hold the handle; a swipe still scrolls), and with the keyboard.

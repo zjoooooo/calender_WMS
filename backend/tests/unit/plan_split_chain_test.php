@@ -303,6 +303,59 @@ return (static function (): array {
             T::eq([21], array_column($route($e, $a)['stops'], 'customer_id'));
             T::eq([21], array_column($route($e, $b)['stops'], 'customer_id'));
         },
+        'SPLIT-10 (Round 6): GET /api/routes/{id} returns the parts an edit reaches, with their schedule and list' => function () use ($env, $create, $put, $cs, $stops) {
+            $e = $env();
+            $a = $create($e, 'P1', '2026-11-11', [1, 3, 5], [12, 40]);
+            $b = T::ok($put($e, $a, '2026-12-02', ['scope' => 'following', 'stops' => $stops(12, 40, 21)]))['route']['id'];
+            $c = T::ok($cs($e, $b, ['from' => '2026-12-21', 'days' => [2, 4]]))['created']['id'];
+            T::ok($put($e, $b, '2026-12-09', ['scope' => 'this', 'stops' => $stops(21)])); // an override is not a part
+            $part = static fn (int $id, string $start, ?string $end, array $days, array $cids) => ['id' => $id, 'start' => $start, 'end' => $end,
+                'days' => $days, 'sun' => null, 'ph' => null, 'stops' => $stops(...$cids)];
+            $parts = [$part($a, '2026-11-11', '2026-12-01', [1, 3, 5], [12, 40]), $part($b, '2026-12-02', '2026-12-20', [1, 3, 5], [12, 40, 21]),
+                $part($c, '2026-12-21', null, [2, 4], [12, 40, 21])];
+            foreach ([$a, $b, $c] as $id) {
+                T::eq($parts, T::ok($e->call('GET', "/api/routes/$id", null, 'mei'))['parts'], "the same parts from record $id");
+            }
+            // special parts carry Sunday / PH; a one-off has none
+            $s = T::ok($e->call('POST', '/api/routes', ['type' => 'special', 'code' => 'PS', 'name' => 'Sun', 'start' => '2026-11-15', 'sun' => true, 'ph' => false, 'stops' => $stops(21)], 'mei'), 201);
+            T::eq([['id' => $s['id'], 'start' => '2026-11-15', 'end' => null, 'days' => null, 'sun' => true, 'ph' => false, 'stops' => $stops(21)]],
+                T::ok($e->call('GET', "/api/routes/{$s['id']}", null, 'mei'))['parts']);
+            T::eq(null, T::ok($e->call('GET', '/api/routes/41', null, 'mei'))['parts']);
+            // once the first part has ended, an edit of it stays on it: its parts are itself only
+            $e->setNow('2026-12-03T10:00:00+08:00');
+            T::eq([$a], array_column(T::ok($e->call('GET', "/api/routes/$a", null, 'mei'))['parts'], 'id'));
+            T::eq([$b, $c], array_column(T::ok($e->call('GET', "/api/routes/$c", null, 'mei'))['parts'], 'id'));
+        },
+        'SPLIT-11 (Round 6): the shared carry cases (fixtures/split_carry_cases.json) are what the server stores' => function () {
+            // The office predicts these results before a save (frontend/src/office/routeCarry.ts, tested on the same file).
+            $fx = json_decode((string) file_get_contents(__DIR__ . '/../fixtures/split_carry_cases.json'), true);
+            $basic = json_decode((string) file_get_contents(__DIR__ . '/../fixtures/basic.json'), true)['plan'];
+            T::true(count($fx['cases'] ?? []) >= 10, 'the cases are loaded');
+            foreach ($fx['cases'] as $case) {
+                $routes = $basic['routes'];
+                $known = [];
+                foreach ($case['parts'] as $p) {
+                    $sched = $case['type'] === 'regular' ? ['days' => $p['days']] : ['sun' => $p['sun'], 'ph' => $p['ph']];
+                    $routes[] = ['id' => $p['id'], 'code' => 'CC', 'color' => 2, 'type' => $case['type'], 'name' => 'Carry case', 'note' => '', 'rev' => 1,
+                        'start' => $p['start'], 'end' => $p['end']] + $sched + ['series' => $case['parts'][0]['id'], 'stops' => $p['stops']];
+                    $known[$p['id']] = true;
+                }
+                $e = TestEnv::make($fx['now'], ['fixture' => 'basic', 'plan' => ['routes' => $routes, 'seq' => ['customer' => 70, 'route' => 500, 'task' => 10]],
+                    'days' => [$fx['today'] => ['date' => $fx['today'], 'plan' => null, 'runs' => [], 'dropped_runs' => []]]]);
+                $call = $case['call'];
+                $res = match ($call['kind']) {
+                    'patch' => $e->call('PATCH', "/api/routes/{$call['id']}", ['rev' => 1] + $call['body'], 'mei'),
+                    'schedule' => $e->call('POST', "/api/routes/{$call['id']}/change-schedule", ['rev' => 1] + $call['body'], 'mei'),
+                    'following' => $e->call('PUT', "/api/routes/{$call['id']}/dates/{$call['date']}", ['rev' => 1, 'scope' => 'following'] + $call['body'], 'mei'),
+                };
+                T::ok($res);
+                $got = T::ok($e->call('GET', "/api/routes/{$case['parts'][0]['id']}", null, 'mei'))['parts'];
+                foreach ($got as $k => $p) {
+                    $got[$k]['id'] = isset($known[$p['id']]) ? $p['id'] : 0; // a part the call created
+                }
+                T::eq($case['after'], $got, $case['name']);
+            }
+        },
         'a record stored without `series` is its own route: membership is never guessed from code and dates' => function () use ($env, $stops, $route, $dates, $wd) {
             // 46 ended 30 Nov and 47 starts 1 Dec with the same code: an "End route + new route" pair looks exactly
             // like a split, so without an explicit `series` they stay two routes.
