@@ -1,0 +1,569 @@
+<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body>
+<title>WMS 路线日历</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Space+Grotesk:wght@500;700&display=swap">
+<style>
+/* Layout: ops board. Neutral chrome so the per-route colour bars are the only colour signal; codes in mono for fast scanning. */
+:root{
+  --bg:#F5F6F8; --surface:#FFFFFF; --surface-2:#EDF0F4; --fg:#18202B; --muted:#5A6575; --line:#DADFE6;
+  --ink:#18202B; --ink-fg:#FFFFFF; --today:#0F766E; --rest:#FDF0F2; --ph:#BE123C; --ok:#15803D; --warn:#B45309; --dim:.18;
+  --font-ui:"Inter","PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;
+  --font-head:"Space Grotesk","PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,sans-serif;
+  --font-code:"JetBrains Mono",ui-monospace,"SFMono-Regular",Consolas,monospace;
+  --r1:#4E79A7; --r2:#F28E2B; --r3:#E15759; --r4:#76B7B2; --r5:#59A14F; --r6:#EDC948; --r7:#B07AA1; --r8:#FF9DA7; --r9:#9C755F; --r10:#17BECF;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#0E131A; --surface:#151B24; --surface-2:#1D2531; --fg:#E5E9EF; --muted:#97A1B0; --line:#2A3340;
+  --ink:#E5E9EF; --ink-fg:#0E131A; --today:#2DD4BF; --rest:#2A1A21; --ph:#FB7185; --ok:#4ADE80; --warn:#FBBF24; --dim:.2; color-scheme:dark } }
+:root[data-theme="dark"]{
+  --bg:#0E131A; --surface:#151B24; --surface-2:#1D2531; --fg:#E5E9EF; --muted:#97A1B0; --line:#2A3340;
+  --ink:#E5E9EF; --ink-fg:#0E131A; --today:#2DD4BF; --rest:#2A1A21; --ph:#FB7185; --ok:#4ADE80; --warn:#FBBF24; --dim:.2; color-scheme:dark }
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--font-ui);font-size:14px;line-height:1.45}
+.wrap{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:14px 40px;max-width:1500px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--today);outline-offset:2px}
+.code{font-family:var(--font-code);font-weight:700;letter-spacing:.02em}
+.num{font-variant-numeric:tabular-nums}
+
+.top{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px}
+.brand{font-family:var(--font-head);font-weight:700;font-size:20px;letter-spacing:.01em}
+.brand small{font-family:var(--font-ui);font-weight:500;font-size:12px;color:var(--muted);margin-left:8px}
+.tabs{display:flex;gap:4px;background:var(--surface-2);padding:3px;border-radius:8px}
+.tabs button{border:0;background:transparent;padding:6px 12px;border-radius:6px;font-weight:500;color:var(--muted)}
+.tabs button[aria-selected="true"]{background:var(--surface);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.spacer{flex:1}
+.who{font-size:12px;color:var(--muted)}
+.note{font-size:12.5px;color:var(--muted);background:var(--surface);border:1px dashed var(--line);border-radius:8px;padding:8px 12px}
+.note b{color:var(--fg)}
+
+.bar{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center}
+.btn{border:1px solid var(--line);background:var(--surface);padding:6px 11px;border-radius:7px;font-weight:500}
+.btn:hover{border-color:var(--muted)}
+.btn.primary{background:var(--ink);color:var(--ink-fg);border-color:var(--ink)}
+.btn.urgent{border-color:var(--warn);color:var(--warn);font-weight:600}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.seg button{border:0;background:var(--surface);padding:6px 12px}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--ink-fg)}
+.range{font-family:var(--font-head);font-weight:700;font-size:16px;min-width:0}
+.search{border:1px solid var(--line);background:var(--surface);border-radius:7px;padding:6px 10px;width:220px;max-width:100%}
+.tchip{border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:4px 10px;font-size:12.5px;display:inline-flex;gap:6px;align-items:center}
+.tchip[aria-pressed="false"]{opacity:.45;text-decoration:line-through}
+
+.legend{display:flex;flex-wrap:wrap;gap:6px}
+.lchip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:3px 8px 3px 0;font-size:12px;overflow:hidden}
+.lchip::before{content:"";width:5px;align-self:stretch;background:var(--rc)}
+.lchip.on{border-color:var(--fg);box-shadow:0 0 0 1px var(--fg)}
+.lchip .code{font-size:12px}
+.lchip.adhoc{border-style:dashed}
+
+.tt{font-family:var(--font-code);font-size:10.5px;font-weight:700;border:1px solid var(--line);border-radius:4px;padding:0 4px;color:var(--muted);line-height:16px}
+.tt.A{border-color:var(--warn);color:var(--warn)}
+
+/* week grid */
+.week{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px}
+.day{background:var(--surface);border:1px solid var(--line);border-radius:10px;display:flex;flex-direction:column;min-width:0}
+.day.rest{background:var(--rest)}
+.day.today{border-color:var(--today);box-shadow:0 0 0 1px var(--today)}
+.dh{padding:8px 10px 6px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:2px}
+.dh .d1{display:flex;align-items:baseline;gap:6px}
+.dh .dow{font-weight:600}
+.dh .dt{font-family:var(--font-head);font-weight:700;font-size:18px}
+.dh .lock{margin-left:auto;font-size:11px;color:var(--muted)}
+.dh .todaytag{margin-left:auto;font-size:11px;font-weight:700;color:var(--today)}
+.dh .sum{font-size:11.5px;color:var(--muted)}
+.phtag{display:inline-block;font-size:11px;font-weight:600;color:var(--ph);border:1px solid currentColor;border-radius:4px;padding:0 5px;width:max-content;max-width:100%}
+.occs{display:flex;flex-direction:column;gap:5px;padding:7px}
+.occ{position:relative;display:grid;grid-template-columns:auto 1fr;column-gap:7px;text-align:left;border:1px solid var(--line);background:var(--surface);border-radius:7px;padding:5px 8px 7px 10px;overflow:hidden;transition:opacity .15s}
+.day.rest .occ{background:var(--surface)}
+.occ::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;background:var(--rc)}
+.occ:hover{border-color:var(--muted)}
+.occ.adhoc{border-style:dashed;border-color:var(--warn)}
+.occ .l1{grid-column:1/-1;display:flex;align-items:center;gap:6px;min-width:0}
+.occ .l1 .code{font-size:13.5px}
+.occ .nm{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1}
+.occ .l2{grid-column:1/-1;font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.occ .l2 .ok{color:var(--ok);font-weight:600}
+.occ .l2 .warn{color:var(--warn);font-weight:600}
+.occ .pg{position:absolute;left:5px;right:0;bottom:0;height:3px;background:var(--surface-2)}
+.occ .pg i{display:block;height:100%;background:var(--muted)}
+.occ.dim,.mchip.dim,.lchip.dim{opacity:var(--dim)}
+.paused{margin:0 7px 7px;border:1px dashed var(--line);border-radius:7px;font-size:12px;color:var(--muted);background:transparent;text-align:left;padding:6px 8px}
+.pausedlist{display:flex;flex-direction:column;gap:4px;padding:0 7px 7px}
+.pausedlist .occ{opacity:.6;filter:grayscale(.7)}
+.pausedlist .occ.dim{opacity:calc(var(--dim) * .7)}
+.addr{margin:auto 7px 7px;border:1px dashed var(--line);background:transparent;border-radius:7px;padding:5px;font-size:12px;color:var(--muted)}
+.addr:hover{color:var(--fg);border-color:var(--muted)}
+.empty{font-size:12px;color:var(--muted);padding:6px 4px}
+
+/* month */
+.month{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px}
+.mh{font-size:12px;font-weight:600;color:var(--muted);padding:0 4px}
+.mcell{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px;min-height:118px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.mcell.rest{background:var(--rest)}
+.mcell.out{opacity:.45}
+.mcell.past .mchips{opacity:.75}
+.mcell.today{border-color:var(--today);box-shadow:0 0 0 1px var(--today)}
+.mtop{display:flex;align-items:center;gap:6px}
+.mtop button{border:0;background:transparent;font-family:var(--font-head);font-weight:700;font-size:15px;padding:0}
+.mtop .cnt{margin-left:auto;font-size:11px;color:var(--muted)}
+.mchips{display:flex;flex-wrap:wrap;gap:3px}
+.mchip{font-family:var(--font-code);font-weight:700;font-size:10.5px;border:1px solid var(--line);background:var(--surface);border-left:4px solid var(--rc);border-radius:3px;padding:0 4px;line-height:16px}
+.mchip.adhoc{border-style:dashed;border-left-style:solid;border-color:var(--warn);border-left-color:var(--rc)}
+.mchip.paused{opacity:.4;text-decoration:line-through}
+
+/* drawer */
+.scrim{position:fixed;inset:0;background:rgba(10,14,20,.35);z-index:20}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(460px,100%);background:var(--surface);border-left:1px solid var(--line);z-index:21;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);padding-right:env(safe-area-inset-right,0px)}
+.dwh{padding:14px 16px 12px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:6px;position:relative}
+.dwh::before{content:"";position:absolute;left:0;top:0;bottom:0;width:6px;background:var(--rc)}
+.dwh .row{display:flex;align-items:center;gap:8px}
+.dwh .code{font-size:22px}
+.dwh .x{margin-left:auto;border:1px solid var(--line);background:var(--surface);border-radius:6px;width:30px;height:30px}
+.dwh .rule{font-size:12.5px;color:var(--muted)}
+.status{font-size:12.5px;background:var(--surface-2);border-radius:7px;padding:7px 9px}
+.dwb{flex:1;overflow:auto;padding:10px 16px;display:flex;flex-direction:column;gap:6px}
+.stop{display:grid;grid-template-columns:22px 1fr auto;gap:8px;align-items:start;border:1px solid var(--line);border-radius:8px;padding:7px 8px}
+.stop.done{background:var(--surface-2)}
+.stop .seq{font-family:var(--font-code);font-weight:700;color:var(--muted);text-align:right;padding-top:1px}
+.stop .sn{font-weight:600}
+.stop .sa{font-size:11.5px;color:var(--muted)}
+.stop .wt{font-size:12px;margin-top:3px;display:flex;flex-wrap:wrap;gap:4px 10px}
+.wtag{font-family:var(--font-code);font-size:10.5px;font-weight:700;border-radius:4px;padding:0 5px;border:1px solid var(--line);color:var(--muted)}
+.ops{display:flex;gap:3px}
+.ops button{border:1px solid var(--line);background:var(--surface);border-radius:5px;width:26px;height:26px;font-size:12px;line-height:1}
+.ops button:disabled{opacity:.35;cursor:not-allowed}
+.dwf{border-top:1px solid var(--line);padding:12px 16px;display:flex;flex-direction:column;gap:8px}
+.scope{display:flex;flex-direction:column;gap:6px;border:1px solid var(--warn);border-radius:8px;padding:8px 10px;font-size:13px}
+.scope label{display:flex;gap:6px;align-items:center}
+.lockmsg{font-size:12.5px;color:var(--muted)}
+.dwf .acts{display:flex;gap:8px;flex-wrap:wrap}
+
+.pop{position:fixed;z-index:30;background:var(--surface);border:1px solid var(--line);border-radius:9px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:6px;display:flex;flex-direction:column;min-width:230px}
+.pop button{border:0;background:transparent;text-align:left;padding:7px 9px;border-radius:6px}
+.pop button:hover{background:var(--surface-2)}
+.pop .ph{font-size:11.5px;color:var(--muted);padding:4px 9px}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--ink-fg);padding:9px 14px;border-radius:8px;z-index:40;font-size:13px;max-width:calc(100% - 32px)}
+
+/* driver preview */
+.phones{display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start}
+.phone{width:300px;max-width:100%;border:1px solid var(--line);border-radius:26px;background:var(--surface);padding:14px 12px 16px;display:flex;flex-direction:column;gap:9px;box-shadow:0 2px 10px rgba(0,0,0,.06)}
+.phone h3{font-family:var(--font-head);font-size:15px;margin:0}
+.phone .cap{font-size:11.5px;color:var(--muted)}
+.step{font-size:11px;font-weight:700;color:var(--today);letter-spacing:.06em}
+.pick{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;border:1px solid var(--line);border-radius:10px;padding:9px 10px 9px 0;position:relative;overflow:hidden;text-align:left;background:var(--surface)}
+.pick::before{content:"";width:6px;background:var(--rc);grid-row:1/3}
+.pick .code{font-size:20px}
+.pick .pm{font-size:11.5px;color:var(--muted);grid-column:2}
+.pick.sel{border-color:var(--fg);box-shadow:0 0 0 1px var(--fg)}
+.pick.taken{opacity:.45}
+.big{border:0;border-radius:10px;padding:12px;font-weight:700;font-size:15px;background:var(--ink);color:var(--ink-fg)}
+.big.ghost{background:transparent;color:var(--fg);border:1px solid var(--line);font-weight:600}
+.field{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted)}
+.field input,.field select{font:inherit;color:var(--fg);border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:8px 10px;width:100%}
+.kg{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:8px}
+.kg .unit{color:var(--muted);font-size:12px}
+.sig{height:62px;border:1px dashed var(--line);border-radius:8px;display:grid;place-items:center;color:var(--muted);font-size:12px}
+.mini{display:flex;flex-direction:column;gap:4px}
+.mini div{display:flex;gap:8px;font-size:12.5px;align-items:center}
+.mini .s{font-family:var(--font-code);font-weight:700;color:var(--muted);width:18px;text-align:right}
+.mini .d{color:var(--ok)}
+.topline{display:flex;justify-content:space-between;align-items:center;font-size:12px}
+.topline a,.linkbtn{color:var(--warn);font-weight:600;border:0;background:none;padding:0;font-size:12px}
+
+@media (max-width:1100px){ .week{grid-template-columns:repeat(4,minmax(0,1fr))} }
+@media (max-width:760px){
+  .week{grid-template-columns:1fr}
+  .occs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+  .month{gap:3px}
+  .mcell{min-height:84px;padding:4px}
+  .mh{font-size:11px;padding:0}
+  .mchip{font-size:9.5px;padding:0 2px;border-left-width:3px}
+  .search{width:100%}
+}
+@media (max-width:420px){ .occs{grid-template-columns:1fr} }
+@media (prefers-reduced-motion:reduce){ *{transition:none!important} }
+</style>
+
+<div class="wrap">
+  <div class="top">
+    <div class="brand">WMS 路线日历<small>静态样例 · 假数据</small></div>
+    <div class="tabs" role="tablist">
+      <button role="tab" id="tab-cal" aria-selected="true">办公室 · 日历</button>
+      <button role="tab" id="tab-drv" aria-selected="false">司机端预览</button>
+    </div>
+    <div class="spacer"></div>
+    <div class="who">登录：办公室 admin · 今天按 2026-11-11（周三）演示</div>
+  </div>
+
+  <div class="note"><b>怎么看：</b>点路线 <span class="code">编号</span>（下面一排或任何格子里）= 整个视图高亮这条路线；点路线条 = 打开详情（客户顺序、重量、改动范围）；搜索框可输入编号或客户名。11/9 周一是屠妖节补假：regular 自动暂停，special 照跑。</div>
+
+  <section id="view-cal" class="bar-wrap" style="display:flex;flex-direction:column;gap:10px">
+    <div class="bar">
+      <button class="btn" id="prev" aria-label="上一段">‹</button>
+      <button class="btn" id="todayBtn">今天</button>
+      <button class="btn" id="next" aria-label="下一段">›</button>
+      <div class="range" id="range"></div>
+      <div class="spacer"></div>
+      <div class="seg" role="group" aria-label="视图">
+        <button id="vWeek" aria-pressed="true">周</button>
+        <button id="vMonth" aria-pressed="false">月</button>
+      </div>
+      <button class="btn urgent" id="urgent">⚡ 临时收运</button>
+    </div>
+    <div class="bar">
+      <input class="search" id="q" type="search" placeholder="找路线编号或客户名，例如 E2 / Kopi">
+      <button class="tchip" data-type="R" aria-pressed="true"><span class="tt">R</span>Regular</button>
+      <button class="tchip" data-type="S" aria-pressed="true"><span class="tt">S</span>Special</button>
+      <button class="tchip" data-type="A" aria-pressed="true"><span class="tt A">⚡A</span>Adhoc</button>
+      <button class="btn" id="clearHl" hidden>清除高亮</button>
+    </div>
+    <div class="legend" id="legend" aria-label="路线编号，点一下高亮"></div>
+    <div id="grid"></div>
+  </section>
+
+  <section id="view-drv" hidden>
+    <div class="phones">
+      <div class="phone">
+        <div class="step">第 1 步 · 选路线</div>
+        <h3>今天 11月11日 周三</h3>
+        <div class="cap">司机：刘洋 · 只显示今天可以跑的路线</div>
+        <div id="drvPick" style="display:flex;flex-direction:column;gap:6px"></div>
+      </div>
+      <div class="phone">
+        <div class="step">第 2 步 · 确认路线</div>
+        <h3><span class="code">W2</span> 西区二线 · Clementi</h3>
+        <div class="cap">8 个客户，按顺序收</div>
+        <label class="field" for="truck">今天开的车（车牌）
+          <select id="truck"><option>SBA 1234 X</option><option>SBB 5678 Z</option><option>SGX 9021 K</option></select>
+        </label>
+        <div class="mini" id="drvList"></div>
+        <button class="big">确认路线，开始收运</button>
+      </div>
+      <div class="phone">
+        <div class="step">第 3 步 · 在客户处提交</div>
+        <div class="topline"><span>第 4 站 / 共 8 站</span><button class="linkbtn">⇄ 换路线</button></div>
+        <h3>Kopi Tiam 88</h3>
+        <div class="cap">Blk 312 Clementi Ave 4 · 有 OTC 和 REL 两种</div>
+        <div class="kg"><span class="wtag">OTC</span><input class="field" style="font:inherit;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--surface);color:var(--fg);width:100%" inputmode="decimal" id="kgOtc" value="128.5"><span class="unit">kg</span></div>
+        <div class="kg"><span class="wtag">REL</span><input style="font:inherit;border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--surface);color:var(--fg);width:100%" inputmode="decimal" id="kgRel" placeholder="输入重量"><span class="unit">kg</span></div>
+        <label class="field" for="ticket">过磅单号<input id="ticket" value="WB-261111-0042"></label>
+        <button class="big ghost">📷 拍照（已拍 1 张）</button>
+        <div class="sig">客户签名区（手指签）</div>
+        <label class="field" for="rmk">备注<input id="rmk" placeholder="可不填"></label>
+        <button class="big">提交本站</button>
+        <button class="big ghost">没垃圾 / 关门</button>
+      </div>
+      <div class="phone">
+        <div class="step">中途换路线</div>
+        <h3>⇄ 离开 <span class="code">W2</span>？</h3>
+        <div class="cap">已完成 3 站，剩 5 站。已提交的 3 站记录保留，记在你名下。</div>
+        <div class="mini">
+          <div><span class="s">1</span><span class="d">✓</span>Jade 茶楼</div>
+          <div><span class="s">2</span><span class="d">✓</span>Metro 办公楼</div>
+          <div><span class="s">3</span><span class="d">✓</span>Lim 印刷厂</div>
+          <div><span class="s">4</span>○ Kopi Tiam 88</div>
+          <div><span class="s">…</span>○ 还有 4 站</div>
+        </div>
+        <label class="field" for="why">换线原因<select id="why"><option>办公室派去临时任务</option><option>车坏了</option><option>其他</option></select></label>
+        <div class="cap">剩下的 5 站会显示成「待接手」，办公室或其他司机可以接着跑。</div>
+        <button class="big">换到 ⚡A2 临时 · 建筑工地</button>
+        <button class="big ghost">取消，继续跑 W2</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+(function(){
+const TODAY='2026-11-11';
+const HOL={'2026-11-08':'屠妖节','2026-11-09':'屠妖节（补假）','2026-12-25':'圣诞节','2027-01-01':'元旦'};
+const DOWCN=['','周一','周二','周三','周四','周五','周六','周日'];
+const DCN=['','一','二','三','四','五','六','日'];
+const MWF=[1,3,5], TTS=[2,4,6], ALL=[1,2,3,4,5,6];
+const ROUTES=[
+ {code:'N1',name:'北区一线 · Woodlands',type:'R',days:ALL,c:1,area:'Woodlands Ave'},
+ {code:'N2',name:'北区二线 · Yishun',type:'R',days:MWF,c:2,area:'Yishun Ring Rd'},
+ {code:'N3',name:'三巴旺 · Sembawang',type:'R',days:TTS,c:2,area:'Sembawang Dr'},
+ {code:'E1',name:'东区一线 · Tampines',type:'R',days:ALL,c:3,area:'Tampines St'},
+ {code:'E2',name:'东区二线 · Bedok',type:'R',days:MWF,c:4,area:'Bedok North Rd'},
+ {code:'E3',name:'巴西立 · Pasir Ris',type:'R',days:TTS,c:4,area:'Pasir Ris Dr'},
+ {code:'W1',name:'西区一线 · Jurong West',type:'R',days:ALL,c:5,area:'Jurong West St'},
+ {code:'W2',name:'西区二线 · Clementi',type:'R',days:MWF,c:6,area:'Clementi Ave'},
+ {code:'W3',name:'大士工业区 · Tuas',type:'R',days:ALL,c:7,area:'Tuas South Ave'},
+ {code:'C1',name:'中区一线 · Toa Payoh',type:'R',days:ALL,c:8,area:'Toa Payoh Lor'},
+ {code:'C2',name:'中区二线 · Bukit Merah',type:'R',days:TTS,c:9,area:'Bukit Merah View'},
+ {code:'C3',name:'牛车水 · Chinatown',type:'R',days:ALL,c:10,area:'Smith St'},
+ {code:'K1',name:'加冷 · Kallang',type:'R',days:MWF,c:1,area:'Kallang Bahru'},
+ {code:'K2',name:'实龙岗 · Serangoon',type:'R',days:TTS,c:1,area:'Serangoon Ave'},
+ {code:'T1',name:'淡滨尼工业 · Tampines Ind',type:'R',days:ALL,c:3,area:'Tampines Industrial Ave'},
+ {code:'H1',name:'医院诊所专线',type:'R',days:ALL,c:9,area:'Outram Rd'},
+ {code:'S1',name:'周日市场线',type:'S',sun:true,ph:true,c:5,area:'Geylang Serai'},
+ {code:'S2',name:'假日餐饮线',type:'S',sun:true,ph:true,c:7,area:'Orchard Rd'},
+ {code:'S3',name:'公假医院线',type:'S',sun:false,ph:true,c:10,area:'Jalan Bukit Merah'},
+ {code:'A1',name:'临时 · ABC 餐厅溢满',type:'A',date:'2026-11-12',c:2,area:'Tampines St',note:'11/11 客户来电：明天加收 2 家',n:2},
+ {code:'A2',name:'临时 · 建筑工地清运',type:'A',date:'2026-11-11',c:6,area:'Jurong East St',note:'11/11 早上来电，今天要收',n:1},
+];
+const POOL=['ABC 餐厅','Kopi Tiam 88','FairPrice 超市','Hawker 21 食阁','Golden 面包坊','Lucky 海鲜楼','Prime 物流仓','Sunrise 诊所','Tan 五金行','Ocean 酒店','Jade 茶楼','Metro 办公楼','Green 学校食堂','Lim 印刷厂','City 健身房','Orchid 花店','Harbour 冷库','Star 汽车维修','Happy 托儿所','Royal 宴会厅','Seng 杂货店','Bright 工厂','Unity 社区中心','Pearl 公寓','Fortune 酒楼','Ace 电子厂','Nanyang 食品厂','Bayview 商场','Hill 小学','Peony 酒家','Kim 咖啡店','Delta 冷冻厂'];
+const DRIVERS=['陈伟','李明','黄强','王芳','张伟','刘洋','赵磊','周杰','吴敏','郑华','孙丽','林峰','何静','高翔','许涛','罗刚'];
+function h(s){let x=2166136261;for(let i=0;i<s.length;i++){x^=s.charCodeAt(i);x=Math.imul(x,16777619)}return x>>>0}
+// stops per route: same list every day (user decision)
+ROUTES.forEach((r,ri)=>{
+  const n=r.n||(6+h(r.code)%5);
+  r.stops=[];
+  for(let k=0;k<n;k++){
+    const idx=(h(r.code+'s'+k))%POOL.length;
+    const t=h(r.code+'t'+k)%20; const types=t<12?['OTC']:t<15?['REL']:['OTC','REL'];
+    r.stops.push({name:POOL[idx]+(r.type==='A'&&k===0&&r.code==='A1'?'':''),addr:'Blk '+(100+h(r.code+'a'+k)%800)+' '+r.area+' '+(1+k%9),types});
+  }
+});
+ROUTES.find(r=>r.code==='A1').stops=[{name:'ABC 餐厅',addr:'Blk 201 Tampines St 21',types:['OTC']},{name:'Kopi Tiam 88',addr:'Blk 455 Tampines St 42',types:['OTC','REL']}];
+ROUTES.find(r=>r.code==='A2').stops=[{name:'Woh 建筑工地',addr:'Jurong East St 13 工地 B 门',types:['REL']}];
+const W2=ROUTES.find(r=>r.code==='W2');
+W2.stops=[{name:'Jade 茶楼',addr:'Blk 105 Clementi Ave 1',types:['OTC']},{name:'Metro 办公楼',addr:'3 Clementi Ave 2',types:['OTC','REL']},{name:'Lim 印刷厂',addr:'Blk 22 Clementi Ave 3',types:['REL']},{name:'Kopi Tiam 88',addr:'Blk 312 Clementi Ave 4',types:['OTC','REL']},{name:'Hill 小学',addr:'Clementi Ave 5',types:['OTC']},{name:'FairPrice 超市',addr:'Blk 451 Clementi Ave 3',types:['OTC','REL']},{name:'Sunrise 诊所',addr:'Blk 432 Clementi Ave 3',types:['OTC']},{name:'Kim 咖啡店',addr:'Blk 726 Clementi West St 2',types:['OTC']}];
+
+// today's live status (sample)
+const TS={
+ N1:{st:'done',drv:'陈伟'}, N2:{st:'run',drv:'李明',k:5}, E1:{st:'done',drv:'黄强'}, E2:{st:'conf',drv:'王芳'},
+ W1:{st:'run',drv:'张伟',k:3}, W2:{st:'switched',drv:'刘洋',k:3}, W3:{st:'run',drv:'赵磊',k:6}, C1:{st:'done',drv:'周杰'},
+ C3:{st:'open'}, K1:{st:'open'}, T1:{st:'conf',drv:'吴敏'}, H1:{st:'run',drv:'郑华',k:2}, A2:{st:'run',drv:'刘洋',k:0}
+};
+
+// date helpers (strings only, UTC math)
+const P=s=>{const[a,b,c]=s.split('-').map(Number);return new Date(Date.UTC(a,b-1,c))};
+const F=d=>d.toISOString().slice(0,10);
+const add=(s,n)=>{const d=P(s);d.setUTCDate(d.getUTCDate()+n);return F(d)};
+const dow=s=>{const w=P(s).getUTCDay();return w===0?7:w};
+const mon=s=>add(s,1-dow(s));
+const md=s=>{const d=P(s);return (d.getUTCMonth()+1)+'/'+d.getUTCDate()};
+const isRest=s=>dow(s)===7||!!HOL[s];
+
+function occsOn(s){
+  const out=[],paused=[];
+  const w=dow(s);
+  for(const r of ROUTES){
+    if(r.type==='R'&&r.days.includes(w)){ (HOL[s]?paused:out).push(r) }
+    else if(r.type==='S'&&((r.sun&&w===7)||(r.ph&&HOL[s]))) out.push(r);
+    else if(r.type==='A'&&r.date===s) out.push(r);
+  }
+  const ord=r=>(r.type==='A'?0:1);
+  out.sort((a,b)=>ord(a)-ord(b)||a.code.localeCompare(b.code));
+  return {out,paused};
+}
+function status(r,s){
+  const n=r.stops.length;
+  if(s<TODAY){
+    if(r.code==='C2'&&s==='2026-11-10') return {st:'done',drv:'孙丽',k:n,closed:1};
+    return {st:'done',drv:DRIVERS[h(r.code+s)%DRIVERS.length],k:n};
+  }
+  if(s===TODAY){ const t=TS[r.code]||{st:'open'}; return Object.assign({k:t.st==='done'?n:(t.k||0)},t) }
+  return {st:'plan',k:0};
+}
+function kg(r,s,i,t){return Math.round((t==='OTC'?40+h(r.code+s+i+t)%220:8+h(r.code+s+i+t)%80)*10)/10}
+function total(r,s,k){let x=0;for(let i=0;i<k;i++)for(const t of r.stops[i].types)x+=kg(r,s,i,t);return x}
+function statusText(r,s){
+  const st=status(r,s),n=r.stops.length;
+  switch(st.st){
+    case 'done': { const t=total(r,s,st.closed?n-1:n); return `<span class="ok">✓ 完成</span> ${st.drv} · ${(t/1000).toFixed(2)} t`+(st.closed?` · <span class="warn">1 站关门</span>`:'') }
+    case 'run': return `◑ ${st.drv} 进行中 <span class="num">${st.k}/${n}</span>`;
+    case 'conf': return `◔ ${st.drv} 已确认 <span class="num">0/${n}</span>`;
+    case 'switched': return `<span class="warn">⇄ ${st.drv} 已换线</span> <span class="num">${st.k}/${n}</span> · 剩 ${n-st.k} 站待接手`;
+    case 'open': return `○ 今天未领取 · ${n} 站`;
+    default: return `${n} 站 · 未领取`;
+  }
+}
+const col=r=>`var(--r${r.c})`;
+
+// state
+let anchor=TODAY, view='week', hl=null, q='', types={R:true,S:true,A:true}, openPaused={};
+const grid=document.getElementById('grid'), legend=document.getElementById('legend');
+
+function visibleRange(){
+  if(view==='week'){const a=mon(anchor);return [a,add(a,6)]}
+  const d=P(anchor); const first=F(new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),1)));
+  const a=mon(first); return [a,add(a,41)];
+}
+function matchSet(){
+  if(hl) return new Set([hl]);
+  const t=q.trim().toLowerCase(); if(!t) return null;
+  const set=new Set();
+  for(const r of ROUTES){ if(r.code.toLowerCase().includes(t)||r.name.toLowerCase().includes(t)||r.stops.some(x=>x.name.toLowerCase().includes(t))) set.add(r.code) }
+  return set;
+}
+function render(){
+  const [a,b]=visibleRange();
+  const rg=document.getElementById('range');
+  if(view==='week'){ rg.textContent=`${P(a).getUTCFullYear()}年 ${md(a)} – ${md(b)}` }
+  else { const d=P(anchor); rg.textContent=`${d.getUTCFullYear()}年 ${d.getUTCMonth()+1}月` }
+  const ms=matchSet();
+  document.getElementById('clearHl').hidden=!ms;
+  // legend: routes that appear in range
+  const seen=new Map();
+  for(let s=a;s<=b;s=add(s,1)){const {out,paused}=occsOn(s);[...out,...paused].forEach(r=>seen.set(r.code,r))}
+  legend.innerHTML=[...seen.values()].filter(r=>types[r.type]).sort((x,y)=>(x.type>y.type?1:x.type<y.type?-1:x.code.localeCompare(y.code))).map(r=>
+    `<button class="lchip ${r.type==='A'?'adhoc':''} ${hl===r.code?'on':''} ${ms&&!ms.has(r.code)?'dim':''}" style="--rc:${col(r)}" data-hl="${r.code}" title="${r.name}"><span class="code">${r.type==='A'?'⚡':''}${r.code}</span><span>${r.name.split(' · ')[0]}</span></button>`).join('');
+  grid.innerHTML= view==='week'?weekHTML(a,ms):monthHTML(a,ms);
+}
+function occHTML(r,s,ms,extra){
+  const st=status(r,s),n=r.stops.length;
+  const pct=st.st==='done'?100:Math.round((st.k||0)/n*100);
+  const showPg=s<=TODAY&&!extra;
+  return `<button class="occ ${r.type==='A'?'adhoc':''} ${ms&&!ms.has(r.code)?'dim':''}" style="--rc:${col(r)}" data-open="${r.code}|${s}">
+    <span class="l1"><span class="code" data-hl="${r.code}">${r.code}</span><span class="tt ${r.type}">${r.type==='A'?'⚡A':r.type}</span><span class="nm">${r.name}</span></span>
+    <span class="l2">${extra||statusText(r,s)}</span>
+    ${showPg?`<span class="pg"><i style="width:${pct}%"></i></span>`:''}
+  </button>`;
+}
+function weekHTML(a,ms){
+  let html='<div class="week">';
+  for(let i=0;i<7;i++){
+    const s=add(a,i),{out,paused}=occsOn(s);
+    const vis=out.filter(r=>types[r.type]);
+    const stops=out.reduce((x,r)=>x+r.stops.length,0);
+    const past=s<TODAY, today=s===TODAY, rest=isRest(s);
+    html+=`<div class="day ${rest?'rest':''} ${today?'today':''}">
+      <div class="dh"><div class="d1"><span class="dow">${DOWCN[dow(s)]}</span><span class="dt">${md(s)}</span>${today?'<span class="todaytag">今天</span>':past?'<span class="lock">🔒 只读</span>':''}</div>
+      ${HOL[s]?`<span class="phtag">公假 · ${HOL[s]}</span>`:''}
+      <span class="sum num">${out.length} 条路线 · ${stops} 站${paused.length?` · ${paused.length} 条暂停`:''}</span></div>
+      <div class="occs">${vis.map(r=>occHTML(r,s,ms)).join('')||'<div class="empty">没有路线</div>'}</div>`;
+    if(paused.length&&types.R){
+      const open=openPaused[s];
+      html+=`<button class="paused" data-paused="${s}">⏸ ${paused.length} 条 regular 因公假暂停 ${open?'▾':'▸'}</button>`;
+      if(open) html+=`<div class="pausedlist">${paused.map(r=>occHTML(r,s,ms,'⏸ 公假暂停 · 可改到其他工作日 / 改成 special 当天跑')).join('')}</div>`;
+    }
+    if(!past) html+=`<button class="addr" data-add="${s}">+ 路线</button>`;
+    html+='</div>';
+  }
+  return html+'</div>';
+}
+function monthHTML(a,ms){
+  const curM=P(anchor).getUTCMonth();
+  let html='<div class="month">'+[1,2,3,4,5,6,7].map(d=>`<div class="mh">周${DCN[d]}</div>`).join('');
+  for(let i=0;i<42;i++){
+    const s=add(a,i),{out,paused}=occsOn(s);
+    const vis=out.filter(r=>types[r.type]);
+    html+=`<div class="mcell ${isRest(s)?'rest':''} ${P(s).getUTCMonth()!==curM?'out':''} ${s<TODAY?'past':''} ${s===TODAY?'today':''}">
+      <div class="mtop"><button data-goweek="${s}" title="打开这一周">${P(s).getUTCDate()}</button><span class="cnt num">${out.length} 条</span></div>
+      ${HOL[s]?`<span class="phtag">${HOL[s]}</span>`:''}
+      <div class="mchips">${vis.map(r=>`<button class="mchip ${r.type==='A'?'adhoc':''} ${ms&&!ms.has(r.code)?'dim':''}" style="--rc:${col(r)}" data-open="${r.code}|${s}" title="${r.name}">${r.type==='A'?'⚡':''}${r.code}</button>`).join('')}
+      ${paused.length&&types.R?`<span class="mchip paused" title="公假暂停" style="--rc:var(--line)">⏸${paused.length}</span>`:''}</div></div>`;
+  }
+  return html+'</div>';
+}
+
+// drawer
+let dw=null;
+function openDrawer(code,s){
+  closeDrawer();
+  const r=ROUTES.find(x=>x.code===code); const st=status(r,s); const n=r.stops.length;
+  const paused=r.type==='R'&&HOL[s];
+  const locked=s<TODAY||st.st==='done';
+  const stops=r.stops.slice();
+  let dirty=false;
+  const rule=r.type==='R'?`Regular · 每周 ${r.days.map(d=>DCN[d]).join(' ')}`:r.type==='S'?`Special · ${[r.sun?'每周日':'',r.ph?'每个公假':''].filter(Boolean).join(' + ')}`:`Adhoc · 只在 ${md(r.date)}（${DOWCN[dow(r.date)]}）`;
+  const scrim=document.createElement('div'); scrim.className='scrim';
+  const el=document.createElement('aside'); el.className='drawer'; el.setAttribute('role','dialog'); el.setAttribute('aria-label',code+' 详情'); el.style.setProperty('--rc',col(r));
+  function draw(){
+    const doneK=st.st==='done'?n:(st.k||0);
+    const stLine=paused?'⏸ 公假暂停：这一天不跑。可以「改到其他工作日」或「改成 special 当天跑」。':
+      st.st==='done'?`✓ 已完成 · 司机 ${st.drv} · 车牌 SBA ${1000+h(code+s)%9000} X · 合计 ${(total(r,s,st.closed?n-1:n)/1000).toFixed(2)} t`:
+      st.st==='run'?`◑ 司机 ${st.drv} 进行中 ${st.k}/${n}。已收的站锁定，后面的站可以改，改动会推送到司机手机。`:
+      st.st==='conf'?`◔ 司机 ${st.drv} 已确认，还没开始。`:
+      st.st==='switched'?`⇄ 司机 ${st.drv} 收了 ${st.k} 站后换去 A2。剩 ${n-st.k} 站「待接手」：可以指派给别的司机。`:
+      st.st==='open'?'○ 今天还没有司机领取。':'计划中 · 当天由司机在手机上领取。';
+    el.innerHTML=`<div class="dwh"><div class="row"><span class="code">${r.type==='A'?'⚡':''}${code}</span><span class="tt ${r.type}">${r.type==='A'?'⚡A':r.type}</span><strong>${r.name}</strong><button class="x" aria-label="关闭">✕</button></div>
+      <div class="rule">${DOWCN[dow(s)]} ${md(s)} · ${rule}${r.note?' · '+r.note:''}</div>
+      <div class="status">${stLine}</div></div>
+      <div class="dwb">${stops.map((x,i)=>{
+        const isDone=!paused&&i<doneK&&!(st.closed&&i===n-1);
+        const closed=st.closed&&i===n-1;
+        const canEdit=!locked&&!paused&&i>=doneK;
+        return `<div class="stop ${isDone?'done':''}"><span class="seq">${i+1}</span>
+          <div><div class="sn">${x.name}</div><div class="sa">${x.addr}</div>
+          <div class="wt">${x.types.map(t=>`<span><span class="wtag">${t}</span> ${isDone?`<span class="num">${kg(r,s,i,t)}</span> kg`:''}</span>`).join('')}
+          ${isDone?`<span style="color:var(--muted)">单号 WB-${s.slice(2).replace(/-/g,'')}-${String(h(code+i)%900+100)} · 📷 ✍</span>`:''}
+          ${closed?'<span class="warn" style="color:var(--warn);font-weight:600">关门，未收</span>':''}</div></div>
+          ${canEdit?`<div class="ops"><button data-mv="${i}|-1" ${i<=doneK?'disabled':''} aria-label="上移">↑</button><button data-mv="${i}|1" ${i===n-1?'disabled':''} aria-label="下移">↓</button><button data-rm="${i}" aria-label="移出路线">✕</button></div>`:'<span></span>'}</div>`}).join('')}
+        ${!locked&&!paused?'<button class="addr" style="margin:4px 0 0" data-addcust>+ 添加客户（搜索客户名 / 新建客户）</button>':''}
+      </div>
+      <div class="dwf">${locked?`<div class="lockmsg">🔒 ${s<TODAY?'过去的日期只读：这里显示司机实际提交的记录（重量、单号、照片、签名）。':'已完成的路线只读。'}</div>`:
+        paused?`<div class="acts"><button class="btn" data-fake="改到其他工作日：选一个工作日">改到其他工作日</button><button class="btn" data-fake="改成 special：在公假当天建一条 special，客户名单照抄">改成 special 当天跑</button></div>`:
+        `${dirty&&r.type!=='A'?`<div class="scope"><strong>这次修改的范围</strong>
+          <label><input type="radio" name="sc" id="sc1" checked> 只改 ${md(s)}（${DOWCN[dow(s)]}）这一天</label>
+          <label><input type="radio" name="sc" id="sc2"> ${md(s)} 及以后每次都这样</label></div>`:''}
+        <div class="acts"><button class="btn primary" data-save ${dirty?'':'disabled'}>保存</button><button class="btn" data-close>取消</button>
+        <span class="spacer"></span>${r.type==='A'?'<button class="btn" data-fake="删除这条临时路线">删除路线</button>':'<button class="btn" data-fake="跳过这一天 / 从这天起停止路线">跳过这一天…</button>'}</div>`}</div>`;
+  }
+  draw();
+  el.addEventListener('click',e=>{
+    const t=e.target.closest('button'); if(!t) return;
+    if(t.classList.contains('x')||t.hasAttribute('data-close')) return closeDrawer();
+    if(t.dataset.mv){const[i,d]=t.dataset.mv.split('|').map(Number);[stops[i],stops[i+d]]=[stops[i+d],stops[i]];dirty=true;draw();return}
+    if(t.dataset.rm){stops.splice(+t.dataset.rm,1);dirty=true;draw();return}
+    if(t.hasAttribute('data-addcust')) return toast('样例：这里弹出客户搜索框，可选已有客户或新建客户');
+    if(t.hasAttribute('data-save')){toast(r.type==='A'?'已保存（样例，不会真的保存）':(document.getElementById('sc2')?.checked?'已保存：'+md(s)+' 及以后都用新名单（样例）':'已保存：只改 '+md(s)+' 这一天（样例）'));return closeDrawer()}
+    if(t.dataset.fake) return toast('样例：'+t.dataset.fake);
+  });
+  scrim.addEventListener('click',closeDrawer);
+  document.body.append(scrim,el); dw=[scrim,el];
+  el.querySelector('.x').focus();
+}
+function closeDrawer(){ if(dw){dw.forEach(x=>x.remove());dw=null} }
+
+let popEl=null;
+function closePop(){ if(popEl){popEl.remove();popEl=null} }
+function openAdd(s,btn){
+  closePop();
+  const rest=isRest(s);
+  const p=document.createElement('div'); p.className='pop';
+  p.innerHTML=`<div class="ph">${DOWCN[dow(s)]} ${md(s)} ${HOL[s]?'· '+HOL[s]:''}（${rest?'休息日：只能加 special':'工作日：可以加 regular 或 adhoc'}）</div>`+
+   (rest?`<button data-fake="新建 Special：每周日 / 每个公假">Special · 每周日 / 每个公假</button><button data-fake="新建 Special：只在 ${md(s)}">Special · 只这一天</button>`:
+         `<button data-fake="新建 Regular：周一到周六勾选，${DOWCN[dow(s)]}已预先勾上">Regular · 每周固定几天</button><button data-fake="新建 Adhoc：只在 ${md(s)}">⚡ Adhoc · 只这一天（紧急）</button>`);
+  const rc=btn.getBoundingClientRect();
+  p.style.left=Math.max(8,Math.min(rc.left,innerWidth-250))+'px'; p.style.top=Math.min(rc.bottom+4,innerHeight-130)+'px';
+  p.addEventListener('click',e=>{const t=e.target.closest('button');if(t){toast('样例：'+t.dataset.fake);closePop()}});
+  document.body.append(p); popEl=p;
+}
+let tt=null;
+function toast(m){let el=document.querySelector('.toast');if(!el){el=document.createElement('div');el.className='toast';el.setAttribute('role','status');document.body.append(el)}el.textContent=m;clearTimeout(tt);tt=setTimeout(()=>el.remove(),2600)}
+
+document.addEventListener('click',e=>{
+  const t=e.target.closest('button,[data-hl]');
+  if(!popEl||!e.target.closest('.pop')) { if(!(t&&t.dataset.add)) closePop() }
+  if(!t) return;
+  if(t.dataset.hl&&!t.closest('.drawer')){ e.stopPropagation(); hl=hl===t.dataset.hl?null:t.dataset.hl; if(hl){q='';document.getElementById('q').value=''} render(); return }
+  if(t.dataset.open){ const[c,s]=t.dataset.open.split('|'); openDrawer(c,s); return }
+  if(t.dataset.paused){ openPaused[t.dataset.paused]=!openPaused[t.dataset.paused]; render(); return }
+  if(t.dataset.add){ openAdd(t.dataset.add,t); return }
+  if(t.dataset.goweek){ anchor=t.dataset.goweek; setView('week'); return }
+  if(t.dataset.type){ types[t.dataset.type]=!types[t.dataset.type]; t.setAttribute('aria-pressed',types[t.dataset.type]); render(); return }
+});
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'){ if(dw) closeDrawer(); else if(popEl) closePop(); else if(hl||q){hl=null;q='';document.getElementById('q').value='';render()} } });
+document.getElementById('q').addEventListener('input',e=>{q=e.target.value;hl=null;render()});
+document.getElementById('clearHl').onclick=()=>{hl=null;q='';document.getElementById('q').value='';render()};
+function setView(v){view=v;document.getElementById('vWeek').setAttribute('aria-pressed',v==='week');document.getElementById('vMonth').setAttribute('aria-pressed',v==='month');render()}
+document.getElementById('vWeek').onclick=()=>setView('week');
+document.getElementById('vMonth').onclick=()=>setView('month');
+document.getElementById('prev').onclick=()=>{ if(view==='week') anchor=add(mon(anchor),-7); else {const d=P(anchor);anchor=F(new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()-1,1)))} render() };
+document.getElementById('next').onclick=()=>{ if(view==='week') anchor=add(mon(anchor),7); else {const d=P(anchor);anchor=F(new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,1)))} render() };
+document.getElementById('todayBtn').onclick=()=>{anchor=TODAY;render()};
+document.getElementById('urgent').onclick=()=>toast('样例：选日期（默认下一个工作日）→ 选客户 → 新建 ⚡Adhoc 或加进当天已有路线');
+
+// tabs
+const tc=document.getElementById('tab-cal'), td=document.getElementById('tab-drv');
+function tab(d){tc.setAttribute('aria-selected',!d);td.setAttribute('aria-selected',d);document.getElementById('view-cal').hidden=d;document.getElementById('view-drv').hidden=!d;document.getElementById('view-cal').style.display=d?'none':'flex'}
+tc.onclick=()=>tab(false); td.onclick=()=>tab(true);
+
+// driver preview content
+// morning view for driver 刘洋: before he took W2 (later he switches to A2)
+document.getElementById('drvPick').innerHTML=['W2','A2','C3','K1','N1','E2','H1'].map(c=>{const r=ROUTES.find(x=>x.code===c);const st=status(r,TODAY);const mine=c==='W2';const taken=!mine&&c!=='A2'&&!!st.drv;
+  return `<button class="pick ${taken?'taken':''} ${mine?'sel':''}" style="--rc:${col(r)}"><span class="code">${r.type==='A'?'⚡':''}${r.code}</span><span class="pm">${r.name} · ${r.stops.length} 站<br>${mine?'✔ 你选了这条':taken?'已被 '+st.drv+' 领取':r.type==='A'?'紧急 · 可以领取':'可以领取'}</span></button>`}).join('')+'<div class="cap">已被别人领取的路线变灰，点不了。往下滑还有更多。</div>';
+document.getElementById('drvList').innerHTML=W2.stops.map((x,i)=>`<div><span class="s">${i+1}</span>${x.name} ${x.types.map(t=>`<span class="wtag">${t}</span>`).join(' ')}</div>`).join('');
+
+render();
+})();
+</script>
+</body></html>
