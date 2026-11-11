@@ -50,3 +50,9 @@
 - One route = one driver at a time (no two trucks sharing a route on the same day).
 - Truck plate: chosen from a vehicle list maintained by the office in Settings.
 - NIGHT SHIFTS EXIST: day rollover time = 04:00 (configurable in Settings). Before 04:00, the operational "today" is still the previous calendar date (for drivers' Today list, claims, results, past lock, freeze).
+## Round 5 (after first build, office calendar look)
+- User sent a screenshot of the Apple Calendar month view as the reference: "make the calendar structure like this".
+  - Month grid, Sunday..Saturday columns, big day number in each cell, one line per item (colour bar + title, short info right-aligned), holiday shown as a coloured bar in its cell.
+- If a day has MORE THAN 4 routes, the cell collapses automatically; an "expand" control shows the rest in place (and collapses again).
+- Clicking a single route in a cell opens it for editing.
+- Today's date is shown in BLUE; public-holiday dates are shown in RED.
