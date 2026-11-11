@@ -1,0 +1,50 @@
+[
+  {
+    "name": "R1 at 03:59:59 today is still the previous date",
+    "now": "2026-11-12T03:59:59+08:00",
+    "given": { "fixture": "basic" },
+    "call": { "method": "GET", "path": "/api/meta", "as": "ali" },
+    "expect": { "status": 200, "data_subset": {
+      "today": "2026-11-11", "now": "2026-11-12T03:59:59+08:00", "timezone": "Asia/Singapore",
+      "next_work_day": "2026-11-12", "rollover_hour": 4, "day_ends_at": "2026-11-12T04:00:00+08:00",
+      "me": { "id": 3, "username": "ali", "name": "Ali", "role": "driver", "lang": "en" },
+      "trucks": ["SBA1234X", "GBA1234X"],
+      "config": { "max_photos": 5, "driver_edit_grace_hours": 8 },
+      "waste_types": { "$contains": [ { "code": "REL", "routable": true, "confirm_over": 1000 }, { "code": "COMPACTOR", "confirm_over": null } ] }
+    } }
+  },
+  {
+    "name": "R1 at 04:00:00 the new day starts",
+    "now": "2026-11-12T04:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "call": { "method": "GET", "path": "/api/meta", "as": "mei" },
+    "expect": { "status": 200, "data_subset": { "today": "2026-11-12", "day_ends_at": "2026-11-13T04:00:00+08:00", "next_work_day": "2026-11-13" } }
+  },
+  {
+    "name": "R1 at 00:00 with the default rollover today is the previous date",
+    "now": "2026-11-12T00:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "call": { "method": "GET", "path": "/api/meta", "as": "mei" },
+    "expect": { "status": 200, "data_subset": { "today": "2026-11-11" } }
+  },
+  {
+    "name": "R1 with rollover 0 midnight is the boundary",
+    "now": "2026-11-12T00:00:00+08:00",
+    "given": { "fixture": "basic", "plan": { "settings": { "rollover_hour": 0 } } },
+    "call": { "method": "GET", "path": "/api/meta", "as": "mei" },
+    "expect": { "status": 200, "data_subset": { "today": "2026-11-12", "rollover_hour": 0, "day_ends_at": "2026-11-13T00:00:00+08:00" } }
+  },
+  {
+    "name": "next_work_day skips a Sunday PH and a Monday PH",
+    "now": "2026-11-07T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "call": { "method": "GET", "path": "/api/meta", "as": "mei" },
+    "expect": { "status": 200, "data_subset": { "today": "2026-11-07", "next_work_day": "2026-11-10" } }
+  },
+  {
+    "name": "meta needs a token",
+    "now": "2026-11-11T10:00:00+08:00",
+    "call": { "method": "GET", "path": "/api/meta" },
+    "expect": { "status": 401, "code": "UNAUTHORIZED" }
+  }
+]

@@ -1,0 +1,187 @@
+[
+  {
+    "name": "list: active customers by name, with routes and task types from today on",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "call": { "method": "GET", "path": "/api/customers", "as": "mei" },
+    "expect": { "status": 200, "data_subset": [
+      { "id": 12, "code": "C0012", "name": "ABC Restaurant", "address": "12 Jalan Besar", "phone": "+65 9123 4567", "note": "bins at back lane",
+        "waste_types": ["REL", "OTC"], "active": true, "routes": ["A1", "N1", "N1-25"], "tasks": ["OTC"] },
+      { "id": 40, "name": "Golden Bakery", "routes": ["N1", "N1-25"], "tasks": ["COMPACTOR"] },
+      { "id": 50, "name": "Only OTC Co", "routes": [], "tasks": [] },
+      { "id": 21, "name": "Sunday Market Stall", "routes": ["S1", "S2"], "tasks": [] },
+      { "id": 70, "name": "Zed Ended Route", "routes": [], "tasks": [] }
+    ] }
+  },
+  {
+    "name": "list filters: routable, type, q, archived",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "steps": [
+      { "call": { "method": "GET", "path": "/api/customers?routable=1", "as": "mei" },
+        "expect": { "data_subset": { "$len": 4 } } },
+      { "call": { "method": "GET", "path": "/api/customers?routable=1", "as": "mei" },
+        "expect": { "data_subset": { "$not_contains": [ { "id": 50 }, { "id": 60 } ] } } },
+      { "call": { "method": "GET", "path": "/api/customers?type=OTC", "as": "mei" },
+        "expect": { "data_subset": [ { "id": 12 }, { "id": 50 } ] } },
+      { "call": { "method": "GET", "path": "/api/customers?q=bakery", "as": "mei" },
+        "expect": { "data_subset": [ { "id": 40 } ] } },
+      { "call": { "method": "GET", "path": "/api/customers?q=jalan", "as": "mei" },
+        "expect": { "data_subset": [ { "id": 12 } ] } },
+      { "call": { "method": "GET", "path": "/api/customers?q=c0070", "as": "mei" },
+        "expect": { "data_subset": [ { "id": 70 } ] } },
+      { "call": { "method": "GET", "path": "/api/customers?archived=1", "as": "mei" },
+        "expect": { "data_subset": [ { "id": 60, "active": false } ] } },
+      { "call": { "method": "GET", "path": "/api/customers?archived=all", "as": "mei" },
+        "expect": { "data_subset": { "$len": 6 } } }
+    ]
+  },
+  {
+    "name": "detail lists the routes and tasks that use the customer",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "steps": [
+      { "call": { "method": "GET", "path": "/api/customers/40", "as": "mei" },
+        "expect": { "status": 200, "data_subset": { "id": 40, "routes": [ { "route_id": 5, "code": "N1", "name": "North 1", "type": "regular" }, { "route_id": 42, "code": "N1-25" } ],
+          "tasks": [ { "task_id": 3, "waste_type": "COMPACTOR", "schedule": { "start": "2026-11-03", "end": null, "days": [2, 5] } },
+                     { "task_id": 10, "waste_type": "COMPACTOR" } ] } } },
+      { "call": { "method": "GET", "path": "/api/customers/999", "as": "mei" }, "expect": { "status": 404, "code": "NOT_FOUND" } },
+      { "call": { "method": "GET", "path": "/api/customers/40", "as": "ali" }, "expect": { "status": 403, "code": "FORBIDDEN" } }
+    ]
+  },
+  {
+    "name": "create: generated code, types stored in waste-type order",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "steps": [
+      { "call": { "method": "POST", "path": "/api/customers", "as": "mei", "body": { "name": "  New Cafe  ", "address": "3 Orchard Rd", "phone": "", "note": "", "waste_types": ["OTC", "REL", "OTC"] } },
+        "expect": { "status": 201, "data_subset": { "id": 71, "code": "C0071", "name": "New Cafe", "waste_types": ["REL", "OTC"], "active": true },
+          "docs_subset": { "plan": { "seq": { "customer": 71 } } } } },
+      { "call": { "method": "POST", "path": "/api/customers", "as": "mei", "body": { "code": "c0073", "name": "Typed Code", "waste_types": ["COMPACTOR"] } },
+        "expect": { "status": 201, "data_subset": { "id": 72, "code": "C0073" } } },
+      { "call": { "method": "POST", "path": "/api/customers", "as": "mei", "body": { "name": "Auto skips taken", "waste_types": ["REL"] } },
+        "expect": { "status": 201, "data_subset": { "id": 73, "code": "C0074" } } },
+      { "call": { "method": "POST", "path": "/api/customers", "as": "mei", "body": { "code": "C0012", "name": "Dup", "waste_types": ["REL"] } },
+        "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "code" } } }
+    ]
+  },
+  {
+    "name": "create validation: waste types required, unknown, inactive; name; unknown field",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "plan": { "waste_types": [
+      { "code": "REL", "name": "REL", "abbr": "REL", "unit": "kg", "weigh_method": "on_site", "routable": true, "recurring_tasks": false, "confirm_over": 1000, "active": true },
+      { "code": "OLD", "name": "Old", "abbr": "OLD", "unit": "kg", "weigh_method": "on_site", "routable": false, "recurring_tasks": false, "confirm_over": null, "active": false } ] } },
+    "steps": [
+      { "call": { "method": "POST", "path": "/api/customers", "as": "mei", "body": { "name": "X" } }, "expect": { "status": 422, "code": "WASTE_TYPES_REQUIRED" } },
+      { "call": { "method": "POST", "path": "/api/customers", "as": "mei", "body": { "name": "X", "waste_types": [] } }, "expect": { "status": 422, "code": "WASTE_TYPES_REQUIRED" } },
+      { "call": { "method": "POST", "path": "/api/customers", "as": "mei", "body": { "name": "X", "waste_types": ["GLASS"] } }, "expect": { "status": 422, "code": "UNKNOWN_WASTE_TYPE" } },
+      { "call": { "method": "POST", "path": "/api/customers", "as": "mei", "body": { "name": "X", "waste_types": ["OLD"] } }, "expect": { "status": 422, "code": "UNKNOWN_WASTE_TYPE", "error_subset": { "details": { "inactive": true } } } },
+      { "call": { "method": "POST", "path": "/api/customers", "as": "mei", "body": { "name": "", "waste_types": ["REL"] } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "name" } } },
+      { "call": { "method": "POST", "path": "/api/customers", "as": "mei", "body": { "name": "X", "waste_types": ["REL"], "active": false } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "active" } } },
+      { "call": { "method": "POST", "path": "/api/customers", "as": "mei", "body": { "name": "X", "waste_types": "REL" } }, "expect": { "status": 422, "code": "VALIDATION" } }
+    ]
+  },
+  {
+    "name": "an inactive type already on the customer is kept when the list is resent",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "plan": {
+      "waste_types": [
+        { "code": "REL", "name": "REL", "abbr": "REL", "unit": "kg", "weigh_method": "on_site", "routable": true, "recurring_tasks": false, "confirm_over": 1000, "active": true },
+        { "code": "OLD", "name": "Old", "abbr": "OLD", "unit": "kg", "weigh_method": "on_site", "routable": false, "recurring_tasks": false, "confirm_over": null, "active": false } ],
+      "customers": [ { "id": 1, "code": "C0001", "name": "A", "address": "", "phone": "", "note": "", "waste_types": ["REL", "OLD"], "active": true } ],
+      "seq": { "customer": 1, "route": 0, "task": 0 } } },
+    "call": { "method": "PATCH", "path": "/api/customers/1", "as": "mei", "body": { "name": "A2", "waste_types": ["OLD", "REL"] } },
+    "expect": { "status": 200, "data_subset": { "name": "A2", "waste_types": ["REL", "OLD"] } }
+  },
+  {
+    "name": "R4 CUSTOMER_IN_USE: removing the last routable type while on stop lists",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "call": { "method": "PATCH", "path": "/api/customers/12", "as": "mei", "body": { "waste_types": ["OTC"] } },
+    "expect": { "status": 409, "code": "CUSTOMER_IN_USE",
+      "error_subset": { "details": {
+        "routes": [
+          { "kind": "route", "route_id": 5, "code": "N1", "where": "template", "date": null },
+          { "kind": "route", "route_id": 41, "code": "A1", "where": "one-off", "date": "2026-11-12" },
+          { "kind": "route", "route_id": 42, "code": "N1-25", "where": "one-off", "date": "2026-12-25" },
+          { "kind": "route", "route_id": 5, "code": "N1", "where": "override", "date": "2026-11-18" } ],
+        "tasks": [] } },
+      "docs_subset": { "plan": { "customers": { "$contains": [ { "id": 12, "waste_types": ["REL", "OTC"] } ] } } } }
+  },
+  {
+    "name": "R4 detach: removes the customer from routes from today on and bumps revs",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "call": { "method": "PATCH", "path": "/api/customers/12", "as": "mei", "body": { "waste_types": ["OTC"], "detach": true } },
+    "expect": { "status": 200,
+      "data_subset": { "id": 12, "waste_types": ["OTC"], "removed": { "$len": 4 } },
+      "docs_subset": { "plan": {
+        "routes": [
+          { "id": 5, "rev": 6, "stops": [ { "customer_id": 40 } ] },
+          { "id": 7 }, { "id": 8 },
+          { "id": 41, "rev": 2, "stops": [] },
+          { "id": 42, "rev": 2, "stops": [ { "customer_id": 40 } ] },
+          { "id": 44 } ],
+        "route_overrides": [
+          { "route_id": 5, "date": "2026-11-18", "stops": [] } ],
+        "tasks": { "$len": 4 } } } }
+  },
+  {
+    "name": "R4: removing a task type ends a running series and deletes future tasks",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "steps": [
+      { "call": { "method": "PATCH", "path": "/api/customers/40", "as": "mei", "body": { "waste_types": ["REL"] } },
+        "expect": { "status": 409, "code": "CUSTOMER_IN_USE", "error_subset": { "details": { "routes": [],
+          "tasks": [ { "task_id": 3, "action": "ended" }, { "task_id": 10, "action": "deleted" } ] } } } },
+      { "call": { "method": "PATCH", "path": "/api/customers/40", "as": "mei", "body": { "waste_types": ["REL"], "detach": true } },
+        "expect": { "status": 200, "data_subset": { "waste_types": ["REL"], "removed": [ { "kind": "task", "task_id": 3, "action": "ended" }, { "kind": "task", "task_id": 10, "action": "deleted" } ] },
+          "docs_subset": { "plan": {
+            "tasks": [ { "id": 3, "end": "2026-11-10", "rev": 3 }, { "id": 6 }, { "id": 9 } ],
+            "task_overrides": [],
+            "routes": { "$contains": [ { "id": 5, "rev": 4, "stops": [ { "customer_id": 12 }, { "customer_id": 40 } ] } ] } } } } }
+    ]
+  },
+  {
+    "name": "R4: removing a type nothing uses needs no detach",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "call": { "method": "PATCH", "path": "/api/customers/50", "as": "mei", "body": { "waste_types": ["COMPACTOR"], "phone": "6123 4567" } },
+    "expect": { "status": 200, "data_subset": { "waste_types": ["COMPACTOR"], "phone": "6123 4567", "removed": { "$absent": true } } }
+  },
+  {
+    "name": "R4 archive detaches everything and sets active false; restore re-adds nothing",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "steps": [
+      { "call": { "method": "POST", "path": "/api/customers/12/archive", "as": "mei", "body": {} },
+        "expect": { "status": 409, "code": "RUN_EXISTS", "error_subset": { "details": { "runs": [ { "job": "t6", "driver": "Ali", "resolved": 0 } ] } } } },
+      { "call": { "method": "POST", "path": "/api/customers/12/archive", "as": "mei", "body": { "release_run": true } },
+        "expect": { "status": 200, "data_subset": { "removed": [
+            { "kind": "route", "route_id": 5, "where": "template" },
+            { "kind": "route", "route_id": 41, "where": "one-off" },
+            { "kind": "route", "route_id": 42, "where": "one-off" },
+            { "kind": "route", "route_id": 5, "where": "override", "date": "2026-11-18" },
+            { "kind": "task", "task_id": 6, "action": "deleted" } ] },
+          "docs_subset": { "plan": { "customers": { "$contains": [ { "id": 12, "active": false, "waste_types": ["REL", "OTC"] } ] },
+            "tasks": [ { "id": 3 }, { "id": 9 }, { "id": 10 } ] },
+            "day:2026-11-11": { "runs": { "t6": { "$absent": true } }, "dropped_runs": [ { "job": "t6", "driver_id": null } ] } } } },
+      { "call": { "method": "GET", "path": "/api/customers", "as": "mei" }, "expect": { "data_subset": { "$not_contains": [ { "id": 12 } ] } } },
+      { "call": { "method": "POST", "path": "/api/customers/12/restore", "as": "mei" },
+        "expect": { "status": 200, "data_subset": { "id": 12, "active": true },
+          "docs_subset": { "plan": { "routes": { "$contains": [ { "id": 41, "stops": [] } ] } } } } },
+      { "call": { "method": "GET", "path": "/api/customers/12", "as": "mei" }, "expect": { "data_subset": { "routes": [], "tasks": [] } } }
+    ]
+  },
+  {
+    "name": "PATCH: code change checked for uniqueness; unknown fields refused",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "steps": [
+      { "call": { "method": "PATCH", "path": "/api/customers/12", "as": "mei", "body": { "code": "C0040" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "code" } } },
+      { "call": { "method": "PATCH", "path": "/api/customers/12", "as": "mei", "body": { "code": "abc-1" } }, "expect": { "status": 200, "data_subset": { "code": "ABC-1" } } },
+      { "call": { "method": "PATCH", "path": "/api/customers/12", "as": "mei", "body": { "active": false } }, "expect": { "status": 422, "code": "VALIDATION" } },
+      { "call": { "method": "PATCH", "path": "/api/customers/12", "as": "mei", "body": { "waste_types": [] } }, "expect": { "status": 422, "code": "WASTE_TYPES_REQUIRED" } }
+    ]
+  }
+]

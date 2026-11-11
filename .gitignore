@@ -1,0 +1,10 @@
+# Data, local config and build output (section 11.2). Never commit backend/data: it holds
+# secret.key, password hashes and photos.
+backend/data/
+backend/public/app/
+# temporary folders of deploy/update.sh (build beside the live app, then swap)
+backend/public/app.new/
+backend/public/app.old/
+backend/config.local.php
+frontend/node_modules/
+frontend/dist/

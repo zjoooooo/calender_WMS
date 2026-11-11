@@ -1,0 +1,102 @@
+[
+  {
+    "name": "list per year with a past flag",
+    "now": "2026-11-11T10:00:00+08:00",
+    "steps": [
+      { "call": { "method": "GET", "path": "/api/holidays?year=2027", "as": "mei" },
+        "expect": { "status": 200, "data_subset": { "$len": 12 } } },
+      { "call": { "method": "GET", "path": "/api/holidays?year=2027", "as": "mei" },
+        "expect": { "data_subset": { "$contains": [ { "date": "2027-02-06", "name": "Chinese New Year", "past": false }, { "date": "2027-10-28", "name": "Deepavali" } ] } } },
+      { "call": { "method": "GET", "path": "/api/holidays?year=2026", "as": "mei" },
+        "expect": { "data_subset": { "$contains": [ { "date": "2026-11-09", "past": true }, { "date": "2026-12-25", "name": "Christmas Day", "past": false } ] } } },
+      { "call": { "method": "GET", "path": "/api/holidays", "as": "mei" }, "expect": { "data_subset": { "$len": 26 } } },
+      { "call": { "method": "GET", "path": "/api/holidays?year=27", "as": "mei" }, "expect": { "status": 422, "code": "VALIDATION" } }
+    ]
+  },
+  {
+    "name": "add (201, kept sorted), rename (200), delete (204)",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic", "days": { "2026-11-11": { "date": "2026-11-11", "plan": null, "runs": {}, "dropped_runs": [] } } },
+    "steps": [
+      { "call": { "method": "PUT", "path": "/api/holidays/2026-11-20", "as": "mei", "body": { "name": "Company Day" } },
+        "expect": { "status": 201, "data_subset": { "date": "2026-11-20", "name": "Company Day" },
+          "docs_subset": { "plan": { "holidays": [ { "date": "2026-01-01" }, { "date": "2026-11-08" }, { "date": "2026-11-09" },
+            { "date": "2026-11-20", "name": "Company Day" }, { "date": "2026-11-29" }, { "date": "2026-12-25" }, { "date": "2027-01-01" } ] } } } },
+      { "call": { "method": "PUT", "path": "/api/holidays/2026-11-20", "as": "mei", "body": { "name": "Company Day 2" } },
+        "expect": { "status": 200, "data_subset": { "name": "Company Day 2" } } },
+      { "call": { "method": "PUT", "path": "/api/holidays/2026-11-11", "as": "mei", "body": { "name": "Today is allowed" } },
+        "expect": { "status": 201 } },
+      { "call": { "method": "DELETE", "path": "/api/holidays/2026-11-20", "as": "mei" },
+        "expect": { "status": 204, "docs_subset": { "plan": { "holidays": { "$not_contains": [ { "date": "2026-11-20" } ] } } } } },
+      { "call": { "method": "DELETE", "path": "/api/holidays/2026-11-20", "as": "mei" }, "expect": { "status": 404, "code": "NOT_FOUND" } }
+    ]
+  },
+  {
+    "name": "past dates are locked",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "steps": [
+      { "call": { "method": "PUT", "path": "/api/holidays/2026-11-10", "as": "mei", "body": { "name": "Too late" } }, "expect": { "status": 422, "code": "PAST_DATE_LOCKED" } },
+      { "call": { "method": "PUT", "path": "/api/holidays/2026-11-09", "as": "mei", "body": { "name": "Rename past" } }, "expect": { "status": 422, "code": "PAST_DATE_LOCKED" } },
+      { "call": { "method": "DELETE", "path": "/api/holidays/2026-11-09", "as": "mei" }, "expect": { "status": 422, "code": "PAST_DATE_LOCKED",
+        "docs_subset": { "plan": { "holidays": { "$contains": [ { "date": "2026-11-09", "name": "Deepavali (observed)" } ] } } } } }
+    ]
+  },
+  {
+    "name": "R1: at 03:00 the previous date is still today and editable; at 04:00 it locks",
+    "now": "2026-11-12T03:00:00+08:00",
+    "given": { "fixture": "basic", "days": { "2026-11-11": { "date": "2026-11-11", "plan": null, "runs": {}, "dropped_runs": [] } } },
+    "steps": [
+      { "call": { "method": "PUT", "path": "/api/holidays/2026-11-11", "as": "mei", "body": { "name": "Night shift edit" } }, "expect": { "status": 201 } },
+      { "now": "2026-11-12T04:00:00+08:00",
+        "call": { "method": "DELETE", "path": "/api/holidays/2026-11-11", "as": "mei" }, "expect": { "status": 422, "code": "PAST_DATE_LOCKED" } }
+    ]
+  },
+  {
+    "name": "validation: name, bad date, unknown field",
+    "now": "2026-11-11T10:00:00+08:00",
+    "steps": [
+      { "call": { "method": "PUT", "path": "/api/holidays/2026-12-31", "as": "mei", "body": { "name": "" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "name" } } },
+      { "call": { "method": "PUT", "path": "/api/holidays/2026-02-30", "as": "mei", "body": { "name": "X" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "date" } } },
+      { "call": { "method": "PUT", "path": "/api/holidays/2026-12-31", "as": "mei", "body": { "name": "X", "date": "2026-12-31" } }, "expect": { "status": 422, "code": "VALIDATION" } }
+    ]
+  },
+  {
+    "name": "HOLIDAY_CONFLICT: adding a holiday under an adhoc one-off",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "call": { "method": "PUT", "path": "/api/holidays/2026-11-12", "as": "mei", "body": { "name": "Surprise PH" } },
+    "expect": { "status": 409, "code": "HOLIDAY_CONFLICT",
+      "error_subset": { "details": { "routes": [ { "id": 41, "code": "A1", "name": "Adhoc 12 Nov", "type": "adhoc", "date": "2026-11-12" } ] } },
+      "docs_subset": { "plan": { "holidays": { "$not_contains": [ { "date": "2026-11-12" } ] } } } }
+  },
+  {
+    "name": "HOLIDAY_CONFLICT: adding a holiday under a regular one-off (a moved route)",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic", "plan": { "routes": [ { "id": 43, "code": "N1-14", "color": 1, "type": "regular", "name": "North 1 (from Fri 13 Nov)", "note": "", "rev": 1,
+      "date": "2026-11-14", "copied_from": { "route_id": 5, "date": "2026-11-13" }, "stops": [] } ] } },
+    "call": { "method": "PUT", "path": "/api/holidays/2026-11-14", "as": "mei", "body": { "name": "X" } },
+    "expect": { "status": 409, "code": "HOLIDAY_CONFLICT", "error_subset": { "details": { "routes": [ { "id": 43, "type": "regular" } ] } } }
+  },
+  {
+    "name": "HOLIDAY_CONFLICT: removing a weekday holiday from under a special one-off",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "call": { "method": "DELETE", "path": "/api/holidays/2026-12-25", "as": "mei" },
+    "expect": { "status": 409, "code": "HOLIDAY_CONFLICT", "error_subset": { "details": { "routes": [ { "id": 42, "code": "N1-25", "type": "special", "date": "2026-12-25" } ] } } }
+  },
+  {
+    "name": "removing a Sunday holiday under a special one-off is fine (Sunday stays rest)",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "call": { "method": "DELETE", "path": "/api/holidays/2026-11-29", "as": "mei" },
+    "expect": { "status": 204 }
+  },
+  {
+    "name": "renaming a holiday under an adhoc is not an add: no conflict",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "call": { "method": "PUT", "path": "/api/holidays/2026-12-25", "as": "mei", "body": { "name": "Xmas" } },
+    "expect": { "status": 200 }
+  }
+]

@@ -1,0 +1,77 @@
+[
+  {
+    "name": "office reads the rollover hour",
+    "now": "2026-11-11T10:00:00+08:00",
+    "call": { "method": "GET", "path": "/api/settings", "as": "mei" },
+    "expect": { "status": 200, "data_subset": { "rollover_hour": 4 } }
+  },
+  {
+    "name": "office cannot change it",
+    "now": "2026-11-11T10:00:00+08:00",
+    "call": { "method": "PATCH", "path": "/api/settings", "as": "mei", "body": { "rollover_hour": 5 } },
+    "expect": { "status": 403, "code": "FORBIDDEN", "docs_subset": { "plan": { "settings": { "rollover_hour": 4 } } } }
+  },
+  {
+    "name": "rollover 7 is a VALIDATION error",
+    "now": "2026-11-11T10:00:00+08:00",
+    "call": { "method": "PATCH", "path": "/api/settings", "as": "admin", "body": { "rollover_hour": 7 } },
+    "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "rollover_hour" } }
+  },
+  {
+    "name": "rollover must be an integer",
+    "now": "2026-11-11T10:00:00+08:00",
+    "steps": [
+      { "call": { "method": "PATCH", "path": "/api/settings", "as": "admin", "body": { "rollover_hour": "4" } }, "expect": { "status": 422, "code": "VALIDATION" } },
+      { "call": { "method": "PATCH", "path": "/api/settings", "as": "admin", "body": { "rollover_hour": 4.5 } }, "expect": { "status": 422, "code": "VALIDATION" } },
+      { "call": { "method": "PATCH", "path": "/api/settings", "as": "admin", "body": { "rollover": 4 } }, "expect": { "status": 422, "code": "VALIDATION" } }
+    ]
+  },
+  {
+    "name": "at 03:00 changing 4 -> 2 would jump today forward: refused",
+    "now": "2026-11-12T03:00:00+08:00",
+    "call": { "method": "PATCH", "path": "/api/settings", "as": "admin", "body": { "rollover_hour": 2 } },
+    "expect": { "status": 422, "code": "ROLLOVER_SHIFTS_TODAY",
+      "error_subset": { "details": { "today": "2026-11-11", "would_be": "2026-11-12", "retry_after": "2026-11-12T04:00:00+08:00" } },
+      "docs_subset": { "plan": { "settings": { "rollover_hour": 4 } } } }
+  },
+  {
+    "name": "at 03:00 with rollover 2 changing 2 -> 4 would move today back: refused",
+    "now": "2026-11-12T03:00:00+08:00",
+    "given": { "plan": { "settings": { "rollover_hour": 2 } } },
+    "call": { "method": "PATCH", "path": "/api/settings", "as": "admin", "body": { "rollover_hour": 4 } },
+    "expect": { "status": 422, "code": "ROLLOVER_SHIFTS_TODAY",
+      "error_subset": { "details": { "today": "2026-11-12", "would_be": "2026-11-11", "retry_after": "2026-11-12T04:00:00+08:00" } } }
+  },
+  {
+    "name": "at 03:00 changing 4 -> 6 keeps today: accepted",
+    "now": "2026-11-12T03:00:00+08:00",
+    "call": { "method": "PATCH", "path": "/api/settings", "as": "admin", "body": { "rollover_hour": 6 } },
+    "expect": { "status": 200, "data_subset": { "rollover_hour": 6 } }
+  },
+  {
+    "name": "at 10:00 any value 0-6 is accepted and takes effect at once",
+    "now": "2026-11-12T10:00:00+08:00",
+    "steps": [
+      { "call": { "method": "PATCH", "path": "/api/settings", "as": "admin", "body": { "rollover_hour": 0 } }, "expect": { "status": 200, "data_subset": { "rollover_hour": 0 } } },
+      { "call": { "method": "PATCH", "path": "/api/settings", "as": "admin", "body": { "rollover_hour": 6 } }, "expect": { "status": 200, "docs_subset": { "plan": { "settings": { "rollover_hour": 6 } } } } },
+      { "call": { "method": "PATCH", "path": "/api/settings", "as": "admin", "body": { "rollover_hour": 5 } }, "expect": { "status": 200 } },
+      { "call": { "method": "GET", "path": "/api/meta", "as": "mei" }, "expect": { "data_subset": { "rollover_hour": 5, "day_ends_at": "2026-11-13T05:00:00+08:00" } } },
+      { "now": "2026-11-13T04:30:00+08:00", "call": { "method": "GET", "path": "/api/meta", "as": "mei" }, "expect": { "data_subset": { "today": "2026-11-12" } } }
+    ]
+  },
+  {
+    "name": "trucks: plates normalised, duplicates refused, meta lists active ones",
+    "now": "2026-11-11T10:00:00+08:00",
+    "steps": [
+      { "call": { "method": "PUT", "path": "/api/trucks", "as": "mei", "body": { "trucks": [ { "plate": " sba 1234x ", "active": true }, { "plate": "GBA1234X", "active": false }, { "plate": "XE-12" } ] } },
+        "expect": { "status": 200, "data_subset": [ { "plate": "SBA1234X", "active": true }, { "plate": "GBA1234X", "active": false }, { "plate": "XE-12", "active": true } ] } },
+      { "call": { "method": "GET", "path": "/api/trucks", "as": "mei" }, "expect": { "data_subset": { "$len": 3 } } },
+      { "call": { "method": "GET", "path": "/api/meta", "as": "ali" }, "expect": { "data_subset": { "trucks": ["SBA1234X", "XE-12"] } } },
+      { "call": { "method": "PUT", "path": "/api/trucks", "as": "mei", "body": { "trucks": [ { "plate": "SBA1234X" }, { "plate": "sba1234x" } ] } },
+        "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "trucks.1.plate" } } },
+      { "call": { "method": "PUT", "path": "/api/trucks", "as": "mei", "body": { "trucks": [ { "plate": "SBA/1" } ] } }, "expect": { "status": 422, "code": "VALIDATION" } },
+      { "call": { "method": "PUT", "path": "/api/trucks", "as": "mei", "body": { "trucks": [ { "plate": "SBA1", "colour": "red" } ] } }, "expect": { "status": 422, "code": "VALIDATION" } },
+      { "call": { "method": "PUT", "path": "/api/trucks", "as": "ali", "body": { "trucks": [] } }, "expect": { "status": 403, "code": "FORBIDDEN" } }
+    ]
+  }
+]

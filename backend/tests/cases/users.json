@@ -1,0 +1,68 @@
+[
+  {
+    "name": "admin creates a driver; the user must change the password",
+    "now": "2026-11-11T10:00:00+08:00",
+    "steps": [
+      { "call": { "method": "POST", "path": "/api/users", "as": "admin", "body": { "username": "Chong.Lee", "name": "Chong", "role": "driver", "lang": "zh", "password": "chong-pass" } },
+        "expect": { "status": 201,
+          "data_subset": { "id": 5, "username": "chong.lee", "name": "Chong", "role": "driver", "lang": "zh", "active": true, "must_change_password": true, "locked_until": null, "password_hash": { "$absent": true } },
+          "docs_subset": { "users": { "seq": 5, "users": { "$contains": [ { "id": 5, "username": "chong.lee", "token_version": 1, "failed_logins": [] } ] } } } } },
+      { "call": { "method": "POST", "path": "/api/login", "body": { "username": "chong.lee", "password": "chong-pass" } },
+        "expect": { "status": 200, "data_subset": { "user": { "must_change_password": true } } } },
+      { "call": { "method": "GET", "path": "/api/users", "as": "admin" }, "expect": { "data_subset": { "$len": 5 } } }
+    ]
+  },
+  {
+    "name": "create validation",
+    "now": "2026-11-11T10:00:00+08:00",
+    "steps": [
+      { "call": { "method": "POST", "path": "/api/users", "as": "admin", "body": { "username": "ALI", "name": "Ali 2", "role": "driver", "password": "password9" } }, "expect": { "status": 422, "code": "USERNAME_TAKEN" } },
+      { "call": { "method": "POST", "path": "/api/users", "as": "admin", "body": { "username": "newbie", "name": "N", "role": "driver", "password": "short" } }, "expect": { "status": 422, "code": "PASSWORD_TOO_SHORT" } },
+      { "call": { "method": "POST", "path": "/api/users", "as": "admin", "body": { "username": "ab", "name": "N", "role": "driver", "password": "password9" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "username" } } },
+      { "call": { "method": "POST", "path": "/api/users", "as": "admin", "body": { "username": "has space", "name": "N", "role": "driver", "password": "password9" } }, "expect": { "status": 422, "code": "VALIDATION" } },
+      { "call": { "method": "POST", "path": "/api/users", "as": "admin", "body": { "username": "newbie", "name": "N", "role": "boss", "password": "password9" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "role" } } },
+      { "call": { "method": "POST", "path": "/api/users", "as": "admin", "body": { "username": "newbie", "name": "N", "role": "driver", "lang": "fr", "password": "password9" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "lang" } } },
+      { "call": { "method": "PATCH", "path": "/api/users/99", "as": "admin", "body": { "name": "X" } }, "expect": { "status": 404, "code": "NOT_FOUND" } },
+      { "call": { "method": "PATCH", "path": "/api/users/3", "as": "admin", "body": { "username": "x" } }, "expect": { "status": 422, "code": "VALIDATION" } }
+    ]
+  },
+  {
+    "name": "drivers list shows the jobs each driver holds today (R25)",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "call": { "method": "GET", "path": "/api/drivers", "as": "mei" },
+    "expect": { "status": 200, "data_subset": [
+      { "id": 3, "name": "Ali", "active": true, "route_job": { "date": "2026-11-11", "job": "r5", "code": "N1", "pending": 1 }, "task_jobs": [ { "job": "t6", "customer": "ABC Restaurant" } ] },
+      { "id": 4, "name": "Bala", "active": true, "route_job": null, "task_jobs": [] } ] }
+  },
+  {
+    "name": "a finished route is not held",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic", "days": { "2026-11-11": { "date": "2026-11-11", "plan": null, "dropped_runs": [], "runs": {
+      "r5": { "job": "r5", "driver_id": 3, "holds": [], "removed": [], "visits": {
+        "12": { "customer_id": 12, "outcome": "collected", "rev": 1 }, "40": { "customer_id": 40, "outcome": "missed", "rev": 1 } } } } } } },
+    "call": { "method": "GET", "path": "/api/drivers", "as": "admin" },
+    "expect": { "status": 200, "data_subset": [ { "id": 3, "route_job": null, "task_jobs": [] }, { "id": 4 } ] }
+  },
+  {
+    "name": "yesterday's runs are never held (night shift ended at the rollover)",
+    "now": "2026-11-12T04:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "call": { "method": "GET", "path": "/api/drivers", "as": "mei" },
+    "expect": { "status": 200, "data_subset": [ { "id": 3, "route_job": null, "task_jobs": [] }, { "id": 4 } ] }
+  },
+  {
+    "name": "deactivating a driver releases the jobs they hold (R24)",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "steps": [
+      { "call": { "method": "PATCH", "path": "/api/users/3", "as": "admin", "body": { "active": false } },
+        "expect": { "status": 200, "data_subset": { "active": false },
+          "docs_subset": { "day:2026-11-11": { "runs": {
+            "r5": { "driver_id": null, "holds": [ { "driver_id": 3, "to": "2026-11-11T10:00:00+08:00", "end": "released" } ], "visits": { "12": { "outcome": "collected" } } },
+            "t6": { "driver_id": null, "holds": [ { "end": "released" } ] } } } } } },
+      { "call": { "method": "GET", "path": "/api/drivers", "as": "mei" },
+        "expect": { "data_subset": [ { "id": 3, "active": false, "route_job": null }, { "id": 4 } ] } }
+    ]
+  }
+]

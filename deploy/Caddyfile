@@ -1,0 +1,36 @@
+# WMS route & task calendar: Caddy site (section 11.4, section 12).
+# Template: deploy/install.sh puts the domain in place of the placeholder on the site line below and
+# writes the result to /etc/caddy/Caddyfile.
+# Edit this template, not /etc/caddy/Caddyfile (a re-run of install.sh rewrites that file).
+# - Automatic HTTPS: Caddy gets and renews the Let's Encrypt certificate and redirects HTTP to HTTPS.
+# - /api/* goes to PHP-FPM (pool wms, Unix socket); everything else is the built app (public/app).
+# - backend/data is outside both roots and is never served.
+__WMS_DOMAIN__ {
+	encode gzip
+	request_body {
+		max_size 3MB
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "same-origin"
+		Content-Security-Policy "default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; connect-src 'self'"
+	}
+	handle /api/* {
+		root * /opt/wms/backend/public
+		php_fastcgi unix//run/php/wms.sock {
+			request_buffers 3MB
+			capture_stderr
+		}
+	}
+	handle /assets/* {
+		root * /opt/wms/backend/public/app
+		file_server
+	}
+	handle {
+		root * /opt/wms/backend/public/app
+		try_files {path} /index.html
+		file_server
+	}
+}

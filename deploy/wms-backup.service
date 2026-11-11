@@ -1,0 +1,20 @@
+# WMS route & task calendar: nightly backup of backend/data (section 11.4).
+# deploy/install.sh copies this file to /etc/systemd/system/; wms-backup.timer starts it at 04:30.
+# Run a backup now:   sudo systemctl start wms-backup
+# Result and log:     systemctl status wms-backup    journalctl -u wms-backup
+# backup.php takes the same lock as the server, so plan, users, days/ and audit/ come from one moment.
+# It exits non-zero (the unit shows "failed") when the backup disk has under 15% free.
+[Unit]
+Description=WMS backup of /opt/wms/backend/data to /var/backups/wms
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=wms
+Group=wms
+UMask=0027
+ExecStart=/usr/bin/php /opt/wms/backend/tools/backup.php /var/backups/wms --keep 30
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
