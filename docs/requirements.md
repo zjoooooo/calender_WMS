@@ -56,3 +56,6 @@
 - If a day has MORE THAN 4 routes, the cell collapses automatically; an "expand" control shows the rest in place (and collapses again).
 - Clicking a single route in a cell opens it for editing.
 - Today's date is shown in BLUE; public-holiday dates are shown in RED.
+## Round 6 (after the split-route fixes)
+- Split routes, later planned changes: the user chose option A. When an edit applies from today or from a date D, a later part of the route that already has its own planned change (e.g. "Tue/Thu from 21 Dec", or customers added or removed from a later date) KEEPS it; only what the clerk changed is carried into it. The screen must SAY SO before saving, and name what is kept.
+- Deployment: run it with GitHub Actions. Every push runs the tests on GitHub; a push to main that passes the tests deploys to the Linux VPS (section 11.4 of Project.md) over SSH, using deploy/update.sh. The server, domain and SSH secrets are still to be provided by the user.
