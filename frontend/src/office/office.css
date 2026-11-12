@@ -24,9 +24,17 @@
 .tchip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 4px 10px; font-size: 12.5px; display: inline-flex; gap: 6px; align-items: center; }
 .tchip[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px; }
-.lchip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 3px 8px 3px 3px; font-size: 12px; overflow: hidden; max-width: 220px; }
-/* the route code sits on the route's colour (dark text reads on all 10 palette colours) */
-.lchip .code, .occ .code, .mline .code { background: var(--rc); color: #0B0B0B; border-radius: 4px; padding: 0 5px; flex: none; }
+.lchip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 3px 8px; font-size: 12px; overflow: hidden; max-width: 220px; }
+/* the route code sits on its progress colour (calendarModel routeTone); the legend's codes have none */
+.occ .code, .mline .code { border-radius: 4px; padding: 0 5px; flex: none; background: none; color: var(--fg); }
+[data-tone] > .code, .tonekey i { color: #fff; background: var(--st-idle); }
+[data-tone="early"] > .code, .tonekey [data-tone="early"] i { background: var(--st-early); }
+[data-tone="late"] > .code, .tonekey [data-tone="late"] i { background: var(--st-late); }
+[data-tone="done"] > .code, .tonekey [data-tone="done"] i { background: var(--st-done); }
+[data-tone="problem"] > .code, .tonekey [data-tone="problem"] i { background: var(--st-problem); }
+.tonekey { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); }
+.tonekey span { display: inline-flex; align-items: center; gap: 5px; }
+.tonekey i { width: 12px; height: 12px; border-radius: 3px; flex: none; }
 .lchip .code { font-size: 12px; }
 .lchip .ln { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 .lchip.on { border-color: var(--fg); box-shadow: 0 0 0 1px var(--fg); }
@@ -76,7 +84,6 @@
 .occ .st { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .occ .ed { color: var(--warn); font-size: 11px; flex: none; }
 .occ.cancelled .code, .occ.cancelled .nm { text-decoration: line-through; color: var(--muted); }
-.occ.cancelled .code, .mline.cancelled .code { background: none; }
 .occ.cancelled { background: transparent; border-style: dashed; }
 .occ .pg { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--surface-2); }
 .occ .pg i { display: block; height: 100%; background: var(--muted); }
@@ -176,6 +183,8 @@
 .stoplist.dirty { outline: 2px solid var(--warn); outline-offset: 4px; }
 .stop { display: grid; grid-template-columns: auto 30px minmax(0, 1fr) auto; gap: 6px; align-items: start; border: 1px solid var(--line); border-radius: 8px; padding: 6px 7px; background: var(--surface); }
 .stop.done { background: var(--surface-2); }
+.stop.ok { background: var(--ok-bg); border-color: var(--ok); }
+.stop.miss { background: var(--danger-bg); border-color: var(--danger); }
 .stop.new { border-color: var(--warn); }
 .stop.placeholder { opacity: .4; border-style: dashed; }
 .stop.overlay { box-shadow: var(--shadow); cursor: grabbing; }
@@ -222,12 +231,6 @@ button.sn:hover { text-decoration: underline; }
 .picked { display: flex; flex-wrap: wrap; gap: 6px; }
 .picked .chip { cursor: default; }
 
-/* swatches */
-.swatches { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.swatches button { width: 24px; height: 24px; border-radius: 5px; border: 2px solid transparent; background: var(--rc); padding: 0; }
-.swatches button[aria-pressed="true"] { border-color: var(--fg); box-shadow: 0 0 0 1px var(--surface) inset; }
-.swatches .auto { width: auto; height: 24px; padding: 0 8px; background: var(--surface); border: 1px solid var(--line); font-size: 12px; }
-.swatches .auto[aria-pressed="true"] { border-color: var(--fg); }
 
 /* result dialog */
 .kg { display: grid; grid-template-columns: 110px minmax(0, 1fr) 40px; align-items: center; gap: 8px; }

@@ -7,11 +7,10 @@ import { useState, type KeyboardEvent } from 'react';
 import type { CalendarDay, RouteOccurrence } from '../api';
 import { fmtDay, fmtMonthStart, fmtTime, useI18n, weekdayName } from '../i18n';
 import { useSession } from '../session';
-import { rcStyle } from '../ui/palette';
 import { StatusGlyph } from '../ui/StatusGlyph';
 import { TypeTag, WasteTag } from '../ui/Chip';
 import { useCalendar, type CreateKind } from './calendarContext';
-import { dispatchSort, monthCellLines, monthWeeks, pausedCounts, type DayGroups } from './calendarModel';
+import { dispatchSort, monthCellLines, monthWeeks, pausedCounts, routeTone, type DayGroups } from './calendarModel';
 import { MenuButton, opsText, runDetailText, totalsText, type MenuItem } from './officeShared';
 
 const onEnter = (fn: () => void) => (e: KeyboardEvent) => {
@@ -167,7 +166,7 @@ export function RouteRow({ o, paused }: { o: RouteOccurrence; paused?: boolean }
   return (
     <div
       className={cls}
-      style={rcStyle(o.color)}
+      data-tone={routeTone(o) ?? undefined}
       role="button"
       tabIndex={0}
       data-key={o.key}
@@ -339,7 +338,7 @@ function MonthAdd({ day, right }: { day: CalendarDay; right: boolean }) {
   return <MenuButton className="madd" align={right ? 'right' : 'left'} label="+" title={t('cal.addOn', { date: fmtDay(day.date, lang) })} items={items} />;
 }
 
-/** One route line: CODE on its colour, tags (S / ⚡A, RCY), name (truncated first), short status (§8.3) at the right. */
+/** One route line: CODE on its progress colour, tags (S / ⚡A, RCY), name (truncated first), short status (§8.3) at the right. */
 function MonthRouteLine({ o }: { o: RouteOccurrence }) {
   const { t, lang } = useI18n();
   const { meta } = useSession();
@@ -363,7 +362,7 @@ function MonthRouteLine({ o }: { o: RouteOccurrence }) {
     <button
       type="button"
       className={cls}
-      style={rcStyle(o.color)}
+      data-tone={routeTone(o) ?? undefined}
       data-key={o.key}
       data-code={o.code}
       title={[`${o.code} · ${o.name}`, covered || detail].filter(Boolean).join('\n')}

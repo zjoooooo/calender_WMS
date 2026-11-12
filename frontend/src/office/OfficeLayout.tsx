@@ -8,6 +8,7 @@ import { useSession } from '../session';
 import { ConfirmDialog } from '../ui/Dialog';
 import { useErrorText } from '../ui/Feedback';
 import { LangSwitch } from '../ui/LangSwitch';
+import { StyleSwitch } from '../ui/StyleSwitch';
 
 const NAV: { to: string; key: string; admin?: boolean }[] = [
   { to: '/', key: 'nav.calendar' },
@@ -51,6 +52,7 @@ export default function OfficeLayout() {
         </nav>
         <span className="spacer" />
         {todayText && <span className="who num">{todayText}</span>}
+        <StyleSwitch />
         <LangSwitch />
         {!__WMS_DEMO__ && <UserMenu />}
       </header>

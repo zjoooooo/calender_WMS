@@ -40,7 +40,6 @@ import { useSession } from '../session';
 import { Chip, TypeTag } from '../ui/Chip';
 import { Dialog } from '../ui/Dialog';
 import { Loading } from '../ui/Feedback';
-import { COLOR_INDEXES, rcStyle } from '../ui/palette';
 import { useToast } from '../ui/Toast';
 import type { CreateKind } from './calendarContext';
 import { addDays } from './calendarModel';
@@ -286,19 +285,6 @@ export function RouteForm(props: Props) {
               </select>
               <span className="hint">{t(edit ? 'rf.wasteTypeFixed' : 'rf.wasteTypeHint')}</span>
             </label>
-            <div className="field full">
-              <span>{t('rf.color')}</span>
-              <div className="swatches" role="group" aria-label={t('rf.color')}>
-                {!edit && (
-                  <button type="button" className="auto" aria-pressed={color === null} onClick={() => set('color', null)}>
-                    {t('rf.autoColor')}
-                  </button>
-                )}
-                {COLOR_INDEXES.map((i) => (
-                  <button key={i} type="button" style={rcStyle(i)} aria-pressed={color === i} aria-label={t('rf.colorN', { n: i })} onClick={() => set('color', i)} />
-                ))}
-              </div>
-            </div>
 
             {oneOff ? (
               <label className="field">

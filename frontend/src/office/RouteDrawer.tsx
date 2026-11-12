@@ -158,6 +158,7 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
       extra: extra.length ? extra : undefined,
       locked: !!v?.outcome,
       done: !!v?.outcome,
+      tone: v?.outcome === 'collected' ? 'ok' : v?.outcome === 'missed' ? 'miss' : undefined,
       isNew: !base.stops.some((b) => b.customer_id === s.customer_id),
       onOpen: canResult ? () => openResult(s.customer_id) : undefined,
     };
@@ -279,7 +280,6 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
       <Drawer
         open
         onClose={onClose}
-        color={occ.color}
         label={`${occ.code} ${occ.name}`}
         title={
           <div className="rd-title">

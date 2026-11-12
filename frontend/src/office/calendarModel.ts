@@ -185,11 +185,31 @@ export function monthWeeks<T extends { day: Pick<CalendarDay, 'in_month'> }>(gro
   return weeks;
 }
 
+// ---- progress colour (§9.2) ------------------------------------------------------------------------
+
+/** The colour of a route's code on the calendar: how far the route is, not which route it is. */
+export type Tone = 'idle' | 'early' | 'late' | 'done' | 'problem';
+export const TONES: Tone[] = ['idle', 'early', 'late', 'done', 'problem'];
+
+/**
+ * idle: not started (also a future day) · early: under way, less than half of the stops have a result ·
+ * late: under way, half or more · done: every stop collected · problem: a past day that was not finished or
+ * has no record, a route that needs a driver, or a stop that was not collected. A cancelled or paused
+ * occurrence has no colour (null).
+ */
+export function routeTone(o: Pick<RouteOccurrence, 'status' | 'run_status' | 'run'>): Tone | null {
+  if (o.status !== 'scheduled') return null;
+  const run = o.run;
+  if ((run?.missed ?? 0) > 0 || o.run_status === 'incomplete' || o.run_status === 'no_record' || o.run_status === 'open') return 'problem';
+  if (o.run_status === 'done') return 'done';
+  if (o.run_status === 'active') return run && run.total > 0 && (run.collected + run.missed) * 2 >= run.total ? 'late' : 'early';
+  return 'idle';
+}
+
 // ---- legend (§9.2) ---------------------------------------------------------------------------------
 
 export interface LegendItem {
   code: string;
-  color: number;
   type: RouteType;
   name: string;
 }
@@ -206,7 +226,7 @@ export function legendItems(data: CalendarResponse | undefined, filters: Filters
   const seen = new Map<string, LegendItem>();
   for (const o of data?.routes ?? []) {
     if (filters.types[o.type] === false || seen.has(o.code)) continue;
-    seen.set(o.code, { code: o.code, color: o.color, type: o.type, name: o.name });
+    seen.set(o.code, { code: o.code, type: o.type, name: o.name });
   }
   return [...seen.values()].sort((a, b) => TYPE_RANK[a.type] - TYPE_RANK[b.type] || naturalCompare(a.code, b.code));
 }
