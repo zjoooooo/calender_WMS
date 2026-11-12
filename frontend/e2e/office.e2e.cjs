@@ -186,6 +186,9 @@ async function monthChecks(page, { today, tomorrow, workDay, ph }) {
   const resp = page.waitForResponse((r) => r.url().includes('/api/calendar') && r.status() === 200, { timeout: 40000 });
   await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
   await resp;
+  // The response caught above can be a poll that left before the new route was saved: wait for the line
+  // itself (the next refetch at the latest), then check that the cell is still expanded.
+  await lines.nth(n).waitFor({ timeout: 45000 }).catch(() => {});
   await page.waitForTimeout(400);
   check((await lines.count()) === n + 1 && (await cell.locator('.mmore', { hasText: 'Show less' }).count()) === 1, 'after a refetch the cell stays expanded and shows the new route', await lines.count());
   await cell.locator('.mmore').click();
