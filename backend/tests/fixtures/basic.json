@@ -1,0 +1,67 @@
+{
+  "_comment": "Today in cases using this fixture is usually Wed 2026-11-11. The holiday list below replaces the seed list (seeded_years stays [2026, 2027], so nothing is re-imported).",
+  "plan": {
+    "seq": { "customer": 70, "route": 44, "task": 10 },
+    "trucks": [ { "plate": "SBA1234X", "active": true }, { "plate": "GBA1234X", "active": true }, { "plate": "OLD999Z", "active": false } ],
+    "customers": [
+      { "id": 12, "code": "C0012", "name": "ABC Restaurant", "address": "12 Jalan Besar", "phone": "+65 9123 4567", "note": "bins at back lane", "waste_types": ["REL", "OTC"], "active": true },
+      { "id": 21, "code": "C0021", "name": "Sunday Market Stall", "address": "1 Market St", "phone": "", "note": "", "waste_types": ["REL"], "active": true },
+      { "id": 40, "code": "C0040", "name": "Golden Bakery", "address": "5 Tuas South Ave 2", "phone": "", "note": "", "waste_types": ["REL", "COMPACTOR"], "active": true },
+      { "id": 50, "code": "C0050", "name": "Only OTC Co", "address": "9 Kallang Rd", "phone": "", "note": "", "waste_types": ["OTC"], "active": true },
+      { "id": 60, "code": "C0060", "name": "Old Customer", "address": "", "phone": "", "note": "", "waste_types": ["REL"], "active": false },
+      { "id": 70, "code": "C0070", "name": "Zed Ended Route", "address": "", "phone": "", "note": "", "waste_types": ["REL"], "active": true }
+    ],
+    "routes": [
+      { "id": 5, "code": "N1", "color": 1, "type": "regular", "name": "North 1", "note": "", "rev": 4,
+        "start": "2026-11-02", "end": null, "days": [1, 3, 5],
+        "stops": [ { "customer_id": 12, "note": "3 bins" }, { "customer_id": 40, "note": "" } ] },
+      { "id": 7, "code": "S1", "color": 5, "type": "special", "name": "Sunday Market", "note": "", "rev": 1,
+        "start": "2026-11-15", "end": null, "sun": true, "ph": true, "stops": [ { "customer_id": 21, "note": "" } ] },
+      { "id": 8, "code": "E9", "color": 3, "type": "regular", "name": "Ended East", "note": "", "rev": 2,
+        "start": "2026-10-01", "end": "2026-11-01", "days": [2], "stops": [ { "customer_id": 70, "note": "" } ] },
+      { "id": 41, "code": "A1", "color": 2, "type": "adhoc", "name": "Adhoc 12 Nov", "note": "Call 11 Nov", "rev": 1,
+        "date": "2026-11-12", "copied_from": null, "stops": [ { "customer_id": 12, "note": "" } ] },
+      { "id": 42, "code": "N1-25", "color": 1, "type": "special", "name": "North 1 (from Fri 25 Dec)", "note": "", "rev": 1,
+        "date": "2026-12-25", "copied_from": { "route_id": 5, "date": "2026-12-25" },
+        "stops": [ { "customer_id": 12, "note": "3 bins" }, { "customer_id": 40, "note": "" } ] },
+      { "id": 44, "code": "S2", "color": 4, "type": "special", "name": "PH Sunday run", "note": "", "rev": 1,
+        "date": "2026-11-29", "copied_from": null, "stops": [ { "customer_id": 21, "note": "" } ] }
+    ],
+    "route_overrides": [
+      { "route_id": 5, "date": "2026-11-04", "cancelled": false, "stops": [ { "customer_id": 40, "note": "" } ], "note": "" },
+      { "route_id": 5, "date": "2026-11-18", "cancelled": false, "stops": [ { "customer_id": 12, "note": "" } ], "note": "small truck" }
+    ],
+    "tasks": [
+      { "id": 3, "waste_type": "COMPACTOR", "customer_id": 40, "note": "Bin at loading bay", "rev": 2, "start": "2026-11-03", "end": null, "days": [2, 5] },
+      { "id": 6, "waste_type": "OTC", "customer_id": 12, "note": "Old furniture", "rev": 1, "date": "2026-11-11", "copied_from": null },
+      { "id": 9, "waste_type": "OTC", "customer_id": 12, "note": "Past", "rev": 1, "date": "2026-11-05", "copied_from": null },
+      { "id": 10, "waste_type": "COMPACTOR", "customer_id": 40, "note": "", "rev": 1, "start": "2026-11-20", "end": null, "days": [1] }
+    ],
+    "task_overrides": [
+      { "task_id": 10, "date": "2026-11-23", "cancelled": true, "note": "closed" }
+    ],
+    "holidays": [
+      { "date": "2026-01-01", "name": "New Year's Day" },
+      { "date": "2026-11-08", "name": "Deepavali" },
+      { "date": "2026-11-09", "name": "Deepavali (observed)" },
+      { "date": "2026-11-29", "name": "Test Sunday PH" },
+      { "date": "2026-12-25", "name": "Christmas Day" },
+      { "date": "2027-01-01", "name": "New Year's Day" }
+    ]
+  },
+  "days": {
+    "2026-11-11": {
+      "date": "2026-11-11", "plan": null,
+      "runs": {
+        "r5": { "job": "r5", "driver_id": 3,
+          "holds": [ { "driver_id": 3, "vehicle_no": "SBA1234X", "by": "self", "from": "2026-11-11T07:30:00+08:00", "to": null, "end": null } ],
+          "removed": [],
+          "visits": { "12": { "customer_id": 12, "outcome": "collected", "weights": { "REL": 120.5 }, "rev": 1 } } },
+        "t6": { "job": "t6", "driver_id": 3,
+          "holds": [ { "driver_id": 3, "vehicle_no": "SBA1234X", "by": "self", "from": "2026-11-11T08:00:00+08:00", "to": null, "end": null } ],
+          "removed": [], "visits": {} }
+      },
+      "dropped_runs": []
+    }
+  }
+}

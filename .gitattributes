@@ -1,0 +1,7 @@
+# The repo is edited on Windows and cloned on Linux (section 11.2): a CRLF install.sh would fail
+# with "bash\r: not found", and .bat files need CRLF on Windows.
+*.sh     text eol=lf
+deploy/* text eol=lf
+.github/** text eol=lf
+*.php    text eol=lf
+*.bat    text eol=crlf

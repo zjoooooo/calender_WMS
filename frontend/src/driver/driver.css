@@ -1,0 +1,180 @@
+/* Driver app (§9.3): mobile-first, high-contrast light theme (tokens.css [data-app="driver"]),
+   touch targets of at least 56 px, text of at least 18 px for anything a driver must read,
+   primary buttons fixed at the bottom, no hover, no drag, no icon-only buttons.
+   Look from the approved mockup: route CODE in mono with the colour bar, R/S/⚡A tags. */
+
+.drv { min-height: 100vh; min-height: 100dvh; background: var(--bg); color: var(--fg); font-size: 18px; line-height: 1.4; }
+.drv.has-bar { padding-bottom: calc(150px + env(safe-area-inset-bottom, 0px)); }
+.drv-main {
+  max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px;
+  padding: 12px max(16px, env(safe-area-inset-left, 0px)) 24px max(16px, env(safe-area-inset-right, 0px));
+}
+.drv h1 { font-size: 22px; }
+.drv h2 { font-size: 20px; }
+.drv .muted { color: var(--muted); }
+.drv .meta { font-size: 16px; color: var(--muted); }
+.drv .small { font-size: 16px; }
+
+/* ---- top bar ---------------------------------------------------------------------------------- */
+.drv-top {
+  position: sticky; top: 0; z-index: 15; background: var(--surface); border-bottom: 2px solid var(--line);
+  padding: max(8px, env(safe-area-inset-top, 0px)) 16px 8px;
+}
+.drv-top-in { max-width: 640px; margin: 0 auto; display: flex; align-items: center; gap: 10px; }
+.drv-top .title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.drv-top .title b { font-size: 19px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.drv-top .title span { font-size: 15px; color: var(--muted); }
+.drv-top .back { min-height: 48px; min-width: 64px; border: 2px solid var(--line); background: var(--surface); border-radius: 10px; font-weight: 700; font-size: 17px; padding: 0 10px; color: var(--fg); text-decoration: none; display: inline-flex; align-items: center; }
+.drv-top .menu-btn { min-height: 48px; border: 2px solid var(--line); background: var(--surface); border-radius: 10px; font-weight: 700; font-size: 16px; padding: 0 10px; }
+.drv-top-sub { max-width: 640px; margin: 6px auto 0; display: flex; align-items: center; gap: 8px; }
+.night { font-size: 15px; color: var(--warn); font-weight: 600; max-width: 640px; margin: 4px auto 0; }
+
+.pill { border-radius: 999px; border: 2px solid currentColor; padding: 3px 10px; font-size: 15px; font-weight: 700; white-space: nowrap; }
+.pill.ok { color: var(--ok); }
+.pill.warn { color: var(--warn); }
+.pill.off { color: var(--danger); }
+
+/* ---- buttons ---------------------------------------------------------------------------------- */
+.dbtn {
+  min-height: 56px; width: 100%; border-radius: 12px; border: 2px solid var(--fg); background: var(--surface); color: var(--fg);
+  font-size: 18px; font-weight: 700; padding: 10px 14px; display: flex; align-items: center; justify-content: center; gap: 8px;
+  text-align: center; text-decoration: none; line-height: 1.2;
+}
+.dbtn.primary { background: var(--ink); color: var(--ink-fg); border-color: var(--ink); }
+.dbtn.go { background: var(--ok); color: #fff; border-color: var(--ok); }
+.dbtn.warn { color: var(--warn); border-color: var(--warn); }
+.dbtn.danger { color: var(--danger); border-color: var(--danger); }
+.dbtn.big { min-height: 64px; font-size: 20px; }
+.dbtn:disabled { opacity: .45; }
+.dbtn.inline { width: auto; display: inline-flex; }
+.dbtns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.drv-bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 14; background: var(--surface); border-top: 2px solid var(--line);
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+}
+.drv-bar-in { max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; }
+
+/* ---- banners and messages --------------------------------------------------------------------- */
+.dban { border-radius: 10px; padding: 10px 12px; font-size: 17px; border: 2px solid var(--line); background: var(--surface); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.dban.info { border-color: var(--today); }
+.dban.warn { border-color: var(--warn); background: var(--warn-bg); }
+.dban.error { border-color: var(--danger); background: var(--danger-bg); }
+.dban.ok { border-color: var(--ok); background: var(--ok-bg); }
+.dban .grow { flex: 1; min-width: 0; }
+.dban a, .dban button.link { font-weight: 700; color: var(--fg); background: none; border: 0; padding: 6px 0; text-decoration: underline; font-size: 17px; }
+
+/* ---- tabs and sections ------------------------------------------------------------------------ */
+.dtabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.dtabs button { min-height: 52px; font-size: 18px; font-weight: 700; border: 2px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--fg); }
+.dtabs button[aria-selected="true"] { background: var(--ink); color: var(--ink-fg); border-color: var(--ink); }
+.sec { font-size: 16px; font-weight: 800; letter-spacing: .03em; color: var(--muted); margin: 6px 0 -4px; text-transform: uppercase; }
+.sec.open { color: var(--warn); }
+.empty { color: var(--muted); font-size: 17px; padding: 8px 0; }
+
+/* ---- job cards (route 72 px, task) -------------------------------------------------------------- */
+.jcard {
+  display: grid; grid-template-columns: 8px 1fr; width: 100%; min-height: 72px; padding: 0; overflow: hidden; text-align: left;
+  border: 2px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--fg); text-decoration: none;
+}
+.jcard > .bar { background: var(--rc); }
+.jcard > .jb { padding: 8px 12px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.jcard .jl1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.jcard .jcode { font-family: var(--font-code); font-weight: 700; font-size: 20px; letter-spacing: .02em; }
+.jcard .jname { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.jcard .jmeta { font-size: 16px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.jcard .jst { font-size: 17px; font-weight: 700; }
+.drv a.jcard, .drv a.scard, .drv a.drow, .drv a.dbtn:not(.primary):not(.go) { color: var(--fg); text-decoration: none; }
+.jcard.adhoc { border-style: dashed; border-color: var(--warn); }
+.jcard.taken { opacity: .5; background: var(--surface-2); }
+.jcard.mine { border-color: var(--fg); box-shadow: 0 0 0 1px var(--fg); }
+.jcard:disabled { cursor: not-allowed; }
+.jst.open { color: var(--warn); }
+.jst.done { color: var(--ok); }
+.jst.active { color: var(--fg); }
+.jst.not_started { color: var(--fg); }
+.drv .tt { font-size: 13px; line-height: 20px; padding: 0 5px; color: var(--fg); border-color: var(--fg); }
+.drv .tt.A { color: var(--warn); border-color: var(--warn); }
+.drv .wtag { font-size: 14px; line-height: 22px; padding: 0 6px; color: var(--fg); border: 2px solid var(--fg); }
+.newtag { font-size: 13px; font-weight: 800; color: #fff; background: var(--today); border-radius: 4px; padding: 1px 6px; }
+.assigned { font-size: 13px; font-weight: 800; color: var(--today); border: 2px solid var(--today); border-radius: 4px; padding: 0 5px; }
+
+/* ---- run view and stops ------------------------------------------------------------------------ */
+.rhead { display: grid; grid-template-columns: 8px 1fr; border: 2px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--surface); }
+.rhead > .bar { background: var(--rc); }
+.rhead > .rb { padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
+.rhead .jcode { font-family: var(--font-code); font-weight: 700; font-size: 24px; }
+.prog { font-size: 22px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.totals { font-size: 17px; font-weight: 600; }
+.scard {
+  display: flex; flex-direction: column; gap: 3px; width: 100%; text-align: left; min-height: 72px; padding: 10px 12px;
+  border: 2px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--fg);
+}
+.scard .l1 { display: flex; align-items: center; gap: 8px; }
+.scard .seq { font-family: var(--font-code); font-weight: 800; font-size: 18px; min-width: 28px; color: var(--muted); }
+.scard .nm { font-weight: 700; font-size: 19px; flex: 1; min-width: 0; }
+.donelist { display: flex; flex-direction: column; gap: 6px; }
+.drow { display: flex; gap: 10px; align-items: center; width: 100%; text-align: left; min-height: 56px; padding: 8px 12px; border: 2px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--fg); }
+.drow .mk { font-weight: 900; font-size: 20px; width: 22px; }
+.drow .mk.ok { color: var(--ok); }
+.drow .mk.miss { color: var(--danger); }
+.drow .grow { flex: 1; min-width: 0; }
+.unsent { font-size: 14px; font-weight: 800; color: var(--warn); white-space: nowrap; }
+.toggle { min-height: 52px; border: 2px solid var(--line); background: var(--surface); border-radius: 10px; font-weight: 700; font-size: 17px; width: 100%; text-align: left; padding: 0 12px; }
+
+/* ---- result form (S4) ---------------------------------------------------------------------------- */
+.cust h1 { font-size: 26px; }
+.links { display: flex; gap: 8px; flex-wrap: wrap; }
+.links .dbtn { flex: 1; min-width: 120px; }
+.dfield { display: flex; flex-direction: column; gap: 6px; font-size: 17px; font-weight: 700; }
+.dfield input, .dfield select, .dfield textarea {
+  font-size: 20px; min-height: 56px; border: 2px solid var(--fg); border-radius: 10px; padding: 8px 12px; background: var(--surface); color: var(--fg); width: 100%;
+}
+.dfield textarea { min-height: 80px; font-size: 18px; }
+.dfield.invalid input, .dfield.invalid select, .dfield.invalid textarea { border-color: var(--danger); }
+.dfield .err { color: var(--danger); font-size: 16px; font-weight: 700; }
+.kg { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: stretch; }
+.kg input { font-size: 28px; min-height: 64px; font-variant-numeric: tabular-nums; font-weight: 700; }
+.kg .zero { min-width: 72px; min-height: 64px; border: 2px solid var(--fg); border-radius: 10px; background: var(--surface); font-weight: 800; font-size: 20px; }
+.thumbs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.thumb { display: flex; flex-direction: column; gap: 4px; }
+.thumb .img { aspect-ratio: 1; border: 2px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--surface-2); display: grid; place-items: center; font-size: 14px; color: var(--muted); }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb button { min-height: 44px; border: 2px solid var(--line); background: var(--surface); border-radius: 8px; font-weight: 700; font-size: 15px; }
+.sigprev { border: 2px solid var(--line); border-radius: 10px; background: #fff; height: 96px; display: grid; place-items: center; overflow: hidden; }
+.sigprev .thumb, .sigprev .thumb .img { width: 100%; height: 100%; border: 0; background: #fff; aspect-ratio: auto; }
+.sigprev img { max-height: 92px; max-width: 100%; object-fit: contain; }
+.visit-ro { border: 2px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface); display: flex; flex-direction: column; gap: 4px; }
+
+/* ---- bottom sheet ------------------------------------------------------------------------------- */
+.dsheet-scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); z-index: 50; }
+.dsheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 51; background: var(--surface); color: var(--fg);
+  border-top: 2px solid var(--fg); border-radius: 16px 16px 0 0; max-height: 92vh; overflow: auto;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px)); font-size: 18px;
+}
+.dsheet-in { max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+.dsheet h2 { font-size: 22px; }
+.reasons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.reasons button[aria-pressed="true"] { background: var(--ink); color: var(--ink-fg); border-color: var(--ink); }
+.mini { display: flex; flex-direction: column; gap: 4px; font-size: 17px; }
+.mini .s { font-family: var(--font-code); font-weight: 700; color: var(--muted); display: inline-block; min-width: 26px; text-align: right; margin-right: 6px; }
+.mini .d { color: var(--ok); font-weight: 900; margin-right: 4px; }
+
+/* ---- signature pad (full screen) ---------------------------------------------------------------- */
+.sigpad { position: fixed; inset: 0; z-index: 60; background: #fff; color: #000; display: flex; flex-direction: column; }
+.sigpad .sp-head { padding: max(10px, env(safe-area-inset-top, 0px)) 16px 8px; font-size: 18px; font-weight: 700; border-bottom: 2px solid #9CA3AF; }
+.sigpad canvas { flex: 1; width: 100%; touch-action: none; display: block; background: #fff; }
+.sigpad .sp-foot { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px)); border-top: 2px solid #9CA3AF; }
+
+/* Toasts sit at the top on the phone, so they never cover the fixed bottom buttons. */
+:root[data-app="driver"] .toast { top: calc(12px + env(safe-area-inset-top, 0px)); bottom: auto; font-size: 17px; padding: 12px 16px; }
+
+/* ---- login -------------------------------------------------------------------------------------- */
+.dlogin { max-width: 440px; margin: 0 auto; padding: 24px 16px; display: flex; flex-direction: column; gap: 16px; }
+.dlogin .brand { font-size: 24px; }
+.dlogin input { font-size: 22px; }
+.form-err { color: var(--danger); font-size: 18px; font-weight: 700; }
+
+/* ---- not sent ----------------------------------------------------------------------------------- */
+.nscard { border: 2px solid var(--danger); border-radius: 12px; padding: 12px; background: var(--surface); display: flex; flex-direction: column; gap: 8px; }
+.nscard .why { color: var(--danger); font-weight: 700; }

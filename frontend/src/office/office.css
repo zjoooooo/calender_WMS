@@ -1,0 +1,278 @@
+/* Office calendar, drawers and planning dialogs (§9.2), adapted from the approved mockup (docs/mockup.html):
+   neutral chrome, the route colour bar as the only colour signal, codes in mono, one-line rows. */
+
+/* a dialog opened over a drawer also dims the drawer */
+.scrim:has(+ .dialog) { z-index: 50; }
+.scrim + .dialog { z-index: 51; }
+
+.menu-wrap { position: relative; display: inline-block; }
+.menu button.danger { color: var(--danger); }
+.menu button:disabled { opacity: .45; cursor: not-allowed; background: transparent; }
+
+/* ---- top bar, filters, legend ------------------------------------------------------------------- */
+.cal-bar { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; }
+.cal-bar .search { width: 300px; }
+.cal-bar .range { font-family: var(--font-head); font-weight: 700; font-size: 16px; min-width: 0; }
+/* big month title like a desktop calendar: "November 2026" / "2026年11月" (month bold, year regular) */
+.cal-top .cal-title { font-size: 30px; font-weight: 400; letter-spacing: -.01em; line-height: 1.15; }
+.cal-title b { font-weight: 800; }
+.cal-title .y { font-weight: 400; }
+.cal-title .wk { font-family: var(--font-ui); font-size: 14px; font-weight: 500; color: var(--muted); margin-left: 12px; letter-spacing: 0; white-space: nowrap; }
+.calnav { display: inline-flex; align-items: center; gap: 4px; }
+.calnav .btn { border-radius: 999px; min-width: 32px; justify-content: center; }
+.cal-bar .expall { margin-left: auto; }
+.tchip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 4px 10px; font-size: 12.5px; display: inline-flex; gap: 6px; align-items: center; }
+.tchip[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px; }
+.lchip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 3px 8px 3px 0; font-size: 12px; overflow: hidden; max-width: 220px; }
+.lchip::before { content: ""; width: 5px; align-self: stretch; background: var(--rc); flex: none; }
+.lchip .code { font-size: 12px; }
+.lchip .ln { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+.lchip.on { border-color: var(--fg); box-shadow: 0 0 0 1px var(--fg); }
+.lchip.adhoc { border-style: dashed; border-color: var(--warn); }
+.dim { opacity: var(--dim); }
+
+/* ---- week grid ---------------------------------------------------------------------------------- */
+.week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; align-items: start; }
+.day { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; min-width: 0; min-height: 160px; container-type: inline-size; }
+.day.rest { background: color-mix(in srgb, var(--rest) 45%, var(--surface)); }
+.day.today { border-color: var(--cal-today); box-shadow: 0 0 0 1px var(--cal-today); }
+.dh { padding: 8px 10px 6px; border-bottom: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; }
+.dh .d1 { display: flex; align-items: baseline; gap: 2px 6px; flex-wrap: wrap; }
+.dh .dow { font-weight: 600; white-space: nowrap; }
+.dh .dow, .dh .dt { flex-shrink: 0; white-space: nowrap; }
+.dh .dt { font-family: var(--font-head); font-weight: 700; font-size: 17px; border: 0; background: none; padding: 0; color: var(--fg); }
+.dh .dt:hover { text-decoration: underline; }
+/* same date marks as the month grid: today blue (white on a blue pill), a public holiday red */
+.dh .dt.ph { color: var(--cal-ph); }
+.dh .dt.today { background: var(--cal-today); color: #fff; border-radius: 999px; padding: 0 8px; }
+.dh .phtag { color: var(--cal-ph); background: var(--cal-ph-bg); border-color: transparent; }
+.dh .phtag::before { content: "★ "; }
+.dh .lock { margin-left: auto; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.dh .todaytag { margin-left: auto; font-size: 11px; font-weight: 700; color: var(--cal-today); white-space: nowrap; }
+.dh .sum, .dh .opsline, .dh .totals { font-size: 11.5px; color: var(--muted); }
+.dh .opsline { font-weight: 600; color: var(--fg); }
+.phtag { display: inline-block; font-size: 11px; font-weight: 600; color: var(--ph); border: 1px solid currentColor; border-radius: 4px; padding: 0 5px; width: max-content; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.occs { display: flex; flex-direction: column; gap: 5px; padding: 7px; }
+.empty-day { font-size: 12px; color: var(--muted); padding: 4px 2px; }
+
+/* one-line route row */
+.occ {
+  position: relative; display: flex; align-items: center; gap: 6px; min-width: 0; text-align: left; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface); border-radius: 7px; padding: 5px 7px 6px 11px; overflow: hidden;
+  transition: opacity .15s; font-size: 12.5px; line-height: 18px;
+}
+.occ::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--rc); }
+.occ:hover { border-color: var(--muted); }
+.occ:focus-visible { outline: 2px solid var(--today); outline-offset: 1px; }
+.occ.adhoc { border-style: dashed; border-color: var(--warn); }
+.occ .code { font-size: 13px; border: 0; background: none; padding: 0; color: var(--fg); cursor: pointer; }
+.occ .code:hover { text-decoration: underline; }
+/* the name gets the space left over (truncated first) but never less than ~3 characters; the status keeps
+   its count (§8.3). In a narrow day column (week view on a laptop) the status word ("Unclaimed", "Needs
+   driver") moves to the tooltip, like the month line: "○ 0/10"; a driver's name stays. */
+.occ .nm { flex: 1 1 0; min-width: 3em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@container (max-width: 300px) { .occ .sg .w:not(.who), .trow .sg .w:not(.who) { display: none; } }
+.occ .st { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.occ .ed { color: var(--warn); font-size: 11px; flex: none; }
+.occ.cancelled .code, .occ.cancelled .nm { text-decoration: line-through; color: var(--muted); }
+.occ.cancelled { background: transparent; border-style: dashed; }
+.occ .pg { position: absolute; left: 5px; right: 0; bottom: 0; height: 3px; background: var(--surface-2); }
+.occ .pg i { display: block; height: 100%; background: var(--muted); }
+.occ.orphan { border-color: var(--danger); }
+.paused { margin: 0 7px 7px; border: 1px dashed var(--line); border-radius: 7px; font-size: 12px; color: var(--muted); background: transparent; text-align: left; padding: 6px 8px; }
+.pausedlist { display: flex; flex-direction: column; gap: 4px; padding: 0 7px 7px; }
+.pausedlist .occ { filter: grayscale(.7); opacity: .75; }
+.pausedlist .occ.dim { opacity: calc(var(--dim) * .7); }
+.paused-acts { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 0 4px 6px; }
+.covered { font-size: 11.5px; color: var(--muted); padding-left: 6px; }
+
+/* task rows: grey pill, no colour bar (never looks like a route container) */
+.trow {
+  display: flex; align-items: center; gap: 6px; min-width: 0; text-align: left; cursor: pointer; border: 1px solid transparent;
+  background: var(--surface-2); border-radius: 999px; padding: 3px 9px; font-size: 12px; line-height: 18px; transition: opacity .15s;
+}
+.trow:hover { border-color: var(--line); }
+.trow .nm { flex: 1; min-width: 3em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trow .rec { color: var(--muted); font-weight: 700; }
+.trow.cancelled .nm { text-decoration: line-through; color: var(--muted); }
+.tgroup { border: 0; background: var(--surface-2); border-radius: 7px; padding: 4px 9px; font-size: 12px; text-align: left; color: var(--fg); }
+.tgroup .muted { color: var(--muted); }
+.tasks-box { display: flex; flex-direction: column; gap: 4px; padding-bottom: 5px; border-bottom: 1px dashed var(--line); margin-bottom: 1px; }
+
+.day-foot { margin-top: auto; display: flex; gap: 6px; padding: 0 7px 7px; }
+.addr { flex: 1; border: 1px dashed var(--line); background: transparent; border-radius: 7px; padding: 5px; font-size: 12px; color: var(--muted); }
+.addr:hover { color: var(--fg); border-color: var(--muted); }
+.day-foot .menu-wrap { flex: 1; display: flex; }
+.day-foot .menu-wrap > .addr { width: 100%; }
+
+/* ---- month (§9.2): desktop-calendar grid, Sunday first, one line per item ------------------------ */
+.month {
+  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.mh { font-size: 13px; font-weight: 500; color: var(--muted); padding: 7px 10px 6px; text-align: right; white-space: nowrap; overflow: hidden; }
+.mcell { border-top: 1px solid var(--line); border-left: 1px solid var(--line); min-height: 128px; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 3px 4px 6px; position: relative; }
+.month > .mcell:nth-child(7n + 1) { border-left: 0; }
+.mtop { display: flex; align-items: center; justify-content: flex-end; gap: 4px; min-height: 30px; }
+.mtop .menu-wrap { margin-right: auto; }
+/* the day's totals per waste type (today and past days), left of the day number */
+.mtot { flex: 0 1 auto; min-width: 0; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mcell .dnum {
+  font-family: var(--font-head); font-size: 19px; font-weight: 500; line-height: 1; color: var(--fg);
+  min-width: 30px; height: 30px; padding: 0 7px; border: 0; border-radius: 999px; background: transparent;
+  display: inline-grid; place-items: center; white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.mcell .dnum:hover { background: var(--surface-2); }
+.mcell.out .dnum { color: var(--muted); font-weight: 400; }
+.mcell .dnum.ph { color: var(--cal-ph); font-weight: 600; }
+.mcell.out .dnum.ph { opacity: .7; }
+.mcell .dnum.today, .mcell .dnum.today:hover { background: var(--cal-today); color: #fff; font-weight: 700; opacity: 1; }
+.mcell.out .mlines, .mcell.out .mph, .mcell.out .mpaused { opacity: .55; }
+/* "+" create menu: shown on hover / focus, always on touch screens */
+.madd {
+  width: 26px; height: 26px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface);
+  color: var(--muted); font-size: 17px; line-height: 1; padding: 0; display: inline-grid; place-items: center; opacity: 0;
+  transition: opacity .12s;
+}
+.mcell:hover .madd, .mcell:focus-within .madd, .madd[aria-expanded="true"] { opacity: 1; }
+.madd:hover, .madd[aria-expanded="true"] { color: var(--fg); border-color: var(--muted); }
+@media (hover: none) { .madd { opacity: 1; } }
+/* the holiday bar (first line of the cell) and the paused PH routes */
+.mph {
+  font-size: 12px; font-weight: 600; line-height: 18px; color: var(--cal-ph); background: var(--cal-ph-bg);
+  border-radius: 5px; padding: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mpaused {
+  border: 0; background: transparent; text-align: left; font-size: 11.5px; line-height: 17px; color: var(--muted);
+  padding: 0 6px; border-radius: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: opacity .15s;
+}
+.mpaused:hover { background: var(--surface-2); color: var(--fg); }
+.mlines { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+/* one line per route: colour bar, CODE, type tag, name (truncated first), short status at the right */
+.mline {
+  display: flex; align-items: center; gap: 5px; width: 100%; min-width: 0; text-align: left; cursor: pointer;
+  border: 1px solid transparent; background: transparent; border-radius: 5px; padding: 1px 5px 1px 3px;
+  font-size: 12px; line-height: 17px; color: var(--fg); transition: opacity .15s;
+}
+.mline::before { content: ""; width: 4px; height: 14px; border-radius: 2px; background: var(--rc); flex: none; }
+.mline:hover { background: var(--surface-2); }
+.mline:focus-visible { outline: 2px solid var(--cal-today); outline-offset: 0; }
+.mline .code { font-size: 11.5px; flex: none; }
+.mline .tt { font-size: 9px; line-height: 13px; padding: 0 3px; flex: none; }
+.mline .nm { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mline .st { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.mline .sg { font-size: 11px; }
+.mline .sg .g { margin-right: 2px; }
+.mline.adhoc { border: 1px dashed var(--warn); }
+.mline.orphan { border-color: var(--danger); }
+.mline.cancelled .code, .mline.cancelled .nm { text-decoration: line-through; color: var(--muted); }
+/* task lines: grey pill, no colour bar */
+.mline.task { background: var(--surface-2); border-radius: 999px; padding: 0 7px 0 3px; }
+.mline.task::before { display: none; }
+.mline.task:hover { border-color: var(--line); }
+.mline .wtag { font-size: 9.5px; line-height: 14px; padding: 0 4px; flex: none; }
+.mline .rec { color: var(--muted); font-weight: 700; flex: none; }
+.mmore {
+  border: 0; background: transparent; text-align: left; font-size: 11.5px; font-weight: 600; line-height: 18px;
+  color: var(--muted); padding: 0 6px; border-radius: 5px; white-space: nowrap;
+}
+.mmore:hover { color: var(--fg); background: var(--surface-2); }
+
+/* day drawer renders the same column */
+.daydrawer .day { border: 0; min-height: 0; background: transparent; }
+.daydrawer .dh { padding: 0 0 8px; }
+
+/* ---- route drawer ------------------------------------------------------------------------------- */
+.rd-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.rd-title .code { font-size: 22px; }
+.rd-title strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rd-rule { font-size: 12.5px; color: var(--muted); }
+.status-box { font-size: 12.5px; background: var(--surface-2); border-radius: 7px; padding: 7px 9px; }
+.stoplist { display: flex; flex-direction: column; gap: 6px; border-radius: 9px; }
+.stoplist.dirty { outline: 2px solid var(--warn); outline-offset: 4px; }
+.stop { display: grid; grid-template-columns: auto 30px minmax(0, 1fr) auto; gap: 6px; align-items: start; border: 1px solid var(--line); border-radius: 8px; padding: 6px 7px; background: var(--surface); }
+.stop.done { background: var(--surface-2); }
+.stop.new { border-color: var(--warn); }
+.stop.placeholder { opacity: .4; border-style: dashed; }
+.stop.overlay { box-shadow: var(--shadow); cursor: grabbing; }
+.stop .handle { padding: 1px 2px; }
+.stop .seq { font-family: var(--font-code); font-weight: 700; color: var(--muted); text-align: right; padding: 1px 0 0; border: 0; background: none; cursor: text; }
+.stop .seq:hover { color: var(--fg); text-decoration: underline; }
+.stop input.seqin { width: 30px; font-family: var(--font-code); font-size: 12px; padding: 0 2px; border: 1px solid var(--today); border-radius: 4px; }
+.stop .sline { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.stop .sn { font-weight: 600; border: 0; background: none; padding: 0; text-align: left; color: var(--fg); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.stoplist:focus { outline: none; }
+button.sn:hover { text-decoration: underline; }
+.stop .sa { font-size: 11.5px; color: var(--muted); }
+.stop .wt { font-size: 12px; margin-top: 2px; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.stop .snote { font-size: 12px; color: var(--muted); }
+.stop .snote input { font-size: 12px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 5px; width: 100%; }
+.stop .ops { display: flex; gap: 3px; }
+.stop .ops .icon-btn { width: 26px; height: 26px; }
+.removed-list { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.removed-list .rm { display: flex; gap: 8px; align-items: center; color: var(--muted); }
+.removed-list .rm s { flex: 1; min-width: 0; }
+.addcust { border: 1px dashed var(--line); background: transparent; border-radius: 8px; padding: 6px; font-size: 12.5px; color: var(--muted); }
+.addcust:hover { color: var(--fg); border-color: var(--muted); }
+.lockmsg { font-size: 12.5px; color: var(--muted); }
+.acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+/* the template editor's kept-list notices (§6.5): above Save, capped so the stop list and Save stay on screen */
+.kept-notes { display: flex; flex-direction: column; gap: 6px; max-height: 28vh; overflow-y: auto; overscroll-behavior: contain; }
+.kept-notes > .banner { flex: none; }
+.vis-ok { color: var(--ok); font-weight: 600; }
+.vis-miss { color: var(--warn); font-weight: 600; }
+.flag { font-size: 10.5px; font-weight: 700; border: 1px solid currentColor; border-radius: 3px; padding: 0 3px; color: var(--warn); }
+
+/* scope dialog */
+.scope { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--warn); border-radius: 8px; padding: 10px 12px; font-size: 13.5px; }
+.scope label { display: flex; gap: 8px; align-items: flex-start; }
+.radio-list { display: flex; flex-direction: column; gap: 6px; }
+.radio-list > label { display: flex; gap: 8px; align-items: center; font-size: 13.5px; color: var(--fg); }
+
+/* customer picker */
+.picker { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: 9px; padding: 8px; background: var(--surface); }
+.picker-list { display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow: auto; }
+.picker-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; text-align: left; border: 0; background: transparent; padding: 6px 8px; border-radius: 6px; color: var(--fg); }
+.picker-item:hover, .picker-item:focus-visible { background: var(--surface-2); }
+.picker-item .pa { grid-column: 1 / -1; font-size: 11.5px; color: var(--muted); }
+.picked { display: flex; flex-wrap: wrap; gap: 6px; }
+.picked .chip { cursor: default; }
+
+/* swatches */
+.swatches { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.swatches button { width: 24px; height: 24px; border-radius: 5px; border: 2px solid transparent; background: var(--rc); padding: 0; }
+.swatches button[aria-pressed="true"] { border-color: var(--fg); box-shadow: 0 0 0 1px var(--surface) inset; }
+.swatches .auto { width: auto; height: 24px; padding: 0 8px; background: var(--surface); border: 1px solid var(--line); font-size: 12px; }
+.swatches .auto[aria-pressed="true"] { border-color: var(--fg); }
+
+/* result dialog */
+.kg { display: grid; grid-template-columns: 110px minmax(0, 1fr) 40px; align-items: center; gap: 8px; }
+.kg .unit { color: var(--muted); font-size: 12px; }
+.thumbs { display: flex; flex-wrap: wrap; gap: 8px; }
+.thumb { position: relative; width: 84px; height: 84px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--surface-2); display: grid; place-items: center; font-size: 11px; color: var(--muted); }
+.thumb img { width: 100%; height: 100%; object-fit: cover; }
+.thumb .x { position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; border-radius: 50%; border: 0; background: rgba(0, 0, 0, .55); color: #fff; font-size: 11px; padding: 0; }
+.history { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+.history .h { border-left: 3px solid var(--line); padding: 2px 8px; }
+.history .h.rejected { border-left-color: var(--danger); }
+
+.drivers { display: flex; flex-direction: column; gap: 4px; }
+.drivers button { display: flex; justify-content: space-between; gap: 10px; border: 1px solid var(--line); background: var(--surface); border-radius: 7px; padding: 7px 10px; text-align: left; }
+.drivers button:hover { border-color: var(--muted); }
+
+@media (max-width: 1100px) { .week { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 760px) {
+  .week { grid-template-columns: 1fr; }
+  .mcell { min-height: 84px; padding: 2px; }
+  .mh { padding: 5px 4px; font-size: 11px; }
+  .mcell .dnum { font-size: 15px; min-width: 24px; height: 24px; padding: 0 4px; }
+  .mline { font-size: 10.5px; gap: 3px; padding: 0 2px; }
+  .mline .tt, .mline .st, .mline .nm { display: none; }
+  .cal-top .cal-title { font-size: 22px; }
+  .stop { grid-template-columns: auto 26px minmax(0, 1fr); }
+  .stop .ops { grid-column: 3; }
+}
+
+/* Routes page: the parts of a split route (R12 / R14) stay together; a dashed line joins them (SPLIT-UI-08). */
+.table tr.chain-cont > td { border-top-style: dashed; }

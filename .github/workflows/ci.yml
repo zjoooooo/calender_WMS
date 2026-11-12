@@ -1,0 +1,315 @@
+# WMS route & task calendar: tests, and the calendar demo on GitHub Pages, with GitHub Actions
+# (docs/Project.md section 11.5; README.md "Tests on GitHub Actions" and "Calendar demo on GitHub Pages").
+# - Every push (any branch), every pull request and a manual run ("Run workflow") test the commit: the backend
+#   (PHP 8.3), the frontend (types, unit tests, build), the three browser suites (Playwright) and the calendar
+#   demo (its data made by the real backend, the php-wasm build, its own browser test; the build is kept as the
+#   run's "calendar-demo" artifact).
+# - A push to main, a manual run on main and the weekly run (Mondays, so the demo's sample runs stay recent) that
+#   pass ALL of them publish that demo build to GitHub Pages. Until Pages is turned on for this repository
+#   (Settings > Pages > Build and deployment > Source: GitHub Actions), that job only says what to do (a warning
+#   and the job summary) and stays green.
+# Values from ${{ }} reach the run: scripts only through env:, never pasted into the script text.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 1 * * 1' # Mondays 01:17 UTC = 09:17 in Singapore: the demo is rebuilt with that day's runs
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash # bash -eo pipefail: a failing command before `| tee` fails the step
+
+jobs:
+  backend:
+    name: Backend (PHP 8.3) and server scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # A newer push to the same branch (or pull request) cancels the test jobs of this run. The Pages job has its
+    # own group and is never cancelled.
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-backend
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up PHP 8.3
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          # No shared extension except curl, which only the tests use (api_smoke.php, race.php). The app needs
+          # nothing beyond PHP's core (section 11.1, no mbstring).
+          extensions: none, curl
+          coverage: none
+          tools: none
+      - name: PHP version and extensions
+        run: php -v && php -m
+      - name: Rule tests (run.php)
+        run: php backend/tests/run.php
+      - name: HTTP smoke test (api_smoke.php)
+        run: php backend/tests/api_smoke.php 8180 "$RUNNER_TEMP/wms-smoke"
+      - name: Concurrency test (race.php)
+        run: php backend/tests/race.php 8182 "$RUNNER_TEMP/wms-race"
+      - name: Backup test (backup_test.php)
+        run: php backend/tests/backup_test.php
+      - name: Server scripts in deploy/ (bash -n, shellcheck)
+        run: |
+          command -v shellcheck >/dev/null || { sudo apt-get update && sudo apt-get install -y shellcheck; }
+          shellcheck --version | sed -n 2p
+          for f in deploy/*.sh; do bash -n "$f"; done
+          shellcheck deploy/*.sh
+
+  frontend:
+    name: Frontend (types, unit tests, build)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-frontend
+      cancel-in-progress: true
+    defaults:
+      run:
+        shell: bash
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Node.js (frontend/.nvmrc)
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm ci
+        run: npm ci --no-audit --no-fund
+      - name: Type check (tsc --noEmit)
+        run: npx tsc --noEmit
+      - name: Unit tests (vitest)
+        run: npx vitest run
+      # The dev server's dependency scan from a cold cache, as on a fresh clone (npm run dev): it must not
+      # follow the demo-only code (vite.config.ts). It exits non-zero when an import cannot be resolved.
+      - name: Dev server dependency scan (vite optimize --force)
+        run: npx vite optimize --force
+      - name: Production build (npm run build)
+        run: npm run build
+      - name: The production build has no demo code
+        run: |
+          if grep -l -e 'php-wasm' -e 'wms-demo' -e 'setInBrowserBackend' -e '\.wasm' ../backend/public/app/assets/*.js; then
+            echo "::error title=Demo code in the production build::The files above contain demo-only code (section 11.5)."
+            exit 1
+          fi
+          ls -l ../backend/public/app/assets
+
+  e2e:
+    name: Browser tests (${{ matrix.suite }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [shell, office, driver]
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-e2e-${{ matrix.suite }}
+      cancel-in-progress: true
+    defaults:
+      run:
+        shell: bash
+        working-directory: frontend
+    env:
+      # The server clock is pinned (fake_now on a .demo data dir, R1), so the result does not depend on the day
+      # or hour of the run: a Wednesday, 10:00 in Singapore, a work day with seeded public holidays ahead.
+      WMS_FAKE_NOW: '2026-11-11T10:00:00+08:00'
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up PHP 8.3
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3' # the runner's usual extensions, OPcache included
+          coverage: none
+          tools: none
+      - name: Set up Node.js (frontend/.nvmrc)
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm ci
+        run: npm ci --no-audit --no-fund
+      # Playwright is not in package.json on purpose: npm ci on a PC or a server never needs a browser.
+      - name: Install Playwright 1.63.0 and Chromium (CI only)
+        run: |
+          npm install --no-save --no-audit --no-fund playwright@1.63.0
+          npx playwright install --with-deps chromium
+      - name: Build the app (the shell suite also opens the built app through php -S)
+        if: matrix.suite == 'shell'
+        run: npm run build
+      - name: Run e2e/${{ matrix.suite }}.e2e.cjs
+        env:
+          SUITE: ${{ matrix.suite }}
+          E2E_SHOTS: ${{ runner.temp }}/e2e/screenshots
+          # The driver suite also builds the app and checks that it opens with zero signal (service worker).
+          PWA: ${{ matrix.suite == 'driver' && '1' || '0' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/e2e"
+          node "e2e/$SUITE.e2e.cjs" 2>&1 | tee "$RUNNER_TEMP/e2e/$SUITE.log"
+      - name: Upload the log and screenshots
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: e2e-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/e2e/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  demo:
+    name: Calendar demo (php-wasm build and browser test)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-demo
+      cancel-in-progress: true
+    defaults:
+      run:
+        shell: bash
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up PHP 8.3 (the demo data is made by the real backend)
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+          tools: none
+      - name: Set up Node.js (frontend/.nvmrc)
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm ci
+        run: npm ci --no-audit --no-fund
+      - name: Install Playwright 1.63.0 and Chromium (CI only)
+        run: |
+          npm install --no-save --no-audit --no-fund playwright@1.63.0
+          npx playwright install --with-deps chromium
+      - name: Demo data (php -S, tools/init.php, scripts/seed-demo.mjs with today's runs)
+        run: npm run demo:data
+      - name: Build the demo (npm run build:demo -> frontend/dist-demo)
+        run: npm run build:demo
+      - name: Sizes
+        run: |
+          {
+            echo "### Calendar demo build"
+            echo
+            echo "| File | Bytes | gzip |"
+            echo "|---|---:|---:|"
+            find dist-demo -type f | sort | while read -r f; do
+              echo "| \`${f#dist-demo/}\` | $(wc -c < "$f") | $(gzip -9c "$f" | wc -c) |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Run e2e/demo.e2e.cjs (served under a sub-path and a random prefix, no special headers)
+        env:
+          E2E_SHOTS: ${{ runner.temp }}/e2e/screenshots
+        run: |
+          mkdir -p "$RUNNER_TEMP/e2e"
+          node e2e/demo.e2e.cjs 2>&1 | tee "$RUNNER_TEMP/e2e/demo.log"
+      - name: Keep the demo build (artifact calendar-demo)
+        uses: actions/upload-artifact@v5
+        with:
+          name: calendar-demo
+          path: frontend/dist-demo/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload the log and screenshots
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: e2e-demo-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/e2e/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  pages:
+    name: Publish the calendar demo to GitHub Pages
+    needs: [backend, frontend, e2e, demo]
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    # One publish at a time, and a running one is never cancelled: a newer one waits for it.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - name: Check that GitHub Pages is on, with Source "GitHub Actions"
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          answer=$(gh api "repos/$GITHUB_REPOSITORY/pages" --jq .build_type 2>&1)
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ] && [ "$answer" = workflow ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$rc" -eq 0 ]; then
+            why="GitHub Pages is on, but it publishes from a branch (build type \"$answer\"), not from GitHub Actions."
+          elif grep -q 'HTTP 404' <<<"$answer"; then
+            why="GitHub Pages is not turned on for this repository yet."
+          else
+            echo "::error title=GitHub Pages check failed::$answer"
+            exit 1
+          fi
+          echo "::warning title=Calendar demo not published::All tests passed, but nothing was published: $why Open Settings > Pages > Build and deployment and set Source to GitHub Actions, then run this workflow again on main (the job summary has the steps)."
+          {
+            echo "## Calendar demo not published: GitHub Pages is not set up yet"
+            echo
+            echo "All tests passed for commit \`$GITHUB_SHA\` and the demo was built (artifact **calendar-demo** of this run), but it was not published. $why"
+            echo
+            echo "1. The repository must be **public** (GitHub Pages of a private repository needs a paid plan)."
+            echo "2. Open **Settings > Pages**. Under **Build and deployment**, set **Source** to **GitHub Actions**."
+            echo "3. Open **Actions > CI > Run workflow** on \`main\` (or push to \`main\`). The demo then appears at \`https://<owner>.github.io/<repository>/\`."
+            echo
+            echo "Step by step: README.md, section \"Calendar demo on GitHub Pages\"."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+      - name: Get the demo build of this run
+        if: steps.check.outputs.ready == 'true'
+        uses: actions/download-artifact@v5
+        with:
+          name: calendar-demo
+          path: dist-demo
+      - name: Configure GitHub Pages
+        if: steps.check.outputs.ready == 'true'
+        uses: actions/configure-pages@v5
+      - name: Upload the site
+        if: steps.check.outputs.ready == 'true'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist-demo
+      - name: Publish
+        id: deployment
+        if: steps.check.outputs.ready == 'true'
+        uses: actions/deploy-pages@v4
+      - name: Summary
+        if: steps.check.outputs.ready == 'true'
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          {
+            echo "## Calendar demo published"
+            echo
+            echo "Commit \`$GITHUB_SHA\` is live at $PAGE_URL"
+          } >> "$GITHUB_STEP_SUMMARY"

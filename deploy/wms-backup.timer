@@ -1,0 +1,12 @@
+# WMS route & task calendar: runs wms-backup.service every night at 04:30 server time (Asia/Singapore,
+# set by deploy/install.sh), just after the default 04:00 day rollover (section 11.4).
+# Persistent=true runs a missed backup after the server was off.   Check: systemctl list-timers wms-backup.timer
+[Unit]
+Description=Nightly WMS backup at 04:30
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,1431 @@
+// End-to-end test of the office calendar (M3–M7 office side, Round 5 month view) at 1440×1000.
+// Starts its own backend (php -S) and Vite, seeds demo data through the API (scripts/seed-demo.mjs,
+// with live runs), drives Chromium with Playwright and checks every result through the API, then stops both.
+//
+//   cd frontend && node e2e/office.e2e.cjs        (or: npm run e2e:office)
+//
+// Env (defaults): BACKEND_PORT=8281  FRONT_PORT=5281  WMS_DATA_DIR=/tmp/wms-test-office
+//                 E2E_SHOTS=<dir> to save screenshots   KEEP_DATA=1 to keep the data dir
+//                 WMS_FAKE_NOW=<ISO 8601 time> pins the server clock; CI uses 2026-11-11T10:00:00+08:00
+// Dates are taken from the server (today, next work day, the next Mon–Sat PH, the next Sunday), so the
+// test works on any Mon–Sat work day: today must have the seeded live runs, so it fails on a Sunday or a PH
+// (CI pins WMS_FAKE_NOW). The data dir is WIPED at the start (and at the end unless KEEP_DATA=1).
+/* eslint-disable no-console */
+const { spawn, execFileSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const { chromium } = require('playwright');
+
+const ROOT = path.resolve(__dirname, '..', '..');
+const FRONT = path.join(ROOT, 'frontend');
+const BACKEND_PORT = Number(process.env.BACKEND_PORT || 8281);
+const FRONT_PORT = Number(process.env.FRONT_PORT || 5281);
+const DATA = process.env.WMS_DATA_DIR || '/tmp/wms-test-office';
+const SHOTS = process.env.E2E_SHOTS || '';
+const BASE = `http://127.0.0.1:${FRONT_PORT}`;
+const API = `http://127.0.0.1:${BACKEND_PORT}`;
+const ADMIN_PW = 'demo-pass-2026';
+
+const procs = [];
+let failures = 0;
+let passes = 0;
+function check(cond, label, extra) {
+  if (cond) {
+    passes++;
+    console.log('  ok   ' + label);
+  } else {
+    failures++;
+    console.log('  FAIL ' + label + (extra !== undefined ? '  -> ' + JSON.stringify(extra) : ''));
+  }
+}
+function start(cmd, args, opts) {
+  const p = spawn(cmd, args, { ...opts, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  p.output = '';
+  p.stdout.on('data', (d) => (p.output += d));
+  p.stderr.on('data', (d) => (p.output += d));
+  procs.push(p);
+  return p;
+}
+function stopAll() {
+  for (const p of procs) {
+    try {
+      process.kill(-p.pid, 'SIGTERM');
+    } catch {
+      /* already gone */
+    }
+  }
+}
+async function waitFor(url, ms = 30000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    try {
+      const r = await fetch(url);
+      if (r.status < 500) return;
+    } catch {
+      /* not up yet */
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  throw new Error('Timed out waiting for ' + url);
+}
+let token = null;
+async function api(method, p, body) {
+  const r = await fetch(API + '/api' + p, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const j = r.status === 204 ? { ok: true, data: null } : await r.json();
+  if (!j.ok) throw new Error(`${method} ${p}: ${j.error?.code}`);
+  return j.data;
+}
+const addDays = (d, n) => {
+  const [y, m, dd] = d.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, dd + n)).toISOString().slice(0, 10);
+};
+async function occOn(date, code) {
+  const cal = await api('GET', `/calendar?view=week&anchor=${date}`);
+  return { cal, occ: cal.routes.filter((o) => o.date === date && o.code === code) };
+}
+async function shot(page, name) {
+  if (!SHOTS) return;
+  fs.mkdirSync(SHOTS, { recursive: true });
+  await page.screenshot({ path: path.join(SHOTS, name + '.png'), fullPage: false });
+}
+async function dragTo(page, from, to) {
+  const a = await from.boundingBox();
+  const b = await to.boundingBox();
+  await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2 - 8, { steps: 4 }); // > 5 px: the drag starts
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2 - 4, { steps: 25 });
+  await page.waitForTimeout(150);
+  await page.mouse.up();
+  await page.waitForTimeout(400); // drop animation
+}
+
+const BLUE = 'rgb(37, 99, 235)'; // --cal-today (light theme)
+const RED = 'rgb(220, 38, 38)'; // --cal-ph (light theme)
+const noOverflow = (page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+
+/** Month view checks (§9.2, Round 5). Leaves tomorrow's first regular route edited (only that date) and an
+ *  extra OTC task on tomorrow, plus one adhoc route on workDay. */
+async function monthChecks(page, { today, tomorrow, workDay, ph }) {
+  console.log('month view (default)');
+  check(!new URL(page.url()).searchParams.get('view') && (await page.locator('.month').count()) === 1 && (await page.locator('.week').count()) === 0, 'the calendar opens in the month view');
+  const heads = await page.locator('.month .mh').allInnerTexts();
+  check(heads.join(' ') === 'Sun Mon Tue Wed Thu Fri Sat', 'weekday header Sun..Sat', heads);
+  const cells = await page.locator('.month .mcell').evaluateAll((els) => els.map((e) => e.dataset.date));
+  check(new Date(cells[0] + 'T00:00:00Z').getUTCDay() === 0, 'the first column is a Sunday', cells[0]);
+  const mcal = await api('GET', `/calendar?view=month&anchor=${today}&week_start=sun`);
+  let rows = 0;
+  for (let i = 0; i < 42; i += 7) if (mcal.days.slice(i, i + 7).some((d) => d.in_month)) rows++;
+  check(cells.length === rows * 7 && rows >= 4 && rows <= 6, `only the week rows of the month are drawn (${rows} rows)`, cells.length);
+  check((await page.locator('.cal-title').innerText()).includes(String(today.slice(0, 4))), 'big month title with the year', await page.locator('.cal-title').innerText());
+  const tnum = page.locator(`.month .mcell[data-date="${today}"] .dnum`);
+  const tStyle = await tnum.evaluate((e) => [getComputedStyle(e).backgroundColor, getComputedStyle(e).color]);
+  check(tStyle[0] === BLUE && tStyle[1] === 'rgb(255, 255, 255)', "today's number: white on a blue circle", tStyle);
+  check(await noOverflow(page), 'no horizontal overflow at 1440');
+  // Daily totals per waste type are visible in the month view too (DRV-3).
+  const tTot = page.locator(`.month .mcell[data-date="${today}"] [data-testid=month-totals]`);
+  check((await tTot.count()) === 1 && /REL [\d,.]+ kg/.test(await tTot.innerText()), "today's cell shows the day's totals (REL … kg)", (await tTot.count()) && (await tTot.innerText()));
+  await shot(page, '00-month');
+
+  // A day with more than 4 lines: 4 + "N more"; expand / collapse in place; a refetch keeps it open.
+  await page.goto(`${BASE}/?anchor=${tomorrow}`);
+  const cell = page.locator(`.month .mcell[data-date="${tomorrow}"]`);
+  await cell.locator('.mline').first().waitFor();
+  const lines = cell.locator('.mline');
+  const occ = async () => {
+    const c = await api('GET', `/calendar?view=week&anchor=${tomorrow}&week_start=sun`);
+    return [...c.routes.filter((o) => o.date === tomorrow && o.status !== 'holiday_skipped'), ...c.tasks.filter((o) => o.date === tomorrow)];
+  };
+  const items = await occ();
+  const n = items.length;
+  check(n > 4 && (await lines.count()) === 4, `${tomorrow} has ${n} lines: exactly 4 are shown`, await lines.count());
+  const more = cell.locator('.mmore');
+  check((await more.innerText()).trim() === `${n - 4} more ▾`, `then "${n - 4} more ▾"`, await more.innerText());
+  check((await more.getAttribute('title')).includes(items[4].code || ''), 'its tooltip lists the hidden lines');
+  // search for a hidden route opens the cell by itself
+  const hiddenRoute = items.slice(4).find((o) => o.kind === 'route' && !items.slice(0, 4).some((x) => x.code && x.code.includes(o.code)));
+  if (hiddenRoute) {
+    await page.fill('input[type=search]', hiddenRoute.code);
+    await page.waitForTimeout(200);
+    check((await cell.locator(`.mline[data-code="${hiddenRoute.code}"]:not(.dim)`).count()) === 1 && (await cell.locator('.mmore').count()) === 0, `searching ${hiddenRoute.code} opens the cell and keeps it lit`);
+    await page.getByRole('button', { name: 'Clear highlight' }).click();
+    check((await lines.count()) === 4, 'cleared: the cell collapses again');
+  }
+  await more.click();
+  check((await lines.count()) === n && /Show less ▴/.test(await cell.locator('.mmore').innerText()), `"${n - 4} more" expands the cell in place (${n} lines, Show less)`);
+  await shot(page, '00-month-expanded');
+  // a refetch (new data from the server) must not collapse it
+  const otcCust = (await api('GET', '/customers')).find((c) => c.waste_types.includes('OTC') && c.active !== false);
+  await api('POST', '/tasks', { waste_type: 'OTC', customer_id: otcCust.id, date: tomorrow, note: 'e2e month refetch' });
+  const resp = page.waitForResponse((r) => r.url().includes('/api/calendar') && r.status() === 200, { timeout: 40000 });
+  await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+  await resp;
+  await page.waitForTimeout(400);
+  check((await lines.count()) === n + 1 && (await cell.locator('.mmore', { hasText: 'Show less' }).count()) === 1, 'after a refetch the cell stays expanded and shows the new task', await lines.count());
+  await cell.locator('.mmore').click();
+  check((await lines.count()) === 4 && /more ▾/.test(await cell.locator('.mmore').innerText()), '"Show less" collapses it again');
+  // Expand all / Collapse all
+  await page.getByRole('button', { name: /^Expand all/ }).click();
+  check((await page.locator('.month .mmore[aria-expanded="false"]').count()) === 0 && (await lines.count()) === n + 1, 'Expand all opens every cell');
+  await page.getByRole('button', { name: /^Collapse all/ }).click();
+  check((await page.locator('.month .mmore[aria-expanded="true"]').count()) === 0 && (await lines.count()) === 4, 'Collapse all closes them');
+
+  // Clicking a route line opens its drawer; the stop list is editable (↓, save only this date).
+  const line = cell.locator('.mline:not(.adhoc):not(.task)').first();
+  const code = await line.getAttribute('data-code');
+  const key = await line.getAttribute('data-key');
+  await line.click();
+  const drawer = page.locator('.drawer');
+  await drawer.locator('.stoplist .stop').first().waitFor();
+  check(new RegExp(code).test(await drawer.locator('.rd-title').innerText()), `clicking the ${code} line opens its route drawer`);
+  const before = await drawer.locator('.stoplist .stop').evaluateAll((els) => els.map((e) => Number(e.dataset.cid)));
+  await drawer.locator(`.stop[data-cid="${before[0]}"]`).getByRole('button', { name: /^Move down/ }).click();
+  await drawer.getByRole('button', { name: 'Save', exact: true }).click();
+  const scope = page.locator('.dialog', { hasText: 'Apply this change to' });
+  await scope.waitFor();
+  await scope.getByRole('button', { name: 'Save', exact: true }).click();
+  await drawer.waitFor({ state: 'detached' });
+  const saved = (await occ()).find((o) => o.key === key);
+  check(saved && saved.edited && saved.stops[0].customer_id === before[1] && saved.stops[1].customer_id === before[0], `the ${code} stop order was changed from the month view (only ${tomorrow})`);
+
+  // "+" in a future cell: the create menu of that day; ⚡ Adhoc creates a route and opens its drawer.
+  await page.goto(`${BASE}/?anchor=${workDay}`);
+  const wcell = page.locator(`.month .mcell[data-date="${workDay}"]`);
+  await wcell.locator('.mline').first().waitFor();
+  const adhocBefore = (await api('GET', `/calendar?view=week&anchor=${workDay}`)).routes.filter((o) => o.date === workDay && o.type === 'adhoc').length;
+  await wcell.hover();
+  await wcell.locator('button.madd').click();
+  const menu = await page.locator('.menu').innerText();
+  check(/Regular · repeats weekly/.test(menu) && /Adhoc · this date only/.test(menu) && /\+ Task/.test(menu) && !/Special/.test(menu), '"+" offers the day\'s route kinds and + Task', menu);
+  await page.getByRole('menuitem', { name: '⚡ Adhoc · this date only' }).click();
+  const rf = page.locator('.dialog');
+  await rf.getByRole('button', { name: 'Create', exact: true }).click();
+  await rf.waitFor({ state: 'detached' });
+  const nd = page.locator('.drawer');
+  await nd.locator('.rd-title').waitFor({ timeout: 10000 });
+  await nd.getByRole('button', { name: /Add customer/ }).click();
+  await nd.locator('.picker input[type=search]').fill('Golden');
+  await nd.locator('.picker-item').first().click();
+  await nd.getByRole('button', { name: 'Save', exact: true }).click();
+  const sc2 = page.locator('.dialog', { hasText: 'Apply this change to' });
+  if (await sc2.isVisible().catch(() => false)) await sc2.getByRole('button', { name: 'Save', exact: true }).click();
+  await page.waitForTimeout(800);
+  const adhocs = (await api('GET', `/calendar?view=week&anchor=${workDay}`)).routes.filter((o) => o.date === workDay && o.type === 'adhoc');
+  check(adhocs.length === adhocBefore + 1 && adhocs.some((o) => o.stops.length === 1), `"+" created an adhoc route on ${workDay} and its customer was added in the drawer`, adhocs.map((o) => [o.code, o.stops.length]));
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  check((await wcell.locator('.mline.adhoc').count()) === adhocBefore + 1, 'the new adhoc line shows in the cell (dashed)');
+
+  // A Mon–Sat public holiday: red number, the ★ bar and the "⏸ N paused" line that opens the day drawer.
+  if (ph) {
+    await page.goto(`${BASE}/?anchor=${ph}`);
+    const pcell = page.locator(`.month .mcell[data-date="${ph}"]`);
+    await pcell.waitFor();
+    check((await pcell.locator('.dnum').evaluate((e) => getComputedStyle(e).color)) === RED, `${ph}: the PH number is red`);
+    check(/★/.test(await pcell.locator('.mph').innerText()), 'the holiday bar with ★ and the name', await pcell.locator('.mph').innerText());
+    await pcell.locator('button.mpaused').click();
+    await page.locator('.drawer .daydrawer button.paused').waitFor();
+    check(true, '"⏸ N paused" opens the day drawer (Run on PH / Move to work day)');
+    await page.keyboard.press('Escape');
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+  check(await noOverflow(page), 'no horizontal overflow at 1280');
+  await page.setViewportSize({ width: 1440, height: 1000 });
+}
+
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** "20 Nov" (the office's short English date). */
+const short = (d) => `${Number(d.slice(8, 10))} ${MON[Number(d.slice(5, 7)) - 1]}`;
+async function poll(page, fn, ms = 6000) {
+  const end = Date.now() + ms;
+  let v;
+  while (Date.now() < end) {
+    v = await fn();
+    if (v) return v;
+    await page.waitForTimeout(100);
+  }
+  return v;
+}
+/** The first date >= from (up to 3 weeks) on which `code` is scheduled. */
+async function scheduledOn(code, from, before = null) {
+  let d = from;
+  for (let i = 0; i < 21; i++, d = addDays(d, 1)) {
+    if (before && d >= before) return null;
+    const o = (await occOn(d, code)).occ[0];
+    if (o && o.status === 'scheduled') return d;
+  }
+  return null;
+}
+
+/**
+ * A split route is one route in the office's forms and dialogs (K2, K3, K4, K5, SPLIT-UI-03..12). K1 is split
+ * by a schedule change; E1 (Bala, work done today) is released by the office and split too.
+ */
+async function splitRouteChecks(page, { today, consoleErrors }) {
+  console.log('split route: one route in the forms and dialogs');
+  const k1 = (await api('GET', '/routes')).find((r) => r.code === 'K1');
+  const split = await scheduledOn('K1', addDays(today, 8));
+  await api('POST', `/routes/${k1.id}/change-schedule`, { rev: k1.rev, from: split, days: k1.days });
+  const before = await scheduledOn('K1', addDays(today, 1), split);
+  const after = await scheduledOn('K1', addDays(split, 1));
+  const k1Segs = async () => (await api('GET', '/routes')).filter((r) => r.code === 'K1').sort((a, b) => a.start.localeCompare(b.start));
+  check((await k1Segs()).length === 2, `K1 split at ${split} (two route records)`);
+  const openK1 = async (date) => {
+    await page.goto(`${BASE}/?view=week&anchor=${date}`);
+    await page.locator(`.week .day[data-date="${date}"] .occ[data-code="K1"] .nm`).click();
+    const dr = page.locator('.drawer');
+    await dr.locator('.rd-rule').waitFor();
+    return dr;
+  };
+  const openForm = async (dr) => {
+    await dr.getByRole('button', { name: /Menu/ }).click();
+    await page.getByRole('menuitem', { name: 'Edit route / schedule…' }).click();
+    const rf = page.locator('.dialog', { hasText: 'Edit route K1' });
+    await rf.locator('form').waitFor();
+    return rf;
+  };
+  const formDates = (rf) => rf.locator('label.field input[type=date]').evaluateAll((els) => els.map((e) => e.value));
+
+  // K3 / SPLIT-UI-04: opened from the later part, the header and the form show the route's real start.
+  let dr = await openK1(after);
+  const rule = await poll(page, async () => {
+    const x = await dr.locator('.rd-rule').innerText();
+    return x.includes(`from ${short(k1.start)}`) ? x : null;
+  });
+  check(!!rule && !/until/.test(rule), `K3: the header of ${after} reads "from ${short(k1.start)}" (the route's start), no "until"`, rule || (await dr.locator('.rd-rule').innerText()));
+  let rf = await openForm(dr);
+  const [st, en] = await formDates(rf);
+  check(st === k1.start && en === '', `K3: Edit route / schedule shows Start ${k1.start} and no End (not the part's ${split})`, [st, en]);
+
+  // K4 / SPLIT-UI-11: another clerk renames K1 while this form is open; the form keeps only its own change.
+  await rf.locator('label.field', { hasText: 'Note' }).locator('textarea').fill('clerk 1 note');
+  const segs0 = await k1Segs();
+  await api('PATCH', `/routes/${segs0[0].id}`, { rev: segs0[0].rev, name: 'Kallang (clerk 2)' });
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  await rf.locator('.form-error').waitFor();
+  check(/Someone else changed this/.test(await rf.locator('.form-error').innerText()), 'K4: the first Save is refused (STALE_REVISION)');
+  const nameIn = rf.locator('label.field', { hasText: 'Name' }).locator('input');
+  const reloaded = await poll(page, async () => (await nameIn.inputValue()) === 'Kallang (clerk 2)');
+  check(reloaded, "K4: the untouched Name now shows the other clerk's value", await nameIn.inputValue());
+  const banner = rf.locator('[data-testid=changed-meanwhile]');
+  check((await banner.count()) === 1 && /Name/.test(await banner.innerText()), 'K4: a banner names what the other clerk changed', (await banner.count()) && (await banner.innerText()));
+  check((await rf.locator('label.field', { hasText: 'Note' }).locator('textarea').inputValue()) === 'clerk 1 note', 'K4: the own change (note) is kept');
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  await rf.waitFor({ state: 'detached' });
+  const segs1 = await k1Segs();
+  check(segs1.every((r) => r.name === 'Kallang (clerk 2)' && r.note === 'clerk 1 note'), "K4: the second Save keeps the other clerk's name on every part and adds the note", segs1.map((r) => [r.name, r.note]));
+  await page.keyboard.press('Escape');
+  await dr.waitFor({ state: 'detached' });
+
+  // SPLIT-UI-05: opened from the earlier part, no "until" (the split boundary is not the route's end); Save
+  // with nothing changed writes nothing.
+  dr = await openK1(before);
+  const rule2 = await poll(page, async () => {
+    const x = await dr.locator('.rd-rule').innerText();
+    return !/until/.test(x) ? x : null;
+  });
+  check(!!rule2, `SPLIT-UI-05: the header of ${before} has no "until ${short(addDays(split, -1))}"`, rule2 || (await dr.locator('.rd-rule').innerText()));
+  rf = await openForm(dr);
+  const [st2, en2] = await formDates(rf);
+  check(st2 === k1.start && en2 === '', 'SPLIT-UI-05: End is empty on the earlier part', [st2, en2]);
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  await rf.waitFor({ state: 'detached' });
+  const segs2 = await k1Segs();
+  check(JSON.stringify(segs2.map((r) => [r.id, r.rev, r.start, r.end])) === JSON.stringify(segs1.map((r) => [r.id, r.rev, r.start, r.end])), 'SPLIT-UI-05: saving it unchanged writes nothing', segs2.map((r) => [r.rev, r.start, r.end]));
+  await page.keyboard.press('Escape');
+  await dr.waitFor({ state: 'detached' });
+
+  // K2 / SPLIT-UI-03: the delete dialog names both parts.
+  dr = await openK1(after);
+  await dr.getByRole('button', { name: /Menu/ }).click();
+  await page.getByRole('menuitem', { name: 'Delete route…' }).click();
+  const del = page.locator('.dialog', { hasText: 'Delete route K1' });
+  const delText = await poll(page, async () => {
+    const x = await del.locator('[data-testid=delete-text]').innerText();
+    return /runs as 2 schedules/.test(x) ? x : null;
+  });
+  check(!!delText && delText.includes(`from ${short(split)}`) && delText.includes(short(k1.start)), 'K2: "Delete route K1?" says both schedules are deleted', delText);
+  await del.getByRole('button', { name: 'Cancel' }).click();
+
+  // SPLIT-UI-12: an End error shows only in the End dialog and is gone after Cancel.
+  const errsBefore = consoleErrors.length;
+  await dr.getByRole('button', { name: /Menu/ }).click();
+  await page.getByRole('menuitem', { name: 'End route from date…' }).click();
+  const endDlg = page.locator('.dialog', { hasText: 'End route K1' });
+  await endDlg.locator('input[type=date]').fill(addDays(today, -5));
+  await endDlg.getByRole('button', { name: 'End', exact: true }).click();
+  await endDlg.locator('.form-error').waitFor();
+  check((await dr.locator('.form-error').count()) === 0, 'SPLIT-UI-12: the End error shows in the dialog only, not also in the drawer footer');
+  await endDlg.getByRole('button', { name: 'Cancel' }).click();
+  await endDlg.waitFor({ state: 'detached' });
+  check((await dr.locator('.form-error').count()) === 0, 'SPLIT-UI-12: after Cancel the drawer footer has no stale error');
+  consoleErrors.splice(errsBefore, consoleErrors.length - errsBefore, ...consoleErrors.slice(errsBefore).filter((e) => !/status of 422/.test(e)));
+  await page.keyboard.press('Escape');
+  await dr.waitFor({ state: 'detached' });
+
+  // SPLIT-UI-06: opened on the split date itself, "From date" (pre-filled with it) changes the schedule from
+  // that date (no "must start after the route starts"): K1 stops running on Fridays from the split on.
+  dr = await openK1(split);
+  rf = await openForm(dr);
+  await rf.getByRole('button', { name: 'Fri', exact: true }).click();
+  await rf.locator('input[type=radio]').nth(1).check();
+  check((await rf.locator('input[aria-label="From date"]').inputValue()) === split, `SPLIT-UI-06: "From date" is pre-filled with ${split}`);
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  const saved06 = await rf.waitFor({ state: 'detached', timeout: 10000 }).then(() => true, () => false);
+  check(saved06, 'SPLIT-UI-06: the schedule change from the split date is saved', saved06 ? '' : await rf.locator('.form-error').innerText());
+  await page.keyboard.press('Escape');
+  await dr.waitFor({ state: 'detached' });
+  const dow = (d) => new Date(d + 'T00:00:00Z').getUTCDay();
+  let friAfter = split;
+  while (dow(friAfter) !== 5) friAfter = addDays(friAfter, 1);
+  let friBefore = addDays(today, 1);
+  while (dow(friBefore) !== 5) friBefore = addDays(friBefore, 1);
+  const kAfter = (await occOn(friAfter, 'K1')).occ.length;
+  const kBefore = (await occOn(friBefore, 'K1')).occ.length;
+  check(kAfter === 0 && (friBefore >= split || kBefore === 1), `SPLIT-UI-06: no K1 on Fri ${friAfter}; Fri ${friBefore} (before the split) keeps it`, { kAfter, kBefore });
+
+  // SPLIT-UI-08: the Routes page keeps the two K1 rows together as parts of one route.
+  await page.goto(BASE + '/routes');
+  await page.locator('table tbody tr').first().waitFor();
+  await page.locator('input.search').fill('K1');
+  const rows = page.locator('table tbody tr[data-code="K1"]');
+  const parts = await rows.locator('[data-testid=part]').allInnerTexts();
+  check(parts.join('|') === 'part 1 of 2|part 2 of 2', 'SPLIT-UI-08: the K1 rows read "part 1 of 2", "part 2 of 2"', parts);
+  // SPLIT-7: every part shows the route's next date (part 1 may have none of its own left).
+  const nextCells = await rows.locator('td:nth-child(7)').allInnerTexts();
+  const k1Next = (await api('GET', '/routes')).find((r) => r.code === 'K1').route_next_date;
+  check(nextCells.length === 2 && nextCells[0] === nextCells[1] && !!k1Next && nextCells[0] !== '–', "SPLIT-7: both K1 rows show the route's next date", { nextCells, k1Next });
+  await rows.first().click();
+  const tnote = page.locator('.drawer [data-testid=template-note]');
+  await tnote.waitFor();
+  const tn = await poll(page, async () => {
+    const x = await tnote.innerText();
+    return x.includes(`from ${short(split)}`) ? x : null;
+  });
+  check(!!tn, 'SPLIT-UI-08: the customer-list editor names the other part\'s dates', tn || (await tnote.innerText()));
+  await page.keyboard.press('Escape');
+  await rows.nth(1).locator('td.actions button').click();
+  await page.getByRole('menuitem', { name: 'Delete' }).click();
+  const del2 = page.locator('.dialog', { hasText: 'Delete route K1' });
+  check(/runs as 2 schedules/.test(await del2.locator('[data-testid=delete-text]').innerText()), 'K2: the Routes page delete dialog names both parts too', await del2.locator('[data-testid=delete-text]').innerText());
+  await del2.getByRole('button', { name: 'Cancel' }).click();
+
+  // K5 / SPLIT-UI-09: the office takes E1 back from Bala (3 done): "taken back by office".
+  const e1 = (await occOn(today, 'E1')).occ[0];
+  if (e1 && e1.run && e1.run.driver && e1.run.collected + e1.run.missed > 0) {
+    await api('POST', `/runs/${today}/r${e1.route_id}/release`, { mark_missed: false });
+    await page.goto(`${BASE}/?view=week&anchor=${today}`);
+    await page.locator(`.week .day[data-date="${today}"] .occ[data-code="E1"] .nm`).click();
+    const box = await page.locator('.drawer .status-box').innerText();
+    check(/Needs driver · taken back by office · \d+\/\d+/.test(box), 'K5: the drawer reads "Needs driver · taken back by office · n/m"', box);
+    const tip = await page.locator(`.week .day[data-date="${today}"] .occ[data-code="E1"] .sg`).getAttribute('title');
+    check(/taken back by office/.test(tip || ''), 'K5: the week row tooltip says it too', tip);
+    await page.keyboard.press('Escape');
+    // SPLIT-UI-10: deleting E1 from a later part is refused; the dialog names the work done, not "nobody".
+    const e1r = (await api('GET', '/routes')).find((r) => r.code === 'E1');
+    await api('POST', `/routes/${e1r.id}/change-schedule`, { rev: e1r.rev, from: split, days: e1r.days });
+    await page.goto(`${BASE}/?view=week&anchor=${after}`);
+    await page.locator(`.week .day[data-date="${after}"] .occ[data-code="E1"] .nm`).click();
+    await page.locator('.drawer').getByRole('button', { name: /Menu/ }).click();
+    await page.getByRole('menuitem', { name: 'Delete route…' }).click();
+    await page.locator('.dialog', { hasText: 'Delete route E1' }).getByRole('button', { name: 'Delete', exact: true }).click();
+    const re = page.locator('.dialog', { hasText: 'Work is already done on this job today' });
+    await re.waitFor();
+    const reText = await re.innerText();
+    check(/Refused: \d+ stops of E1 are already done today/.test(reText) && !/nobody/.test(reText), 'SPLIT-UI-10: "Refused: n stops of E1 are already done today", not "nobody has done"', reText);
+    await re.getByRole('button', { name: 'Close', exact: true }).last().click();
+    check((await occOn(after, 'E1')).occ.length === 1, 'E1 is not deleted');
+    await page.keyboard.press('Escape');
+  } else {
+    check(false, 'E1 is held by Bala with work done (seed)', e1 && e1.run);
+  }
+}
+
+/**
+ * Round 6 (§6.5): a later part of a split route keeps its own planned change (Tue Thu from D2, a customer added
+ * from D1); only what the clerk changes reaches it. Edit route / schedule, the scope dialog and the template
+ * editor say so before the save, and each notice is compared with what the server stored, read back over the API.
+ */
+async function keptPlanChecks(page, { today }) {
+  console.log('split route: what a later part keeps is named before the save');
+  const WD = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const dowOf = (d) => new Date(d + 'T00:00:00Z').getUTCDay() || 7;
+  const long = (d) => `${WD[dowOf(d)]} ${short(d)}`;
+  const daysText = (days) => days.map((d) => WD[d]).join(' ');
+  const nextDow = (from, days) => {
+    let d = from;
+    while (!days.includes(dowOf(d))) d = addDays(d, 1);
+    return d;
+  };
+  const when = (p) => (p.end && p.start <= today ? `until ${long(p.end)}` : p.end ? `from ${long(p.start)} to ${long(p.end)}` : `from ${long(p.start)}`);
+  const custs = (await api('GET', '/customers')).filter((c) => c.active !== false && c.waste_types.includes('REL'));
+  const [A, B, C, D] = custs;
+  const nameOf = (id) => custs.find((c) => c.id === id).name;
+  const S = (...cs) => cs.map((c) => ({ customer_id: c.id, note: '' }));
+  /** The notice for a part whose stored list (after the save) differs from the saved list, built from the API. */
+  const listNotice = (part, saved) => {
+    const ids = part.stops.map((s) => s.customer_id);
+    const also = ids.filter((x) => !saved.includes(x)).map(nameOf).join(', ');
+    const lacks = saved.filter((x) => !ids.includes(x)).map(nameOf).join(', ');
+    if (!also && !lacks) return null;
+    const diff = also && lacks ? `It also has ${also} and does not have ${lacks}.` : also ? `It also has ${also}.` : `It does not have ${lacks}.`;
+    return `Already planned ${when(part)}: that part keeps its own list. ${diff}`;
+  };
+  const openDrawer = async (code, date) => {
+    await page.goto(`${BASE}/?view=week&anchor=${date}`);
+    await page.locator(`.week .day[data-date="${date}"] .occ[data-code="${code}"] .nm`).click();
+    const dr = page.locator('.drawer');
+    await dr.locator('.rd-rule').waitFor();
+    return dr;
+  };
+  const openEdit = async (code, date) => {
+    const dr = await openDrawer(code, date);
+    await dr.getByRole('button', { name: /Menu/ }).click();
+    await page.getByRole('menuitem', { name: 'Edit route / schedule…' }).click();
+    const rf = page.locator('.dialog', { hasText: `Edit route ${code}` });
+    await rf.locator('form').waitFor();
+    return { dr, rf };
+  };
+  const notes = (loc, id) => poll(page, async () => {
+    const x = await loc.locator(`[data-testid=${id}]`).allInnerTexts();
+    return x.length ? x : null;
+  });
+  const closeAll = async (dr) => {
+    await page.keyboard.press('Escape');
+    await dr.waitFor({ state: 'detached' });
+  };
+
+  // KP1 runs Mon Wed Fri from today; from D1 it is a part with its own list; from D2 it runs Tue Thu (planned).
+  const D1 = nextDow(addDays(today, 14), [1, 3, 5]);
+  const D2 = nextDow(addDays(D1, 14), [1, 3, 5]);
+  const kp1 = await api('POST', '/routes', { type: 'regular', code: 'KP1', name: 'Kept plan 1', start: today, days: [1, 3, 5], stops: S(A, B) });
+  const p2 = (await api('PUT', `/routes/${kp1.id}/dates/${D1}`, { rev: kp1.rev, scope: 'following', stops: S(A, B, C) })).route;
+  const p3 = (await api('POST', `/routes/${p2.id}/change-schedule`, { rev: p2.rev, from: D2, days: [2, 4] })).created;
+
+  // 1. Edit route / schedule from today: Saturday added, Friday removed. The notice updates as the chips change.
+  let { dr, rf } = await openEdit('KP1', await scheduledOn('KP1', addDays(today, 1), D1));
+  let t = await notes(rf, 'kept-plan');
+  check(JSON.stringify(t) === JSON.stringify([`Already planned: from ${long(D2)} this route runs Tue Thu. That plan is kept.`]), 'Edit route: the later Tue Thu plan is named as kept (the part with the same weekdays is not)', t);
+  await rf.getByRole('button', { name: 'Sat', exact: true }).click();
+  await rf.getByRole('button', { name: 'Fri', exact: true }).click();
+  t = await poll(page, async () => {
+    const x = await rf.locator('[data-testid=kept-plan]').allInnerTexts();
+    return x.length === 1 && /it runs/.test(x[0]) ? x : null;
+  });
+  await shot(page, '40-kept-plan-route-form');
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  await rf.waitFor({ state: 'detached' });
+  await closeAll(dr);
+  let parts = (await api('GET', `/routes/${kp1.id}`)).parts;
+  let stored = parts.find((p) => p.id === p3.id);
+  check(
+    !!t && t[0] === `Already planned: from ${long(D2)} this route runs Tue Thu. That plan is kept; the weekdays you add or remove apply to it too, so from ${long(stored.start)} it runs ${daysText(stored.days)}.` && daysText(stored.days) === 'Tue Thu Sat',
+    `Edit route from today: the notice's result is what the server stored from ${D2} (${daysText(stored.days)})`,
+    { t, stored: stored.days },
+  );
+  check(daysText(parts.find((p) => p.id === p2.id).days) === 'Mon Wed Sat', 'the part with the same weekdays simply follows (Mon Wed Sat)', parts.map((p) => p.days));
+
+  // 2. Apply from a date F in the first part: Friday back. The base is the part that runs on F.
+  const X2 = await scheduledOn('KP1', addDays(today, 1), D1);
+  const F = addDays(X2, 7) < D1 ? addDays(X2, 7) : addDays(X2, 1);
+  ({ dr, rf } = await openEdit('KP1', X2));
+  await rf.locator('input[type=radio]').nth(1).check();
+  await rf.locator('input[aria-label="From date"]').fill(F);
+  await rf.getByRole('button', { name: 'Fri', exact: true }).click();
+  t = await poll(page, async () => {
+    const x = await rf.locator('[data-testid=kept-plan]').allInnerTexts();
+    return x.length === 1 && /Fri Sat\.$/.test(x[0]) ? x : null;
+  });
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  await rf.waitFor({ state: 'detached' });
+  await closeAll(dr);
+  parts = (await api('GET', `/routes/${kp1.id}`)).parts;
+  stored = parts.find((p) => p.id === p3.id);
+  check(
+    !!t && t[0] === `Already planned: from ${long(D2)} this route runs Tue Thu Sat. That plan is kept; the weekdays you add or remove apply to it too, so from ${long(stored.start)} it runs ${daysText(stored.days)}.` && daysText(stored.days) === 'Tue Thu Fri Sat',
+    `Edit route from ${F}: the notice's result is what the server stored (${daysText(stored.days)})`,
+    { t, stored: stored.days },
+  );
+
+  // 3. The drawer: B removed "and all following" on a date of the first part; the part from D1 keeps C.
+  const kp2 = await api('POST', '/routes', { type: 'regular', code: 'KP2', name: 'Kept plan 2', start: today, days: [1, 3, 5], stops: S(A, B) });
+  const q2 = (await api('PUT', `/routes/${kp2.id}/dates/${D1}`, { rev: kp2.rev, scope: 'following', stops: S(A, B, C) })).route;
+  dr = await openDrawer('KP2', await scheduledOn('KP2', addDays(today, 1), D1));
+  await dr.locator(`.stop[data-cid="${B.id}"]`).getByRole('button', { name: /^Remove from route/ }).click();
+  await dr.getByRole('button', { name: 'Save', exact: true }).click();
+  const sc = page.locator('.dialog', { hasText: 'Apply this change to' });
+  // The notices belong to "and all following": they are not shown while "Only <date>" is selected.
+  await sc.locator('input[type=radio]').nth(1).check();
+  await notes(sc, 'kept-list');
+  await sc.locator('input[type=radio]').nth(0).check();
+  check(await poll(page, async () => (await sc.locator('[data-testid=kept-list]').count()) === 0), 'scope dialog: no kept-list notice while "Only <date>" is selected');
+  await sc.locator('input[type=radio]').nth(1).check();
+  t = await notes(sc, 'kept-list');
+  await shot(page, '41-kept-list-scope');
+  await sc.getByRole('button', { name: 'Save', exact: true }).click();
+  await dr.waitFor({ state: 'detached' });
+  stored = (await api('GET', `/routes/${q2.id}`)).parts.find((p) => p.id === q2.id);
+  const expect3 = listNotice(stored, [A.id]);
+  check(JSON.stringify(t) === JSON.stringify([expect3]) && expect3 === `Already planned from ${long(D1)}: that part keeps its own list. It also has ${C.name}.`, 'scope dialog: the later part keeps its own customer, as the server then stores', { t, expect3 });
+
+  // 4. The template editor, opened on the part from D1: a customer added from today reaches every other part.
+  await page.goto(BASE + '/routes');
+  await page.locator('table tbody tr').first().waitFor();
+  await page.locator('input.search').fill('KP2');
+  await page.locator('table tbody tr[data-code="KP2"]').last().click();
+  const te = page.locator('.drawer');
+  await poll(page, async () => (await te.locator('.stoplist .stop').count()) === 2);
+  await te.getByRole('button', { name: /Add customer/ }).click();
+  await te.locator('.picker input[type=search]').fill(D.code);
+  await te.locator('.picker-item', { hasText: D.code }).first().click();
+  t = await notes(te, 'kept-list');
+  await shot(page, '42-kept-list-template');
+  await te.getByRole('button', { name: 'Save', exact: true }).click();
+  await te.waitFor({ state: 'detached' });
+  parts = (await api('GET', `/routes/${q2.id}`)).parts;
+  const saved = parts.find((p) => p.id === q2.id).stops.map((s) => s.customer_id);
+  const expect4 = parts.filter((p) => p.id !== q2.id).map((p) => listNotice(p, saved)).filter(Boolean);
+  check(
+    saved.includes(D.id) && expect4.length >= 1 && JSON.stringify([...t].sort()) === JSON.stringify([...expect4].sort()),
+    `template editor: every other part's notice is what the server then stores (${expect4.length} parts)`,
+    { t, expect4 },
+  );
+  await page.keyboard.press('Escape').catch(() => {});
+
+  // 5. Routes page > "Change schedule from date…" on KP1's first part, from a date F2 inside the Tue Thu part:
+  // the form's schedule replaces that part's own from F2, and the notice says so (nothing before a date).
+  const F2 = addDays(D2, 7);
+  const own3 = (await api('GET', `/routes/${kp1.id}`)).parts.find((p) => p.id === p3.id);
+  await page.locator('input.search').fill('KP1');
+  await page.locator('table tbody tr[data-code="KP1"]').first().locator('td.actions button').click();
+  await page.getByRole('menuitem', { name: 'Change schedule from date…' }).click();
+  rf = page.locator('.dialog', { hasText: 'Edit route KP1' });
+  await rf.locator('form').waitFor();
+  check((await rf.locator('[data-testid=kept-plan]').count()) === 0, 'Change schedule from date…: no notice before a date is picked');
+  await rf.locator('input[aria-label="From date"]').fill(F2);
+  await rf.getByRole('button', { name: 'Thu', exact: true }).click();
+  t = await poll(page, async () => {
+    const x = await rf.locator('[data-testid=kept-plan]').allInnerTexts();
+    return x.length === 1 && /Thu Sat instead/.test(x[0]) ? x : null;
+  });
+  await shot(page, '43-kept-plan-replaced');
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  await rf.waitFor({ state: 'detached' });
+  parts = (await api('GET', `/routes/${kp1.id}`)).parts;
+  stored = parts.find((p) => p.start === F2);
+  check(
+    !!t && !!stored && t[0] === `Already planned: from ${long(D2)} this route runs ${daysText(own3.days)}. From ${long(F2)} it runs ${daysText(stored.days)} instead, as set here.` && daysText(stored.days) === 'Mon Wed Thu Sat',
+    `Change schedule from ${F2}: the notice names the replaced plan and what the server stored (${stored && daysText(stored.days)})`,
+    { t, stored: stored && stored.days },
+  );
+
+  // 6. The template editor on KP2's first part, from a date inside the next part (its own list): that list is
+  // replaced from then, and the part after it keeps its own customers. Compared with the parts before and after.
+  const before6 = (await api('GET', `/routes/${kp2.id}`)).parts;
+  const [r1, r2] = before6;
+  const F3 = addDays(r2.start, 2);
+  // A customer the next part has too, so the saved list differs from that part's own list.
+  const gone = [...r1.stops].reverse().find((s) => r2.stops.some((x) => x.customer_id === s.customer_id)) ?? r1.stops[0];
+  await page.locator('input.search').fill('KP2');
+  await page.locator('table tbody tr[data-code="KP2"]').first().click();
+  await poll(page, async () => (await te.locator('.stoplist .stop').count()) === r1.stops.length);
+  await te.locator(`.stop[data-cid="${gone.customer_id}"]`).getByRole('button', { name: /^Remove from route/ }).click();
+  await te.locator('input[type=radio]').nth(1).check();
+  await te.locator('input[aria-label="From date"]').fill(F3);
+  const saved6 = r1.stops.filter((s) => s.customer_id !== gone.customer_id).map((s) => s.customer_id);
+  const own2 = r2.stops.map((s) => s.customer_id);
+  const diff6 = (() => {
+    const also = own2.filter((x) => !saved6.includes(x)).map(nameOf).join(', ');
+    const lacks = saved6.filter((x) => !own2.includes(x)).map(nameOf).join(', ');
+    return also && lacks ? `It also has ${also} and does not have ${lacks}.` : also ? `It also has ${also}.` : `It does not have ${lacks}.`;
+  })();
+  t = await poll(page, async () => {
+    const x = await te.locator('[data-testid=kept-list]').allInnerTexts();
+    return x.some((s) => s.includes('replaces it')) ? x : null;
+  });
+  await shot(page, '44-kept-list-template-from');
+  await te.getByRole('button', { name: 'Save', exact: true }).click();
+  await te.waitFor({ state: 'detached' });
+  parts = (await api('GET', `/routes/${kp2.id}`)).parts;
+  const fromF3 = parts.find((p) => p.start === F3);
+  const expect6 = [
+    `Already planned ${when(r2)}: that part has its own list. ${diff6} From ${long(F3)} the list saved here replaces it.`,
+    ...parts.filter((p) => p.start > F3).map((p) => listNotice(p, saved6)).filter(Boolean),
+  ];
+  check(
+    !!fromF3 && JSON.stringify(fromF3.stops.map((s) => s.customer_id)) === JSON.stringify(saved6) && JSON.stringify(t) === JSON.stringify(expect6),
+    `template editor from ${F3}: the replaced list and the later part's are what the server then stores`,
+    { t, expect6, stored: fromF3 && fromF3.stops },
+  );
+
+  // 7. Apply from the first day of a later part with its own schedule (Tue Thu): the form's schedule replaces it,
+  // and the part after it (Tue Thu Sat) gets the change measured from Tue Thu, not only the Saturday the clerk
+  // ticked. Its notice names that change; it does not say that its plan is kept.
+  const G1 = nextDow(addDays(today, 21), [1]);
+  const G2 = addDays(G1, 15);
+  const kp3 = await api('POST', '/routes', { type: 'regular', code: 'KP3', name: 'Kept plan 3', start: today, days: [1, 3, 5], stops: S(A, B) });
+  const g1 = (await api('POST', `/routes/${kp3.id}/change-schedule`, { rev: kp3.rev, from: G1, days: [2, 4] })).created;
+  const g2 = (await api('POST', `/routes/${g1.id}/change-schedule`, { rev: g1.rev, from: G2, days: [2, 4, 6] })).created;
+  ({ dr, rf } = await openEdit('KP3', await scheduledOn('KP3', addDays(today, 1), G1)));
+  await rf.locator('input[type=radio]').nth(1).check();
+  await rf.locator('input[aria-label="From date"]').fill(G1);
+  await rf.getByRole('button', { name: 'Sat', exact: true }).click();
+  t = await poll(page, async () => {
+    const x = await rf.locator('[data-testid=kept-plan]').allInnerTexts();
+    return x.length === 2 && /Sat instead/.test(x[0]) ? x : null;
+  });
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  await rf.waitFor({ state: 'detached' });
+  await closeAll(dr);
+  stored = (await api('GET', `/routes/${kp3.id}`)).parts.find((p) => p.id === g2.id);
+  check(
+    !!t &&
+      t[1] === `Already planned: from ${long(G2)} this route runs Tue Thu Sat. This change, Tue Thu to Mon Wed Fri Sat from ${long(G1)}, applies to it too, so from ${long(G2)} it runs ${daysText(stored.days)}.` &&
+      daysText(stored.days) === 'Mon Wed Fri Sat',
+    `Apply from ${G1}, a part with its own Tue Thu: the next part's notice names the change from Tue Thu and what the server stored`,
+    { t, stored: stored.days },
+  );
+
+  // 8. Another clerk changes a later part while a notice is on screen (R20 for the other parts). The save is
+  // refused (STALE_REVISION), the notice is computed again on the parts loaded after that answer, and the second
+  // save stores what it then says: the template editor, the scope dialog and Edit route / schedule.
+  const H1 = nextDow(addDays(today, 21), [1]);
+  const kp4 = await api('POST', '/routes', { type: 'regular', code: 'KP4', name: 'Kept plan 4', start: today, days: [1, 3, 5], stops: S(A, B) });
+  const h1 = (await api('POST', `/routes/${kp4.id}/change-schedule`, { rev: kp4.rev, from: H1, days: [2, 4], stops: S(A, B, C) })).created;
+  const otherClerk = async (body) => {
+    const cur = await api('GET', `/routes/${h1.id}`);
+    await api('POST', `/routes/${h1.id}/change-schedule`, { rev: cur.rev, from: H1, ...body });
+  };
+  const refused = (loc) => poll(page, async () => (await loc.locator('.form-error').allInnerTexts()).some((x) => /Someone else changed this/.test(x)));
+  /** The one notice `id` in `loc`, once it reads as `ok` says. */
+  const notesLike = (loc, id, ok) =>
+    poll(page, async () => {
+      const x = await loc.locator(`[data-testid=${id}]`).allInnerTexts();
+      return x.length === 1 && ok(x[0]) ? x : null;
+    });
+  // 8a. the template editor (from today): the part from H1 loses B meanwhile
+  await page.goto(BASE + '/routes');
+  await page.locator('table tbody tr').first().waitFor();
+  await page.locator('input.search').fill('KP4');
+  await page.locator('table tbody tr[data-code="KP4"]').first().click();
+  await poll(page, async () => (await te.locator('.stoplist .stop').count()) === 2);
+  await te.getByRole('button', { name: /Add customer/ }).click();
+  await te.locator('.picker input[type=search]').fill(D.code);
+  await te.locator('.picker-item', { hasText: D.code }).first().click();
+  const t8a = await notes(te, 'kept-list');
+  await otherClerk({ stops: S(A, C) });
+  await te.getByRole('button', { name: 'Save', exact: true }).click();
+  const r8a = await refused(te);
+  t = await notesLike(te, 'kept-list', (x) => x.includes('does not have'));
+  await te.getByRole('button', { name: 'Save', exact: true }).click();
+  await te.waitFor({ state: 'detached' });
+  parts = (await api('GET', `/routes/${kp4.id}`)).parts;
+  let saved8 = parts[0].stops.map((s) => s.customer_id);
+  check(
+    !!r8a && !!t && JSON.stringify(t8a) === JSON.stringify([`Already planned from ${long(H1)}: that part keeps its own list. It also has ${C.name}.`]) &&
+      t[0] === listNotice(parts[1], saved8) && t[0] === `Already planned from ${long(H1)}: that part keeps its own list. It also has ${C.name} and does not have ${B.name}.`,
+    'template editor: a later part changed meanwhile, the save is refused and the new notice is what the server then stores',
+    { r8a, t8a, t, stored: parts[1].stops },
+  );
+  // 8b. the scope dialog's "and all following": the part from H1 loses D meanwhile
+  dr = await openDrawer('KP4', await scheduledOn('KP4', addDays(today, 1), H1));
+  await dr.locator(`.stop[data-cid="${B.id}"]`).getByRole('button', { name: /^Remove from route/ }).click();
+  await dr.getByRole('button', { name: 'Save', exact: true }).click();
+  await sc.locator('input[type=radio]').nth(1).check();
+  const t8b = await notes(sc, 'kept-list');
+  await otherClerk({ stops: S(A, C) });
+  await sc.getByRole('button', { name: 'Save', exact: true }).click();
+  await sc.waitFor({ state: 'detached' });
+  const r8b = await refused(dr);
+  await dr.getByRole('button', { name: 'Save', exact: true }).click();
+  await sc.locator('input[type=radio]').nth(1).check();
+  t = await notesLike(sc, 'kept-list', (x) => x.includes(`does not have ${D.name}`));
+  await sc.getByRole('button', { name: 'Save', exact: true }).click();
+  await dr.waitFor({ state: 'detached' });
+  parts = (await api('GET', `/routes/${kp4.id}`)).parts;
+  saved8 = saved8.filter((x) => x !== B.id);
+  check(
+    !!r8b && !!t && JSON.stringify(t8b) === JSON.stringify([`Already planned from ${long(H1)}: that part keeps its own list. It also has ${C.name}.`]) &&
+      t[0] === listNotice(parts[parts.length - 1], saved8) && t[0] === `Already planned from ${long(H1)}: that part keeps its own list. It also has ${C.name} and does not have ${D.name}.`,
+    'scope dialog: a later part changed meanwhile, the save is refused and the new notice is what the server then stores',
+    { r8b, t8b, t, stored: parts.map((p) => p.stops) },
+  );
+  // 8c. Edit route / schedule from today, Saturday ticked: the part from H1 gets Friday meanwhile
+  const h1Now = (await api('GET', `/routes/${kp4.id}`)).parts.find((p) => p.start === H1);
+  ({ dr, rf } = await openEdit('KP4', await scheduledOn('KP4', addDays(today, 1), H1)));
+  await rf.getByRole('button', { name: 'Sat', exact: true }).click();
+  const t8c = await notesLike(rf, 'kept-plan', (x) => x.endsWith('it runs Tue Thu Sat.'));
+  await otherClerk({ days: [2, 4, 5] });
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  const r8c = await refused(rf);
+  t = await notesLike(rf, 'kept-plan', (x) => x.includes('runs Tue Thu Fri.'));
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  await rf.waitFor({ state: 'detached' });
+  await closeAll(dr);
+  stored = (await api('GET', `/routes/${kp4.id}`)).parts.find((p) => p.id === h1Now.id);
+  check(
+    !!r8c && !!t8c && !!t &&
+      t[0] === `Already planned: from ${long(H1)} this route runs Tue Thu Fri. That plan is kept; the weekdays you add or remove apply to it too, so from ${long(H1)} it runs ${daysText(stored.days)}.` &&
+      daysText(stored.days) === 'Tue Thu Fri Sat',
+    'Edit route: a later part changed meanwhile, the save is refused and the new notice is what the server then stores',
+    { r8c, t8c, t, stored: stored.days },
+  );
+
+  // 9. The template editor at 1280x800 with five later parts that have lists of their own: the notices scroll in
+  // a capped area above Save, so the stop list and Save stay on screen.
+  const L1 = nextDow(addDays(today, 7), [1]);
+  let kp5 = await api('POST', '/routes', { type: 'regular', code: 'KP5', name: 'Kept plan 5', start: today, days: [1, 3, 5], stops: S(...custs.slice(0, 6)) });
+  for (let k = 0, cur = kp5; k < 5; k++) {
+    cur = (await api('POST', `/routes/${cur.id}/change-schedule`, { rev: cur.rev, from: addDays(L1, 7 * k), stops: S(...custs.slice(0, 4), custs[10 + 2 * k], custs[11 + 2 * k]) })).created;
+  }
+  await page.setViewportSize({ width: 1280, height: 800 });
+  try {
+    await page.goto(BASE + '/routes');
+    await page.locator('table tbody tr').first().waitFor();
+    await page.locator('input.search').fill('KP5');
+    await page.locator('table tbody tr[data-code="KP5"]').first().click();
+    await poll(page, async () => (await te.locator('.stoplist .stop').count()) === 6);
+    await te.locator('.stoplist .stop').first().getByRole('button', { name: /^Remove from route/ }).click();
+    const n9 = await poll(page, async () => ((await te.locator('[data-testid=kept-list]').count()) === 5 ? 5 : 0));
+    const m = await page.evaluate(() => {
+      const d = document.querySelector('.drawer');
+      const body = d.querySelector('.drawer-body').getBoundingClientRect();
+      const rows = [...d.querySelectorAll('.stoplist .stop')].map((r) => r.getBoundingClientRect());
+      const save = [...d.querySelectorAll('.drawer-foot .acts .btn')].find((b) => b.textContent === 'Save').getBoundingClientRect();
+      const box = d.querySelector('.kept-notes');
+      return { vh: innerHeight, saveBottom: save.bottom, rowsShown: rows.filter((r) => r.bottom <= body.bottom).length, notesH: box.clientHeight, scrolls: box.scrollHeight > box.clientHeight };
+    });
+    await shot(page, '45-kept-list-template-many');
+    check(n9 === 5 && m.saveBottom <= m.vh && m.rowsShown >= 2 && m.notesH <= 0.3 * m.vh && m.scrolls, 'template editor at 1280x800, 5 notices: they scroll in a capped area, the list and Save stay on screen', m);
+    await te.getByRole('button', { name: 'Discard changes', exact: true }).click();
+    await te.getByRole('button', { name: 'Close', exact: true }).last().click();
+    await te.waitFor({ state: 'detached' });
+  } finally {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+  }
+}
+
+async function main() {
+  fs.rmSync(DATA, { recursive: true, force: true });
+  // WMS_FAKE_NOW pins the server clock, so a run does not depend on the day or hour it starts (CI sets it).
+  // The backend honours it only with a .demo marker in the data dir (R1); php -S gets it through env.
+  if (process.env.WMS_FAKE_NOW) {
+    fs.mkdirSync(DATA, { recursive: true });
+    fs.writeFileSync(path.join(DATA, '.demo'), '');
+  }
+  const env = { ...process.env, WMS_DATA_DIR: DATA };
+  execFileSync('php', [path.join(ROOT, 'backend/tools/init.php')], { env, stdio: 'pipe' });
+  const appDir = path.join(ROOT, 'backend/public/app');
+  fs.mkdirSync(appDir, { recursive: true });
+  start('php', ['-S', `127.0.0.1:${BACKEND_PORT}`, '-t', appDir, path.join(ROOT, 'backend/public/index.php')], { cwd: ROOT, env });
+  start(path.join(FRONT, 'node_modules/.bin/vite'), ['--port', String(FRONT_PORT), '--strictPort', '--host', '127.0.0.1'], {
+    cwd: FRONT,
+    env: { ...process.env, VITE_API_TARGET: API },
+  });
+  await waitFor(API + '/api/health');
+  await waitFor(BASE + '/');
+
+  console.log('seed demo data');
+  // Asynchronous on purpose: a synchronous child would block this process, the php -S request log pipe
+  // would fill up and the server would stall.
+  const seedOut = await new Promise((resolve, reject) => {
+    const p = spawn('node', [path.join(FRONT, 'scripts/seed-demo.mjs'), '--api', API, '--data-dir', DATA, '--new-password', ADMIN_PW, '--with-runs']);
+    let out = '';
+    p.stdout.on('data', (d) => (out += d));
+    p.stderr.on('data', (d) => (out += d));
+    p.on('close', (code) => (code === 0 ? resolve(out) : reject(new Error('seed failed:\n' + out))));
+  });
+  console.log(seedOut.trim().split('\n').map((l) => '    ' + l).join('\n'));
+  token = (await api('POST', '/login', { username: 'admin', password: ADMIN_PW })).token;
+  const meta = await api('GET', '/meta');
+  const today = meta.today;
+  const tomorrow = meta.next_work_day;
+  // A future Mon–Sat date where N1 and N2 run (not a PH), after the next work day.
+  let workDay = addDays(tomorrow, 1);
+  for (let i = 0; i < 14; i++, workDay = addDays(workDay, 1)) {
+    const { occ } = await occOn(workDay, 'N2');
+    if (occ.length && occ[0].status === 'scheduled') break;
+  }
+  const holidays = (await api('GET', '/holidays')).filter((h) => h.date > today);
+  let ph = null;
+  for (const h of holidays) {
+    const { occ } = await occOn(h.date, 'N1');
+    if (occ.length && occ[0].status === 'holiday_skipped') {
+      ph = h.date;
+      break;
+    }
+  }
+  let sunday = addDays(today, 1);
+  while (new Date(sunday + 'T00:00:00Z').getUTCDay() !== 0) sunday = addDays(sunday, 1);
+  console.log(`dates: today ${today}, tomorrow ${tomorrow}, work day ${workDay}, PH ${ph}, Sunday ${sunday}`);
+
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  const consoleErrors = [];
+  page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
+  page.on('pageerror', (e) => consoleErrors.push(String(e)));
+  page.on('dialog', (d) => d.accept());
+
+  try {
+    console.log('login (English UI)');
+    await page.goto(BASE + '/login');
+    await page.fill('input[name=username]', 'admin');
+    await page.fill('input[name=password]', ADMIN_PW);
+    await page.click('button[type=submit]');
+    await page.waitForSelector('.month .mline');
+    await page.getByRole('button', { name: 'EN', exact: true }).click();
+    await page.getByRole('button', { name: 'Week', exact: true }).waitFor();
+
+    // 0. Month view (Round 5): the default, Sunday first, 4 lines + "N more", today blue, PH red, "+".
+    await monthChecks(page, { today, tomorrow, workDay, ph });
+
+    // 1. Week view (Sunday first) renders 12+ routes per work day, with live statuses.
+    console.log('week view');
+    await page.goto(BASE + '/?view=week');
+    await page.locator('.week .occ').first().waitFor();
+    const weekDates = await page.locator('.week .day').evaluateAll((els) => els.map((e) => e.dataset.date));
+    check(weekDates.length === 7 && new Date(weekDates[0] + 'T00:00:00Z').getUTCDay() === 0, 'week view: 7 columns, Sunday first', weekDates);
+    const todayDt = page.locator(`.week .day[data-date="${today}"] .dh .dt`);
+    check((await todayDt.evaluate((e) => getComputedStyle(e).backgroundColor)) === BLUE, "week view: today's date on blue");
+    const todayCol = page.locator(`.week .day[data-date="${today}"]`);
+    const nextCol = page.locator(`.week .day[data-date="${tomorrow}"]`);
+    const nToday = await todayCol.locator('.occ').count();
+    const nNext = (await nextCol.count()) ? await nextCol.locator('.occ').count() : 0;
+    check(Math.max(nToday, nNext) >= 12, `a day column renders 12+ one-line route rows (today ${nToday}, next work day ${nNext})`);
+    check(await page.locator('.week .day.today').count() === 1, 'today has the accent ring');
+    // OFF-8: in a 1440 px week every row keeps a readable part of its name (the status word moves to the tooltip).
+    const nmW = await page.locator('.week .day .occ .nm').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().width)));
+    check(nmW.length > 0 && Math.min(...nmW) >= 30, `week rows: every name keeps >= 30 px (min ${Math.min(...nmW)} px)`, nmW.slice(0, 12));
+    check((await page.locator('.legend .lchip').count()) >= 12, 'legend lists the route codes in range');
+    if (nToday > 0) {
+      const n1 = todayCol.locator('.occ[data-code="N1"]');
+      check(/Ali/.test(await n1.innerText()), 'today N1 shows the driver status (✓ Ali …)', await n1.innerText());
+      check((await todayCol.locator('.dh .opsline').count()) === 1, "today's header shows the ops line");
+    }
+    const adhocRow = page.locator('.week .occ.adhoc').first();
+    check((await adhocRow.count()) === 1 && /⚡A/.test(await adhocRow.innerText()), 'adhoc row has the ⚡A tag and the dashed class');
+    await shot(page, '01-week');
+
+    // 2. Highlight from the legend dims everything else; clicking again clears it. Search by customer.
+    console.log('highlight and search');
+    await page.locator('.legend .lchip[data-code="E1"]').click();
+    const e1Rows = page.locator('.week .occ[data-code="E1"]');
+    const dimE1 = await e1Rows.evaluateAll((els) => els.filter((e) => e.classList.contains('dim')).length);
+    const others = page.locator('.week .occ:not([data-code="E1"])');
+    const dimOthers = await others.evaluateAll((els) => els.every((e) => e.classList.contains('dim')));
+    check((await e1Rows.count()) > 0 && dimE1 === 0 && dimOthers, 'highlight E1: E1 rows stay, every other row dims');
+    check(await page.locator('.legend .lchip.on[data-code="E1"]').count() === 1, 'the legend chip shows it is on');
+    await shot(page, '02-highlight');
+    await page.locator('.legend .lchip[data-code="E1"]').click();
+    check((await page.locator('.week .occ.dim').count()) === 0, 'clicking the code again clears the highlight');
+    await page.locator('.week .occ[data-code="W2"] button.code').first().click();
+    check((await page.locator('.week .occ.dim').count()) > 0 && (await page.locator('.week .occ[data-code="W2"].dim').count()) === 0, 'clicking a code in a row highlights it');
+    await page.keyboard.press('Escape');
+    check((await page.locator('.week .occ.dim').count()) === 0, 'Esc clears the highlight');
+    // Search for one customer (by name): exactly the routes that have it stay lit.
+    const wk = await api('GET', `/calendar?view=week&anchor=${today}`);
+    const e2occ = wk.routes.find((o) => o.code === 'E2');
+    const cust = wk.customers[e2occ.stops[e2occ.stops.length - 1].customer_id];
+    const expect = [...new Set(wk.routes.filter((o) => o.stops.some((x) => wk.customers[x.customer_id].name.toLowerCase().includes(cust.name.toLowerCase()))).map((o) => o.code))].sort();
+    await page.fill('input[type=search]', cust.name);
+    await page.waitForTimeout(200);
+    const lit = (await page.locator('.week .occ:not(.dim)').evaluateAll((els) => [...new Set(els.map((e) => e.dataset.code))])).sort();
+    check(lit.includes('E2') && lit.join() === expect.join(), `search "${cust.name}" keeps only the routes with that customer`, { lit, expect });
+    await page.getByRole('button', { name: 'Clear highlight' }).click();
+    check((await page.locator('.week .occ.dim').count()) === 0, '[Clear highlight] clears the search');
+    // type filter chip
+    await page.locator('.tchip', { hasText: 'Adhoc' }).click();
+    check((await page.locator('.week .occ.adhoc').count()) === 0, 'the ⚡A chip hides adhoc rows');
+    await page.locator('.tchip', { hasText: 'Adhoc' }).click();
+
+    // 3. A regular route on a Mon–Sat PH shows paused; Run on PH and Move to work day.
+    console.log('PH paused');
+    if (!ph) {
+      check(false, 'found a future Mon–Sat public holiday with N1 paused');
+    } else {
+      await page.goto(`${BASE}/?view=week&anchor=${ph}`);
+      const phCol = page.locator(`.week .day[data-date="${ph}"]`);
+      await phCol.waitFor();
+      const pausedBtn = phCol.locator('button.paused');
+      check(/regular routes paused \(PH\)/.test(await pausedBtn.innerText()), `${ph}: "⏸ N regular routes paused (PH)" line`, await pausedBtn.innerText());
+      check((await phCol.locator('.phtag').count()) === 1, 'the PH tag with its name');
+      check((await phCol.locator('.occs .occ[data-code="N1"]').count()) === 0, 'N1 is not among the running routes');
+      await pausedBtn.click();
+      check((await phCol.locator('.pausedlist .occ[data-code="N1"]').count()) === 1, 'expanded: N1 is listed as paused');
+      await shot(page, '03-ph');
+      // Run on PH -> a special one-off N1-<DD> on the same date
+      await phCol.locator('.pausedlist > div', { has: page.locator('.occ[data-code="N1"]') }).getByRole('button', { name: 'Run on PH' }).click();
+      const dlg = page.locator('.dialog');
+      await dlg.locator('text=Special (only this date)').waitFor();
+      const code = await dlg.locator('input.code').inputValue();
+      check(code === 'N1-' + ph.slice(8), `suggested copy code ${code}`);
+      await dlg.getByRole('button', { name: 'Copy', exact: true }).click();
+      await dlg.waitFor({ state: 'detached' });
+      const after = await occOn(ph, code);
+      check(after.occ.length === 1 && after.occ[0].type === 'special', `Run on PH created special ${code}`, after.occ.map((o) => o.type));
+      const n1 = after.cal.routes.find((o) => o.date === ph && o.code === 'N1');
+      check(n1 && n1.covered_by.some((c) => c.code === code), 'the paused N1 shows "covered by"');
+      // Move a paused route to a work day keeps type regular
+      await page.waitForTimeout(300);
+      if (!(await phCol.locator('.pausedlist').count())) await phCol.locator('button.paused').click();
+      const second = await phCol.locator('.pausedlist .occ').evaluateAll((els) => els.map((e) => e.dataset.code).find((c) => c !== 'N1'));
+      await phCol.locator('.pausedlist > div', { has: page.locator(`.occ[data-code="${second}"]`) }).getByRole('button', { name: 'Move to work day…' }).click();
+      let target = addDays(ph, 3);
+      const dlg2 = page.locator('.dialog');
+      // OFF-1: the default target is the first work day after the paused date, not tomorrow.
+      const holSet = new Set((await api('GET', '/holidays')).map((h) => h.date));
+      let expectMove = addDays(ph, 1);
+      while (new Date(expectMove + 'T00:00:00Z').getUTCDay() === 0 || holSet.has(expectMove)) expectMove = addDays(expectMove, 1);
+      await page.waitForTimeout(300);
+      const defTarget = await dlg2.locator('input[type=date]').inputValue();
+      check(defTarget === expectMove && defTarget !== tomorrow, `Move to work day: the target defaults to ${expectMove} (after the PH), not ${tomorrow}`, defTarget);
+      const runsThen = (await occOn(expectMove, second)).occ.some((o) => o.status === 'scheduled');
+      await page.waitForTimeout(200);
+      check((await dlg2.locator('[data-testid=copy-already-runs]').count()) === (runsThen ? 1 : 0), `the dialog warns exactly when ${second} already runs on ${expectMove} (${runsThen})`);
+      await dlg2.locator('input[type=date]').fill(target);
+      await dlg2.locator('text=Regular (only this date)').waitFor();
+      await dlg2.getByRole('button', { name: 'Copy', exact: true }).click();
+      await dlg2.waitFor({ state: 'detached' });
+      const moved = (await api('GET', `/calendar?view=week&anchor=${target}`)).routes.filter((o) => o.date === target && !o.recurring);
+      check(moved.some((o) => o.type === 'regular' && o.copied_from), `Move to work day: a regular one-off (R tag) on ${target}`, moved.map((o) => [o.code, o.type]));
+      // OFF-5: the group counts only what still needs a decision; a covered row shows its "→" once.
+      await page.waitForTimeout(500);
+      if (!(await phCol.locator('.pausedlist').count())) await phCol.locator('button.paused').click();
+      const nPaused = (await occOn(ph, 'N1')).cal.routes.filter((o) => o.date === ph && o.status === 'holiday_skipped').length;
+      const grp = await phCol.locator('button.paused').innerText();
+      check(grp.includes(`${nPaused - 2} regular routes paused (PH) · 2 covered`), `paused group: "${nPaused - 2} … · 2 covered"`, grp);
+      const n1Row = await phCol.locator('.pausedlist > div', { has: page.locator('.occ[data-code="N1"]') }).innerText();
+      check((n1Row.match(/→/g) || []).length === 1, 'the covered N1 row shows "→ code date" once', n1Row);
+      // OFF-7: deleting this PH is refused (the special N1 copy needs it); the conflict dialog closes with Esc.
+      const phName = (await api('GET', '/holidays')).find((h) => h.date === ph).name;
+      await page.goto(BASE + '/holidays');
+      await page.getByRole('tab', { name: new RegExp(ph.slice(0, 4)) }).click();
+      await page.locator('tr', { hasText: phName }).first().getByRole('button', { name: 'Delete' }).click();
+      await page.locator('.dialog').getByRole('button', { name: 'Delete' }).click();
+      const conf = page.locator('.dialog', { hasText: 'One-off routes on this date' });
+      await conf.waitFor();
+      check((await page.locator('.dialog').count()) === 1, 'the holiday conflict replaces the delete confirmation (one dialog)');
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(200);
+      check((await page.locator('.dialog').count()) === 0 && (await page.locator('.scrim').count()) === 0, 'Esc closes the conflict dialog, no scrim left');
+      check((await api('GET', '/holidays')).some((h) => h.date === ph), 'the holiday is still there');
+    }
+
+    // 4. Route drawer: add a customer, drag it to the top, save "only this date".
+    console.log('drawer edit + drag + scope');
+    await page.goto(`${BASE}/?view=week&anchor=${workDay}`);
+    const col = page.locator(`.week .day[data-date="${workDay}"]`);
+    await col.locator('.occ[data-code="N2"] .nm').click();
+    const drawer = page.locator('.drawer');
+    await drawer.waitFor();
+    const before = await drawer.locator('.stoplist .stop').evaluateAll((els) => els.map((e) => Number(e.dataset.cid)));
+    await drawer.getByRole('button', { name: /Add customer/ }).click();
+    await drawer.locator('.picker input[type=search]').fill('Jade');
+    const firstHit = drawer.locator('.picker-item').first();
+    await firstHit.waitFor();
+    const pickedName = (await firstHit.locator('strong').innerText()).trim();
+    await firstHit.click();
+    const mid = await drawer.locator('.stoplist .stop').evaluateAll((els) => els.map((e) => Number(e.dataset.cid)));
+    const added = mid.find((id) => !before.includes(id));
+    check(mid.length === before.length + 1 && mid[mid.length - 1] === added, `"${pickedName}" added at the end of the draft`);
+    check((await drawer.locator('.stoplist.dirty').count()) === 1, 'the draft has the amber outline');
+    await dragTo(page, drawer.locator(`.stop[data-cid="${added}"] .handle`), drawer.locator(`.stop[data-cid="${before[0]}"] .handle`));
+    const dragged = await drawer.locator('.stoplist .stop').evaluateAll((els) => els.map((e) => Number(e.dataset.cid)));
+    check(dragged[0] === added && dragged.length === mid.length, 'mouse drag by the ⠿ handle moved it to #1', dragged.slice(0, 3));
+    // ↑ ↓ and move to # on the same draft
+    await drawer.locator(`.stop[data-cid="${before[0]}"]`).getByRole('button', { name: /^Move down/ }).click();
+    const stepped = await drawer.locator('.stoplist .stop').evaluateAll((els) => els.map((e) => Number(e.dataset.cid)));
+    check(stepped[2] === before[0], '↓ moves a stop one step');
+    await drawer.locator(`.stop[data-cid="${before[0]}"] button.seq`).click();
+    await drawer.locator(`.stop[data-cid="${before[0]}"] input.seqin`).fill('2');
+    await drawer.locator(`.stop[data-cid="${before[0]}"] input.seqin`).press('Enter');
+    const typed = await drawer.locator('.stoplist .stop').evaluateAll((els) => els.map((e) => Number(e.dataset.cid)));
+    check(typed[1] === before[0], '"move to #2" by typing in the seq field');
+    await shot(page, '04-draft');
+    await drawer.getByRole('button', { name: 'Save', exact: true }).click();
+    const scope = page.locator('.dialog', { hasText: 'Apply this change to' });
+    await scope.waitFor();
+    check(await scope.locator('input[type=radio]').first().isChecked(), 'scope dialog defaults to "Only <date>"');
+    await shot(page, '05-scope');
+    await scope.getByRole('button', { name: 'Save', exact: true }).click();
+    await drawer.waitFor({ state: 'detached' });
+    const saved = (await occOn(workDay, 'N2')).occ[0];
+    check(saved && saved.edited && saved.stops.map((s) => s.customer_id).join() === typed.join(), 'saved as an override of that date only, in the draft order', saved && saved.stops.map((s) => s.customer_id));
+    let nextRun = addDays(workDay, 1);
+    for (let i = 0; i < 7; i++, nextRun = addDays(nextRun, 1)) {
+      const o = (await occOn(nextRun, 'N2')).occ[0];
+      if (o && o.status === 'scheduled') {
+        check(!o.stops.some((s) => s.customer_id === added) && !o.edited, `the next N2 run (${nextRun}) is unchanged`);
+        break;
+      }
+    }
+    check((await page.locator(`.week .day[data-date="${workDay}"] .occ[data-code="N2"] .ed`).count()) === 1, 'the row shows the edited mark');
+
+    // 4b. R20 lost update (REV-1): another clerk saves while this drawer has an unsaved draft.
+    console.log('drawer: someone else saved meanwhile');
+    await col.locator('.occ[data-code="N2"] .nm').click();
+    const dr = page.locator('.drawer');
+    await dr.locator('.stoplist .stop').first().waitFor();
+    const n2now = (await occOn(workDay, 'N2')).occ[0];
+    const firstCid = n2now.stops[0].customer_id;
+    await dr.locator(`.stop[data-cid="${firstCid}"]`).getByRole('button', { name: /^Remove from route/ }).click();
+    const custAll = await api('GET', '/customers');
+    const mei = custAll.find((c) => c.waste_types.includes('REL') && c.active !== false && !n2now.stops.some((x) => x.customer_id === c.id));
+    await api('PUT', `/routes/${n2now.route_id}/dates/${workDay}`, { rev: n2now.rev, scope: 'this', stops: [...n2now.stops.map((x) => ({ customer_id: x.customer_id, note: x.note })), { customer_id: mei.id, note: '' }] });
+    // A focus refetches the calendar only once its data is stale (10 s), and the 30 s poll runs only on a range
+    // with today in it (workDay can be in the next week): signal a focus until the calendar is fetched again.
+    let refetched = false;
+    for (let i = 0; i < 20 && !refetched; i++) {
+      const got = page.waitForResponse((r) => r.url().includes('/api/calendar') && r.status() === 200, { timeout: 2000 }).then(() => true, () => false);
+      await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+      refetched = await got;
+    }
+    await page.waitForTimeout(400);
+    const meanwhile = dr.locator('[data-testid=changed-meanwhile]');
+    check((await meanwhile.count()) === 1 && (await meanwhile.innerText()).includes(mei.name), 'the drawer says someone else saved meanwhile and names the added customer', (await meanwhile.count()) && (await meanwhile.innerText()));
+    await dr.getByRole('button', { name: 'Save', exact: true }).click();
+    const sc4 = page.locator('.dialog', { hasText: 'Apply this change to' });
+    await sc4.waitFor();
+    await sc4.getByRole('button', { name: 'Save', exact: true }).click();
+    await dr.locator('.form-error').waitFor();
+    check(/Someone else changed this/.test(await dr.locator('.form-error').innerText()), 'the save is refused (STALE_REVISION), the draft stays');
+    const n2after = (await occOn(workDay, 'N2')).occ[0];
+    check(n2after.stops.some((x) => x.customer_id === mei.id) && n2after.stops.some((x) => x.customer_id === firstCid), "the other clerk's customer is not silently removed", n2after.stops.map((x) => x.customer_id));
+    await dr.getByRole('button', { name: 'Discard changes' }).click();
+    check((await dr.locator(`.stop[data-cid="${mei.id}"]`).count()) === 1, 'Discard loads their version');
+    await page.keyboard.press('Escape');
+    await dr.waitFor({ state: 'detached' });
+
+    // 5. Urgent pickup: adhoc for tomorrow with two customers.
+    console.log('urgent pickup');
+    await page.goto(BASE + '/?view=week');
+    await page.locator('.week .occ').first().waitFor();
+    await page.getByRole('button', { name: /Urgent pickup/ }).first().click();
+    const urgent = page.locator('.dialog', { hasText: 'Urgent pickup' });
+    await urgent.waitFor();
+    check(await urgent.getByRole('button', { name: 'Next work day' }).getAttribute('aria-pressed') === 'true', 'date defaults to the next work day');
+    const ids = [];
+    for (const q of ['Golden Bakery', 'Lucky Seafood']) {
+      await urgent.locator('.picker input[type=search]').fill(q);
+      const hit = urgent.locator('.picker-item').first();
+      await hit.waitFor();
+      await hit.click();
+      ids.push(q);
+    }
+    check((await urgent.locator('.picked .chip').count()) === 2, 'two customers picked');
+    await urgent.locator('text=New ⚡ Adhoc, only this date').waitFor();
+    const ucode = await urgent.locator('input.code').inputValue();
+    await shot(page, '06-urgent');
+    await urgent.getByRole('button', { name: 'Create route' }).click();
+    await urgent.waitFor({ state: 'detached' });
+    const adhoc = (await occOn(tomorrow, ucode)).occ[0];
+    check(adhoc && adhoc.type === 'adhoc' && adhoc.stops.length === 2, `urgent pickup created adhoc ${ucode} on ${tomorrow} with 2 stops`, adhoc && [adhoc.type, adhoc.stops.length]);
+    // (waits for the calendar refetch that follows the create)
+    const adhocShown = await page.locator(`.week .day[data-date="${tomorrow}"] .occ.adhoc[data-code="${ucode}"]`).waitFor({ timeout: 10000 }).then(() => true, () => false);
+    check(adhocShown, 'it shows in the week view (dashed ⚡A)');
+
+    // 6. OTC task on a Sunday.
+    console.log('OTC task on Sunday');
+    await page.goto(`${BASE}/?view=week&anchor=${sunday}`);
+    const sun = page.locator(`.week .day[data-date="${sunday}"]`);
+    await sun.waitFor();
+    check(!(await sun.locator('.day-foot').innerText()).includes('Regular'), 'Sunday offers no Regular');
+    await sun.getByRole('button', { name: '+ Route' }).click();
+    const menu = await page.locator('.menu').innerText();
+    check(/Special · every Sunday/.test(menu) && /Special · this date only/.test(menu) && !/Adhoc/.test(menu), 'Sunday "+ Route" offers only Special', menu);
+    await page.keyboard.press('Escape');
+    await sun.getByRole('button', { name: '+ Task' }).click();
+    const td = page.locator('.dialog', { hasText: 'New task' });
+    await td.waitFor();
+    check(await td.getByRole('button', { name: 'OTC', exact: true }).getAttribute('aria-pressed') === 'true', 'type OTC pre-selected');
+    await td.locator('.picker input[type=search]').fill('Event Hall');
+    await td.locator('.picker-item').first().waitFor();
+    await td.locator('.picker-item').first().getByRole('button', { name: 'Select' }).click();
+    check((await td.locator('input[type=date]').inputValue()) === sunday, 'the date is the clicked Sunday');
+    await td.getByRole('button', { name: 'Create', exact: true }).click();
+    await td.waitFor({ state: 'detached' });
+    const sunCal = await api('GET', `/calendar?view=week&anchor=${sunday}`);
+    const otc = sunCal.tasks.filter((o) => o.date === sunday && o.waste_type === 'OTC' && sunCal.customers[o.customer_id].name.startsWith('Event Hall'));
+    check(otc.length === 1, `OTC task created on Sunday ${sunday}`);
+    await page.waitForTimeout(300);
+    check((await sun.locator('.trow', { hasText: 'Event Hall' }).count()) === 1, 'the task row shows in the Sunday column (grey pill, no colour bar)');
+    // Customer without OTC: [Add OTC to this customer]
+    await sun.getByRole('button', { name: '+ Task' }).click();
+    await td.waitFor();
+    await td.locator('.picker input[type=search]').fill('Tuas Compactor');
+    await td.locator('.picker-item').first().waitFor();
+    await td.locator('.picker-item').first().getByRole('button', { name: /Add OTC to this customer/ }).click();
+    await td.locator('text=Change').waitFor();
+    await td.getByRole('button', { name: 'Create', exact: true }).click();
+    await td.waitFor({ state: 'detached' });
+    const custs = await api('GET', '/customers?q=Tuas%20Compactor');
+    check(custs[0] && custs[0].waste_types.includes('OTC') && custs[0].tasks.includes('OTC'), '"Add OTC to this customer" registered the type and created the task');
+    await shot(page, '07-sunday');
+
+    // 7. Task drawer: skip and restore a recurring COMPACTOR date.
+    console.log('task drawer');
+    // 4 tasks on that Sunday now: the group is collapsed to one line (> 3) and expands in place.
+    const group = sun.locator('button.tgroup');
+    // The calendar refetches after the create; wait for the collapsed group (slow under parallel load).
+    await sun.locator('button.tgroup', { hasText: 'Tasks 4' }).waitFor({ timeout: 15000 }).catch(() => {});
+    check((await group.count()) === 1 && /Tasks 4/.test(await group.innerText()), 'more than 3 tasks collapse into one line', (await group.count()) && (await group.innerText()));
+    if (await group.count()) await group.click();
+    const comp = sun.locator('.trow', { hasText: 'Jurong' });
+    if (await comp.count()) {
+      await comp.first().click();
+      const tdw = page.locator('.drawer');
+      await tdw.getByRole('button', { name: /Menu/ }).click();
+      await page.getByRole('menuitem', { name: 'Skip this date' }).click();
+      await page.waitForTimeout(600);
+      check(/skipped|Skipped/.test(await tdw.innerText()), 'Skip this date: the task drawer shows skipped');
+      await tdw.getByRole('button', { name: /Menu/ }).click();
+      await page.getByRole('menuitem', { name: 'Restore this date' }).click();
+      await page.waitForTimeout(600);
+      await page.keyboard.press('Escape');
+    } else {
+      check(false, 'recurring COMPACTOR task on Sunday found');
+    }
+
+    // 8. Month view: status on the lines and the day drawer.
+    console.log('month view: statuses and the day drawer');
+    await page.goto(BASE + '/');
+    await page.locator('.month .mcell').first().waitFor();
+    await page.getByRole('button', { name: /^Expand all/ }).click();
+    const todayLines = page.locator(`.month .mcell[data-date="${today}"] .mline`);
+    check((await todayLines.count()) >= 12, "Expand all: today's cell lists every route line", await todayLines.count());
+    check((await page.locator(`.month .mcell[data-date="${today}"] .mline .sg.done`).count()) >= 1, 'a done job shows ✓ on its line');
+    await page.getByRole('button', { name: /^Collapse all/ }).click();
+    check((await todayLines.count()) <= 4, 'Collapse all: back to 4 lines');
+    await page.locator(`.month .mcell[data-date="${today}"] .dnum`).click();
+    await page.locator('.drawer .daydrawer .occ').first().waitFor();
+    const order = await page.locator('.drawer .daydrawer .occ').evaluateAll((els) => els.map((e) => e.innerText));
+    check(order.length >= 12, "today's day drawer renders the column");
+    await shot(page, '08-month-day');
+    await page.keyboard.press('Escape');
+
+    // 9. Run actions and the result dialog (today).
+    console.log('run actions and results');
+    await page.goto(BASE + '/?view=week');
+    await page.locator('.week .occ').first().waitFor();
+    const tcol = page.locator(`.week .day[data-date="${today}"]`);
+    if (await tcol.count()) {
+      // correct a weight on N1 (done by Ali) with a reason
+      await tcol.locator('.occ[data-code="N1"] .nm').click();
+      const dr = page.locator('.drawer');
+      await dr.locator('.stop button.sn').first().click();
+      const rd = page.locator('.dialog', { hasText: 'Result ·' });
+      await rd.waitFor();
+      await rd.locator('.history').waitFor({ timeout: 5000 }).catch(() => {});
+      await rd.locator('input[inputmode=decimal]').first().fill('123.4');
+      await rd.getByRole('button', { name: 'Save', exact: true }).click();
+      check(/Give a reason|why/i.test(await rd.locator('.form-error').innerText()), 'changing a result asks WHY');
+      await rd.locator('input[placeholder="e.g. weighbridge recheck"]').fill('weighbridge recheck');
+      await rd.getByRole('button', { name: 'Save', exact: true }).click();
+      await rd.waitFor({ state: 'detached' });
+      const n1 = (await occOn(today, 'N1')).occ[0];
+      const v = n1.stops[0].visit;
+      check(v && Number(v.weights.REL) === 123.4 && v.flags.includes('OFFICE_EDITED'), 'office correction saved with OFFICE_EDITED', v && [v.weights, v.flags]);
+      await page.keyboard.press('Escape');
+      // close out an unclaimed route
+      const unclaimed = (await occOn(today, 'C3')).occ[0];
+      if (unclaimed && unclaimed.run_status === 'not_started') {
+        await tcol.locator('.occ[data-code="C3"] .nm').click();
+        await page.locator('.drawer').getByRole('button', { name: 'Close out' }).click();
+        await page.locator('.dialog').getByRole('button', { name: 'Close out' }).click();
+        await page.waitForTimeout(800);
+        const c3 = (await occOn(today, 'C3')).occ[0];
+        check(c3.run_status === 'done' && c3.run && c3.run.missed === c3.stops.length, 'Close out on a not-started route: every stop missed, done', c3.run_status);
+        await page.keyboard.press('Escape');
+      }
+      // assign a driver to an unclaimed route
+      const e2 = (await occOn(today, 'E2')).occ[0];
+      if (e2 && e2.run_status === 'not_started') {
+        await tcol.locator('.occ[data-code="E2"] .nm').click();
+        await page.locator('.drawer').getByRole('button', { name: 'Assign driver…' }).click();
+        await page.locator('.dialog .drivers button', { hasText: 'Eko' }).click();
+        await page.waitForTimeout(800);
+        const e2b = (await occOn(today, 'E2')).occ[0];
+        check(e2b.run && e2b.run.driver && e2b.run.driver.name === 'Eko', 'Assign driver: Eko holds E2', e2b.run_status);
+        await page.keyboard.press('Escape');
+      }
+    }
+
+    // 9b. R26: skipping today's C1 while Devi holds it with 0 done asks to release her first.
+    console.log('R26 release-and-continue, photo upload');
+    const c1 = (await occOn(today, 'C1')).occ[0];
+    if (c1 && c1.run_status === 'active' && c1.run.collected + c1.run.missed === 0) {
+      await page.locator(`.week .day[data-date="${today}"] .occ[data-code="C1"] .nm`).click();
+      const dr = page.locator('.drawer');
+      await dr.getByRole('button', { name: /Menu/ }).click();
+      await page.getByRole('menuitem', { name: 'Skip this date' }).click();
+      const re = page.locator('.dialog', { hasText: 'A driver has this job' });
+      await re.waitFor();
+      check(/Devi has C1 \(0 done\)/.test(await re.innerText()), 'RUN_EXISTS dialog: "Devi has C1 (0 done)"', await re.innerText());
+      await re.getByRole('button', { name: 'Release the driver and continue' }).click();
+      await re.waitFor({ state: 'detached' });
+      await page.waitForTimeout(500);
+      const c1b = (await occOn(today, 'C1')).occ[0];
+      check(c1b.status === 'cancelled', 'with release_run the date is skipped', c1b.status);
+      await page.keyboard.press('Escape');
+    } else {
+      check(false, 'C1 is held by Devi with 0 done (seed)', c1 && c1.run_status);
+    }
+    // E1 has work done by Bala: skip is disabled with "Bala has this job".
+    await page.locator(`.week .day[data-date="${today}"] .occ[data-code="E1"] .nm`).click();
+    await page.locator('.drawer').getByRole('button', { name: /Menu/ }).click();
+    const skipItem = page.getByRole('menuitem', { name: 'Skip this date' });
+    check((await skipItem.isDisabled()) && /Bala has this job/.test((await skipItem.getAttribute('title')) || ''), 'with work done, Skip is disabled: "Bala has this job"');
+    await page.keyboard.press('Escape');
+    // Office adds a photo to a result (resize + upload + reference).
+    await page.locator('.drawer .stop button.sn').nth(1).click();
+    const rd2 = page.locator('.dialog', { hasText: 'Result ·' });
+    await rd2.waitFor();
+    const jpeg = Buffer.from(
+      (await page.evaluate(() => {
+        const c = document.createElement('canvas');
+        c.width = 320;
+        c.height = 200;
+        const g = c.getContext('2d');
+        g.fillStyle = '#4E79A7';
+        g.fillRect(0, 0, 320, 200);
+        return c.toDataURL('image/jpeg', 0.8);
+      })).split(',')[1],
+      'base64',
+    );
+    await rd2.locator('input[type=file]').setInputFiles({ name: 'bin.jpg', mimeType: 'image/jpeg', buffer: jpeg });
+    await rd2.locator('.thumb img').first().waitFor({ timeout: 10000 });
+    await rd2.locator('input[placeholder="e.g. weighbridge recheck"]').fill('photo added');
+    await rd2.getByRole('button', { name: 'Save', exact: true }).click();
+    await rd2.waitFor({ state: 'detached' });
+    const e1v = (await occOn(today, 'E1')).occ[0].stops[1].visit;
+    check(e1v && e1v.photos === 1, 'the photo is uploaded and referenced by the visit', e1v);
+    await page.keyboard.press('Escape');
+
+    // 9c. "This date and following" on a later date splits the route (R12 / R14, same code).
+    console.log('scope: this date and following');
+    let later = addDays(workDay, 7);
+    for (let i = 0; i < 7; i++, later = addDays(later, 1)) {
+      const o = (await occOn(later, 'W2')).occ[0];
+      if (o && o.status === 'scheduled') break;
+    }
+    const w2Before = (await occOn(later, 'W2')).occ[0];
+    await page.goto(`${BASE}/?view=week&anchor=${later}`);
+    await page.locator(`.week .day[data-date="${later}"] .occ[data-code="W2"] .nm`).click();
+    const dr3 = page.locator('.drawer');
+    await dr3.waitFor();
+    const lastCid = w2Before.stops[w2Before.stops.length - 1].customer_id;
+    await dr3.locator(`.stop[data-cid="${lastCid}"]`).getByRole('button', { name: /^Remove from route/ }).click();
+    check((await dr3.locator('.removed-list s').count()) === 1, 'the removed stop shows struck through');
+    await dr3.getByRole('button', { name: 'Save', exact: true }).click();
+    const sc = page.locator('.dialog', { hasText: 'Apply this change to' });
+    await sc.locator('input[type=radio]').nth(1).check();
+    await sc.getByRole('button', { name: 'Save', exact: true }).click();
+    await dr3.waitFor({ state: 'detached' });
+    const w2After = (await occOn(later, 'W2')).occ[0];
+    const w2Earlier = (await occOn(workDay, 'W2')).occ[0];
+    check(w2After.route_id !== w2Before.route_id && !w2After.stops.some((x) => x.customer_id === lastCid), `split from ${later}: a new W2 route without the customer`);
+    check(!w2Earlier || w2Earlier.stops.some((x) => x.customer_id === lastCid), 'dates before the split keep the old list');
+
+    // 9d. "+ Route" -> Regular form (clicked weekday pre-ticked); the new route's drawer opens.
+    console.log('route create and task move');
+    await page.goto(`${BASE}/?view=week&anchor=${workDay}`);
+    const wcol = page.locator(`.week .day[data-date="${workDay}"]`);
+    await wcol.locator('.occ').first().waitFor();
+    await wcol.getByRole('button', { name: '+ Route' }).click();
+    const items = await page.locator('.menu').innerText();
+    check(/Regular · repeats weekly/.test(items) && /Adhoc · this date only/.test(items) && !/Special/.test(items), 'a work day offers Regular and ⚡ Adhoc only', items);
+    await page.getByRole('menuitem', { name: 'Regular · repeats weekly' }).click();
+    const rf = page.locator('.dialog', { hasText: 'New Regular route' });
+    await rf.waitFor();
+    check((await rf.locator('.chip[aria-pressed="true"]').count()) === 1, 'the clicked weekday is pre-ticked');
+    check(/First run:/.test(await rf.innerText()), '"First run" hint');
+    await rf.locator('input.code').fill('z9');
+    await rf.locator('label.field', { hasText: 'Name' }).locator('input').fill('Test route');
+    await rf.getByRole('button', { name: 'Create', exact: true }).click();
+    await rf.waitFor({ state: 'detached' });
+    const nd = page.locator('.drawer', { hasText: 'Test route' });
+    await nd.waitFor({ timeout: 10000 });
+    check(/Z9/.test(await nd.locator('.rd-title').innerText()), 'the new route Z9 opens in its drawer, ready for customers');
+    const z9 = (await api('GET', '/routes')).find((r) => r.code === 'Z9');
+    check(z9 && z9.type === 'regular' && z9.days.length === 1 && z9.start === workDay, 'created regular Z9 from the clicked date', z9);
+    // OFF-2: its first customers become the route's list for every date (scope pre-selects "and following").
+    await nd.getByRole('button', { name: /Add customer/ }).click();
+    await nd.locator('.picker input[type=search]').fill('Golden');
+    await nd.locator('.picker-item').first().click();
+    await nd.getByRole('button', { name: 'Save', exact: true }).click();
+    const zsc = page.locator('.dialog', { hasText: 'Apply this change to' });
+    await zsc.waitFor();
+    check(await zsc.locator('input[type=radio]').nth(1).isChecked(), 'new route: the scope dialog pre-selects "<date> and all following"');
+    await zsc.getByRole('button', { name: 'Save', exact: true }).click();
+    await nd.waitFor({ state: 'detached' });
+    const z9next = (await occOn(addDays(workDay, 7), 'Z9')).occ[0];
+    check(z9next && z9next.stops.length === 1 && !z9next.edited, `Z9 one week later (${addDays(workDay, 7)}) has the customer too`, z9next && z9next.stops.length);
+    // Move one date of a recurring COMPACTOR task (Tuas, Tue + Fri).
+    const tue = (await api('GET', `/calendar?view=week&anchor=${workDay}`)).tasks.find((o) => o.recurring && o.waste_type === 'COMPACTOR' && o.date >= workDay && o.status === 'scheduled');
+    if (tue) {
+      await page.goto(`${BASE}/?view=week&anchor=${tue.date}`);
+      const tc = page.locator(`.week .day[data-date="${tue.date}"]`);
+      await tc.locator('.occ').first().waitFor();
+      if (await tc.locator('button.tgroup').count()) await tc.locator('button.tgroup').click();
+      await tc.locator(`.trow[data-key="${tue.key}"]`).click();
+      await page.locator('.drawer').getByRole('button', { name: /Menu/ }).click();
+      await page.getByRole('menuitem', { name: 'Move this date…' }).click();
+      const mv = page.locator('.dialog', { hasText: 'Move this date' });
+      await mv.locator('input[type=date]').fill(addDays(tue.date, 1));
+      check(await mv.locator('input[type=checkbox]').isChecked(), '"Skip the original" is ticked for a runnable recurring date');
+      await mv.getByRole('button', { name: 'Copy', exact: true }).click();
+      await mv.waitFor({ state: 'detached' });
+      const cal2 = await api('GET', `/calendar?view=week&anchor=${tue.date}`);
+      const src = cal2.tasks.find((o) => o.key === tue.key);
+      const moved = cal2.tasks.find((o) => o.date === addDays(tue.date, 1) && o.customer_id === tue.customer_id && !o.recurring);
+      check(src && src.status === 'cancelled' && src.covered_by.length === 1 && moved, 'Move this date: source skipped ("→ date") and a one-off on the new date');
+      await page.keyboard.press('Escape');
+    } else {
+      check(false, 'a recurring COMPACTOR date found');
+    }
+
+    // 10. Routes and Tasks pages.
+    console.log('routes and tasks pages');
+    await page.goto(BASE + '/routes');
+    await page.locator('table tbody tr').first().waitFor();
+    check((await page.locator('table tbody tr').count()) >= 19, 'Routes page lists the routes');
+    await page.locator('table tbody tr', { hasText: 'North 2' }).first().click();
+    await page.locator('.drawer .stoplist .stop').first().waitFor();
+    check((await page.locator('.drawer .stoplist .stop').count()) >= 6, 'template editor shows the stop list');
+    await page.keyboard.press('Escape');
+    await page.goto(BASE + '/tasks');
+    await page.locator('table tbody tr').first().waitFor();
+    check((await page.locator('table tbody tr').count()) >= 8, 'Tasks page lists the tasks');
+
+    // 11. Split routes (R12 / R14) in the office's forms and dialogs; the office takes a job back.
+    await splitRouteChecks(page, { today, consoleErrors });
+    // 12. Round 6: what a later part of a split route keeps is named before the save.
+    await keptPlanChecks(page, { today });
+
+    // The browser logs every non-2xx response; the 409 RUN_EXISTS and STALE_REVISION above are expected.
+    const real = consoleErrors.filter((e) => !/status of 409/.test(e));
+    check(real.length === 0, 'no console errors', real.slice(0, 3));
+  } catch (e) {
+    await shot(page, 'zz-failure').catch(() => {}); // the screen at the moment it stopped (E2E_SHOTS, CI artifact)
+    throw e;
+  } finally {
+    await browser.close();
+  }
+}
+
+main()
+  .catch((e) => {
+    failures++;
+    console.error(e);
+    for (const p of procs) if (p.output) console.error(p.output.slice(-2000));
+  })
+  .finally(() => {
+    stopAll();
+    if (!process.env.KEEP_DATA) fs.rmSync(DATA, { recursive: true, force: true });
+    console.log(`\n${passes} passed, ${failures} failed`);
+    process.exit(failures ? 1 : 0);
+  });

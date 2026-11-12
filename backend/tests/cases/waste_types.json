@@ -1,0 +1,97 @@
+[
+  {
+    "name": "list shows the seed types in order",
+    "now": "2026-11-11T10:00:00+08:00",
+    "call": { "method": "GET", "path": "/api/waste-types", "as": "mei" },
+    "expect": { "status": 200, "data_subset": [
+      { "code": "REL", "abbr": "REL", "unit": "kg", "weigh_method": "on_site", "routable": true, "recurring_tasks": false, "confirm_over": 1000, "active": true },
+      { "code": "OTC", "abbr": "OTC", "unit": "kg", "weigh_method": "on_site", "routable": false, "recurring_tasks": false, "confirm_over": 1000, "active": true },
+      { "code": "COMPACTOR", "abbr": "COMPACTOR", "unit": "kg", "weigh_method": "on_site", "routable": false, "recurring_tasks": true, "confirm_over": null, "active": true }
+    ] }
+  },
+  {
+    "name": "admin creates a type; defaults applied",
+    "now": "2026-11-11T10:00:00+08:00",
+    "call": { "method": "POST", "path": "/api/waste-types", "as": "admin", "body": { "code": "GLS", "name": "Glass" } },
+    "expect": { "status": 201,
+      "data_subset": { "code": "GLS", "name": "Glass", "abbr": "GLS", "unit": "kg", "weigh_method": "on_site", "routable": false, "recurring_tasks": false, "confirm_over": null, "active": true },
+      "docs_subset": { "plan": { "waste_types": { "$len": 4 } } } }
+  },
+  {
+    "name": "create validation: code format, duplicate, abbr, unit, weigh_method, unknown field",
+    "now": "2026-11-11T10:00:00+08:00",
+    "steps": [
+      { "call": { "method": "POST", "path": "/api/waste-types", "as": "admin", "body": { "code": "gls", "name": "Glass" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "code" } } },
+      { "call": { "method": "POST", "path": "/api/waste-types", "as": "admin", "body": { "code": "ABCDEFGHIJK", "name": "Too long" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "code" } } },
+      { "call": { "method": "POST", "path": "/api/waste-types", "as": "admin", "body": { "code": "REL", "name": "Again" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "code" } } },
+      { "call": { "method": "POST", "path": "/api/waste-types", "as": "admin", "body": { "code": "GLS", "name": "Glass", "abbr": "gl" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "abbr" } } },
+      { "call": { "method": "POST", "path": "/api/waste-types", "as": "admin", "body": { "code": "GLS", "name": "Glass", "unit": "kilogram" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "unit" } } },
+      { "call": { "method": "POST", "path": "/api/waste-types", "as": "admin", "body": { "code": "GLS", "name": "Glass", "weigh_method": "scale" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "weigh_method" } } },
+      { "call": { "method": "POST", "path": "/api/waste-types", "as": "admin", "body": { "code": "GLS", "name": "Glass", "colour": "green" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "colour" } } },
+      { "call": { "method": "POST", "path": "/api/waste-types", "as": "admin", "body": { "code": "GLS", "name": "" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "name" } } },
+      { "call": { "method": "POST", "path": "/api/waste-types", "as": "admin", "body": { "code": "GLS", "name": "Glass", "confirm_over": -1 } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "confirm_over" } } }
+    ]
+  },
+  {
+    "name": "code, unit and routable never change; resending them unchanged is fine",
+    "now": "2026-11-11T10:00:00+08:00",
+    "steps": [
+      { "call": { "method": "PATCH", "path": "/api/waste-types/OTC", "as": "admin", "body": { "unit": "t" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "unit" } } },
+      { "call": { "method": "PATCH", "path": "/api/waste-types/OTC", "as": "admin", "body": { "routable": true } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "routable" } } },
+      { "call": { "method": "PATCH", "path": "/api/waste-types/OTC", "as": "admin", "body": { "code": "OTX" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "code" } } },
+      { "call": { "method": "PATCH", "path": "/api/waste-types/OTC", "as": "admin",
+          "body": { "code": "OTC", "unit": "kg", "routable": false, "name": "One Time Collection", "weigh_method": "weighbridge", "confirm_over": 2000.5 } },
+        "expect": { "status": 200, "data_subset": { "code": "OTC", "name": "One Time Collection", "weigh_method": "weighbridge", "confirm_over": 2000.5 },
+          "docs_subset": { "plan": { "waste_types": [ { "code": "REL" }, { "code": "OTC", "weigh_method": "weighbridge" }, { "code": "COMPACTOR" } ] } } } },
+      { "call": { "method": "PATCH", "path": "/api/waste-types/NOPE", "as": "admin", "body": { "name": "x" } }, "expect": { "status": 404, "code": "NOT_FOUND" } },
+      { "call": { "method": "PATCH", "path": "/api/waste-types/OTC", "as": "mei", "body": { "name": "x" } }, "expect": { "status": 403, "code": "FORBIDDEN" } }
+    ]
+  },
+  {
+    "name": "R3 guard: a routable type in use on a stop list from today on cannot be deactivated",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "call": { "method": "PATCH", "path": "/api/waste-types/REL", "as": "admin", "body": { "active": false } },
+    "expect": { "status": 409, "code": "WASTE_TYPE_IN_USE",
+      "error_subset": { "details": { "routes": { "$contains": [ { "code": "N1" }, { "code": "S1" }, { "code": "A1" }, { "code": "N1-25" } ] } } },
+      "docs_subset": { "plan": { "waste_types": [ { "code": "REL", "active": true }, { "$any": true }, { "$any": true } ] } } }
+  },
+  {
+    "name": "R3 guard: a routable type only on ended routes can be deactivated",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic", "plan": { "routes": [ { "id": 8, "code": "E9", "color": 3, "type": "regular", "name": "Ended", "note": "", "rev": 1,
+        "start": "2026-10-01", "end": "2026-11-10", "days": [2], "stops": [ { "customer_id": 70, "note": "" } ] } ], "route_overrides": [] } },
+    "call": { "method": "PATCH", "path": "/api/waste-types/REL", "as": "admin", "body": { "active": false } },
+    "expect": { "status": 200, "data_subset": { "active": false } }
+  },
+  {
+    "name": "R3 guard: a non-routable type with a task generating a date from today on",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "steps": [
+      { "call": { "method": "PATCH", "path": "/api/waste-types/COMPACTOR", "as": "admin", "body": { "active": false } },
+        "expect": { "status": 409, "code": "WASTE_TYPE_IN_USE", "error_subset": { "details": { "tasks": [ { "task_id": 3 }, { "task_id": 10 } ] } } } },
+      { "call": { "method": "PATCH", "path": "/api/waste-types/OTC", "as": "admin", "body": { "active": false } },
+        "expect": { "status": 409, "code": "WASTE_TYPE_IN_USE", "error_subset": { "details": { "tasks": [ { "task_id": 6, "schedule": { "date": "2026-11-11" } } ] } } } }
+    ]
+  },
+  {
+    "name": "R3 guard: OTC with only past tasks can be deactivated (tomorrow)",
+    "now": "2026-11-12T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "call": { "method": "PATCH", "path": "/api/waste-types/OTC", "as": "admin", "body": { "active": false } },
+    "expect": { "status": 200, "data_subset": { "code": "OTC", "active": false } }
+  },
+  {
+    "name": "order: a permutation reorders types and the customers' lists",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic" },
+    "steps": [
+      { "call": { "method": "PUT", "path": "/api/waste-types/order", "as": "admin", "body": { "codes": ["COMPACTOR", "OTC", "REL"] } },
+        "expect": { "status": 200, "data_subset": [ { "code": "COMPACTOR" }, { "code": "OTC" }, { "code": "REL" } ],
+          "docs_subset": { "plan": { "customers": { "$contains": [ { "id": 12, "waste_types": ["OTC", "REL"] }, { "id": 40, "waste_types": ["COMPACTOR", "REL"] } ] } } } } },
+      { "call": { "method": "PUT", "path": "/api/waste-types/order", "as": "admin", "body": { "codes": ["REL", "OTC"] } }, "expect": { "status": 422, "code": "VALIDATION" } },
+      { "call": { "method": "PUT", "path": "/api/waste-types/order", "as": "admin", "body": { "codes": ["REL", "OTC", "OTC"] } }, "expect": { "status": 422, "code": "VALIDATION" } }
+    ]
+  }
+]
