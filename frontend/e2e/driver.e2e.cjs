@@ -417,7 +417,12 @@ async function main() {
     });
     await ctxA.setOffline(false);
     await until(async () => putOps.length >= 1, 15000);
-    await pageA.evaluate(() => window.dispatchEvent(new Event('focus'))); // a flush also starts on focus
+    // A flush starts on focus. A focus that arrives while the first attempt is still failing joins that
+    // attempt, and the outbox would then wait out its back-off: keep asking until the retry has left.
+    await until(async () => {
+      await pageA.evaluate(() => window.dispatchEvent(new Event('focus')));
+      return putOps.length >= 2;
+    }, 30000, 1000);
     const okSync = await until(async () => /Synced/.test(await pageA.locator('[data-testid=sync-pill]').innerText()), 20000);
     check(okSync, 'after reconnecting the outbox empties ("Synced")');
     check(putOps.length >= 2 && new Set(putOps).size === 1, 'the retry resent the same op_id', putOps);
