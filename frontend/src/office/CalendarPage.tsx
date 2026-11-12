@@ -13,9 +13,8 @@ import { fmtDay, monthName, useI18n } from '../i18n';
 import { Drawer } from '../ui/Drawer';
 import { ErrorBanner, Loading } from '../ui/Feedback';
 import { anyLayerOpen } from '../ui/layer';
-import { rcStyle } from '../ui/palette';
 import { CalendarContext, type CalendarCtx, type Overlay } from './calendarContext';
-import { groupDays, legendItems, makeMatcher, monthCellLines, monthWeeks, rangeContainsToday, shortName, type Filters } from './calendarModel';
+import { groupDays, legendItems, makeMatcher, monthCellLines, monthWeeks, rangeContainsToday, shortName, TONES, type Filters } from './calendarModel';
 import { DayColumn, MonthView, WeekView } from './CalendarViews';
 import { CopyDialog } from './CopyDialog';
 import { RouteDrawer } from './RouteDrawer';
@@ -224,7 +223,6 @@ export default function CalendarPage() {
               key={l.code}
               type="button"
               className={['lchip', l.type === 'adhoc' ? 'adhoc' : '', hl === l.code ? 'on' : '', matcher.active && !matcher.code(l.code) ? 'dim' : ''].filter(Boolean).join(' ')}
-              style={rcStyle(l.color)}
               title={l.name}
               aria-pressed={hl === l.code}
               data-code={l.code}
@@ -236,6 +234,16 @@ export default function CalendarPage() {
               </span>
               <span className="ln">{shortName(l.name)}</span>
             </button>
+          ))}
+        </div>
+      )}
+      {legend.length > 0 && (
+        <div className="tonekey" data-testid="tone-key" aria-label={t('cal.toneKey')}>
+          {TONES.map((k) => (
+            <span key={k} data-tone={k}>
+              <i aria-hidden="true" />
+              {t(`cal.tone.${k}`)}
+            </span>
           ))}
         </div>
       )}

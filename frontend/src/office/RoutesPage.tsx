@@ -28,7 +28,6 @@ import { TypeTag, WasteTag } from '../ui/Chip';
 import { ConfirmDialog } from '../ui/Dialog';
 import { Drawer } from '../ui/Drawer';
 import { ErrorBanner, Loading } from '../ui/Feedback';
-import { rcStyle } from '../ui/palette';
 import { useToast } from '../ui/Toast';
 import type { CreateKind } from './calendarContext';
 import { addDays } from './calendarModel';
@@ -129,7 +128,7 @@ export default function RoutesPage() {
                   onClick={() => setDlg({ kind: 'template', id: r.id })}
                 >
                   <td>
-                    <span className="rcode code" style={rcStyle(r.color)}>
+                    <span className="rcode code">
                       {r.type === 'adhoc' ? '⚡' : ''}
                       {r.code}
                     </span>
@@ -332,7 +331,6 @@ function TemplateEditor({ id, onClose }: { id: number; onClose: () => void }) {
     <Drawer
       open
       onClose={onClose}
-      color={route?.color}
       label={route?.code}
       title={
         route ? (

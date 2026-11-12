@@ -114,8 +114,8 @@ async function dragTo(page, from, to) {
   await page.waitForTimeout(400); // drop animation
 }
 
-const BLUE = 'rgb(37, 99, 235)'; // --cal-today (light theme)
-const RED = 'rgb(220, 38, 38)'; // --cal-ph (light theme)
+const BLUE = 'rgb(30, 90, 140)'; // --cal-today (light theme, the default "jiangshan" look)
+const RED = 'rgb(184, 64, 45)'; // --cal-ph (light theme, the default "jiangshan" look)
 const noOverflow = (page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 
 /** Month view checks (§9.2, Round 5). Leaves tomorrow's first regular route edited (only that date) and an
@@ -144,11 +144,37 @@ async function monthChecks(page, { today, tomorrow, workDay, ph }) {
   await page.getByRole('button', { name: /^Expand all/ }).click();
   const tagOf = async (code) => (await page.locator(`.month .mcell[data-date="${today}"] .mline[data-code="${code}"] .wtag`).allInnerTexts()).join();
   check((await tagOf('N1')) === '' && (await tagOf('R1')) === 'RCY', 'route lines show the waste-type tag only when it is not REL: N1 none, R1 RCY', [await tagOf('N1'), await tagOf('R1')]);
-  // The code sits on the route's colour; routes whose code starts with the same letter share it (auto colour).
+  // The code's colour is the route's progress (not which route it is): the tone the API data gives.
   const lineOf = (code) => page.locator(`.month .mcell[data-date="${today}"] .mline[data-code="${code}"]`);
-  const chipBg = (code) => lineOf(code).locator('.code').evaluate((e) => getComputedStyle(e).backgroundColor);
-  const [bgN1, bgN2, bgE1] = [await chipBg('N1'), await chipBg('N2'), await chipBg('E1')];
-  check(bgN1 === 'rgb(78, 121, 167)' && bgN2 === bgN1 && bgE1 !== bgN1, 'the code is a colour chip: N1 and N2 share a colour, E1 has another', [bgN1, bgN2, bgE1]);
+  const toneOf = (o) => {
+    if (o.status !== 'scheduled') return null;
+    const r = o.run;
+    if ((r && r.missed > 0) || ['incomplete', 'no_record', 'open'].includes(o.run_status)) return 'problem';
+    if (o.run_status === 'done') return 'done';
+    if (o.run_status === 'active') return r && r.total > 0 && (r.collected + r.missed) * 2 >= r.total ? 'late' : 'early';
+    return 'idle';
+  };
+  const TONE_BG = { idle: 'rgb(107, 101, 88)', early: 'rgb(168, 100, 42)', late: 'rgb(31, 95, 139)', done: 'rgb(39, 121, 95)', problem: 'rgb(184, 64, 45)' };
+  const todayOcc = mcal.routes.filter((o) => o.date === today && o.status === 'scheduled');
+  const shown = [];
+  for (const o of todayOcc) {
+    shown.push([o.code, toneOf(o), await lineOf(o.code).getAttribute('data-tone'), await lineOf(o.code).locator('.code').evaluate((e) => getComputedStyle(e).backgroundColor)]);
+  }
+  check(shown.length >= 8 && shown.every(([, want, tone, bg]) => tone === want && bg === TONE_BG[want]), "the code's colour is the route's progress, the same for every route in that state", shown.filter(([, want, tone, bg]) => tone !== want || bg !== TONE_BG[want]));
+  check(new Set(shown.map((x) => x[1])).size >= 2, 'today shows at least two different states', [...new Set(shown.map((x) => x[1]))]);
+  check((await page.locator('[data-testid=tone-key] span').count()) === 5 && (await page.locator('.legend .lchip .code').first().evaluate((e) => getComputedStyle(e).backgroundColor)) === 'rgba(0, 0, 0, 0)', 'a key explains the five colours; the legend codes have no colour');
+  // Two looks, switched in the header and remembered in this browser.
+  const bodyBg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  const look = page.locator('[data-testid=style-switch] button');
+  check((await bodyBg()) === 'rgb(239, 230, 208)' && (await look.first().getAttribute('aria-pressed')) === 'true', 'the default look is the Jiangshan palette (silk ground)', await bodyBg());
+  await look.nth(1).click();
+  check((await bodyBg()) === 'rgb(245, 246, 248)' && (await lineOf(shown[0][0]).locator('.code').evaluate((e) => getComputedStyle(e).backgroundColor)) !== shown[0][3], 'the second button switches to the plain look (also the progress colours)', await bodyBg());
+  await page.reload();
+  await page.locator(`.month .mcell[data-date="${today}"] .mline`).first().waitFor();
+  check((await bodyBg()) === 'rgb(245, 246, 248)', 'the look is remembered after a reload');
+  await page.locator('[data-testid=style-switch] button').first().click();
+  check((await bodyBg()) === 'rgb(239, 230, 208)', 'and switches back');
+  await page.getByRole('button', { name: /^Expand all/ }).click().catch(() => {});
   check((await lineOf('N1').locator('.tt').count()) === 0, 'a regular route line has no R tag');
   const todayCal = mcal.days.find((d) => d.date === today);
   check(todayCal.totals.OTC === 300 && todayCal.totals.COMPACTOR === 1250, "API: today's totals count the free submissions (OTC 300, COMPACTOR 1250)", todayCal.totals);

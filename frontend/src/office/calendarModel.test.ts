@@ -13,6 +13,7 @@ import {
   monthWeeks,
   nextWorkDayAfter,
   pausedCounts,
+  routeTone,
   rangeContainsToday,
   routesByCustomer,
 } from './calendarModel';
@@ -218,5 +219,26 @@ describe('paused PH counts (OFF-5)', () => {
     ];
     expect(pausedCounts(list)).toEqual({ open: 2, covered: 1 });
     expect(pausedCounts([])).toEqual({ open: 0, covered: 0 });
+  });
+});
+
+describe('routeTone: the progress colour of a route code', () => {
+  const run = (collected: number, missed: number, total: number) => ({ collected, missed, total }) as RouteOccurrence['run'];
+  const tone = (run_status: RouteOccurrence['run_status'], r: RouteOccurrence['run'] = null, status: RouteOccurrence['status'] = 'scheduled') =>
+    routeTone({ status, run_status, run: r });
+  it('not started and future days are idle', () => {
+    expect([tone('planned'), tone('not_started', run(0, 0, 10))]).toEqual(['idle', 'idle']);
+  });
+  it('under way: early below half, late from half', () => {
+    expect([tone('active', run(0, 0, 10)), tone('active', run(4, 0, 10)), tone('active', run(5, 0, 10)), tone('active', run(9, 0, 10))]).toEqual(['early', 'early', 'late', 'late']);
+  });
+  it('done only when every stop was collected', () => {
+    expect([tone('done', run(10, 0, 10)), tone('done', run(8, 2, 10))]).toEqual(['done', 'problem']);
+  });
+  it('a stop not collected, a past day not finished, no record, or no driver is a problem', () => {
+    expect([tone('active', run(1, 1, 10)), tone('incomplete', run(3, 0, 10)), tone('no_record'), tone('open', run(3, 0, 10))]).toEqual(['problem', 'problem', 'problem', 'problem']);
+  });
+  it('a cancelled or paused occurrence has no colour', () => {
+    expect([tone(null, null, 'cancelled'), tone(null, null, 'holiday_skipped')]).toEqual([null, null]);
   });
 });

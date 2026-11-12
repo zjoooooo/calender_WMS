@@ -264,11 +264,11 @@ async function main() {
     check((await page.locator('.month .mh').allInnerTexts()).join(' ') === '周日 周一 周二 周三 周四 周五 周六', 'calendar opens in the month view, 周日 first');
     check(/^\d{4}年\d{1,2}月$/.test((await page.locator('.cal-title').innerText()).trim()), 'month title "YYYY年M月"', await page.locator('.cal-title').innerText());
     const todayNum = page.locator('.month .dnum.today');
-    check((await todayNum.count()) === 1 && (await todayNum.evaluate((e) => getComputedStyle(e).backgroundColor)) === 'rgb(37, 99, 235)', "today's number has the blue circle");
+    check((await todayNum.count()) === 1 && (await todayNum.evaluate((e) => getComputedStyle(e).backgroundColor)) === 'rgb(30, 90, 140)', "today's number has the blue circle");
     await page.goto(BASE + '/?anchor=' + NEW_HOL);
     const phCell = page.locator(`.month .mcell[data-date="${NEW_HOL}"]`);
     await phCell.locator('.mph').waitFor();
-    check((await phCell.locator('.dnum').evaluate((e) => getComputedStyle(e).color)) === 'rgb(220, 38, 38)' && /★\s*E2E Test Holiday/.test(await phCell.locator('.mph').innerText()), 'the new holiday: red number and "★ E2E Test Holiday" bar');
+    check((await phCell.locator('.dnum').evaluate((e) => getComputedStyle(e).color)) === 'rgb(184, 64, 45)' && /★\s*E2E Test Holiday/.test(await phCell.locator('.mph').innerText()), 'the new holiday: red number and "★ E2E Test Holiday" bar');
     await page.goto(BASE + '/?view=week&anchor=' + NEW_HOL);
     await page.locator('.week .day').first().waitFor();
     const wk = await page.locator('.week .day').evaluateAll((els) => els.map((e) => e.dataset.date));

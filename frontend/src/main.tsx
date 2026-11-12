@@ -2,6 +2,9 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './ui/tokens.css';
 import App from './App';
+import { getLook, setLook } from './ui/style';
+
+setLook(getLook());
 
 const root = createRoot(document.getElementById('root')!);
 if (__WMS_DEMO__) {

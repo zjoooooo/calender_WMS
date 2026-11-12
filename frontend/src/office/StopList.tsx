@@ -37,6 +37,8 @@ export interface StopRowView {
   /** Added in this draft. */
   isNew?: boolean;
   done?: boolean;
+  /** The result of the stop: collected (green) or not collected (red). */
+  tone?: 'ok' | 'miss';
   /** Clicking the name (e.g. opens the result dialog). */
   onOpen?: () => void;
 }
@@ -154,7 +156,7 @@ function StopRowBody(
   const { s, index, count, v, editable } = props;
   const [seqEdit, setSeqEdit] = useState<string | null>(null);
   const [noteEdit, setNoteEdit] = useState(false);
-  const cls = ['stop', v.done ? 'done' : '', v.isNew ? 'new' : '', props.placeholder ? 'placeholder' : '', props.overlay ? 'overlay' : ''].filter(Boolean).join(' ');
+  const cls = ['stop', v.done ? 'done' : '', v.tone ?? '', v.isNew ? 'new' : '', props.placeholder ? 'placeholder' : '', props.overlay ? 'overlay' : ''].filter(Boolean).join(' ');
   const commitSeq = () => {
     if (seqEdit !== null && seqEdit.trim() !== '') props.onMoveTo?.(Number(seqEdit));
     setSeqEdit(null);
