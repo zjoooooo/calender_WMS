@@ -9,7 +9,8 @@
 // Part 2 (HTTP): `php -S` with PHP_CLI_SERVER_WORKERS=n (real parallel workers on Linux) receives n
 //   simultaneous HTTP claims for another job; one driver fires claims for 4 routes at once (one route at a
 //   time: exactly one wins); the winner sends the same result write (same op_id) n times at once (applied
-//   exactly once, the rest are replays).
+//   exactly once, the rest are replays); a free submission with the same id is sent n times at once, with the
+//   same op_id and with n different op_ids (always exactly one record); n drivers submit at once (none lost).
 // The data dir is WIPED first and removed at the end; the server and its workers are always stopped.
 // Exit code 0 = all passed.
 
@@ -121,14 +122,14 @@ try {
     $plan['customers'] = [];
     foreach ([1, 2] as $cid) {
         $plan['customers'][] = ['id' => $cid, 'code' => sprintf('C%04d', $cid), 'name' => "Customer $cid", 'address' => '', 'phone' => '',
-            'note' => '', 'waste_types' => ['REL'], 'active' => true];
+            'note' => '', 'waste_types' => ['REL', 'OTC'], 'active' => true];
     }
     $plan['routes'] = [];
     for ($r = 1; $r <= 6; $r++) {
         $plan['routes'][] = ['id' => $r, 'code' => "A$r", 'color' => $r, 'type' => 'adhoc', 'name' => "Race $r", 'note' => '', 'rev' => 1,
             'date' => RACE_DATE, 'copied_from' => null, 'stops' => [['customer_id' => 1, 'note' => ''], ['customer_id' => 2, 'note' => '']]];
     }
-    $plan['seq'] = ['customer' => 2, 'route' => 6, 'task' => 0];
+    $plan['seq'] = ['customer' => 2, 'route' => 6];
     $hash = password_hash('password1', PASSWORD_BCRYPT, ['cost' => 4]);
     $users = [['id' => 1, 'username' => 'admin', 'name' => 'Admin', 'role' => 'admin', 'lang' => 'en', 'password_hash' => $hash,
         'must_change_password' => false, 'active' => true, 'token_version' => 1, 'failed_logins' => []]];
@@ -256,6 +257,35 @@ try {
     $check("HTTP: the same op_id sent $n times at once is applied exactly once",
         ($replays['200 replay=false'] ?? 0) === 1 && ($replays['200 replay=true'] ?? 0) === $n - 1
         && ($visit['rev'] ?? 0) === 1 && count($visit['ops'] ?? []) === 1 && ($visit['history'] ?? null) === [], json_encode($replays));
+
+    // a free submission: the same id and op_id delivered n times at once is one record (one 201, the rest replays)
+    $S = '/api/driver/submissions/' . RACE_DATE . '/';
+    $sid = '22222222-3333-4444-8555-666666666666';
+    $subBody = static fn (string $opId) => ['op_id' => $opId, 'base_rev' => 0, 'waste_type' => 'OTC', 'customer_id' => 1, 'vehicle_no' => 'SBA1234X',
+        'outcome' => 'collected', 'weights' => ['OTC' => 30.5], 'tickets' => (object) [], 'photos' => [], 'signature' => null, 'note' => '', 'captured_at' => RACE_NOW];
+    $res = $multi(array_fill(0, $n, ['PUT', $S . $sid, $subBody('33333333-4444-4555-8666-777777777777'), $solo]));
+    $replays = array_count_values(array_map(static fn ($r) => $r['status'] . ' replay=' . json_encode($r['json']['data']['replay'] ?? null), $res));
+    $subs = $day()['submissions'] ?? [];
+    $check("HTTP: the same submission (same id and op_id) sent $n times at once is one record",
+        ($replays['201 replay=false'] ?? 0) === 1 && ($replays['200 replay=true'] ?? 0) === $n - 1 && array_keys($subs) === [$sid]
+        && ($subs[$sid]['rev'] ?? 0) === 1 && count($subs[$sid]['ops'] ?? []) === 1 && ($subs[$sid]['history'] ?? null) === [], json_encode($replays));
+    // the same new id with n different op_ids at once: one create (201), n - 1 edits (200), still one record
+    $sid2 = '22222222-3333-4444-8555-666666666667';
+    $res = $multi(array_map(static fn (int $i) => ['PUT', $S . $sid2, $subBody(sprintf('44444444-5555-4666-8777-%012d', $i)), $solo], range(1, $n)));
+    $t = $tally($res);
+    $subs = $day()['submissions'] ?? [];
+    $check("HTTP: one new submission id written by $n requests at once is created once and edited " . ($n - 1) . ' times',
+        ($t['201 '] ?? 0) === 1 && ($t['200 '] ?? 0) === $n - 1 && array_keys($subs) === [$sid, $sid2]
+        && ($subs[$sid2]['rev'] ?? 0) === $n && count($subs[$sid2]['history'] ?? []) === $n - 1, json_encode($t));
+    // n drivers submit at the same moment, each their own id: none is lost
+    $res = $multi(array_map(static fn (int $i) => ['PUT', $S . sprintf('55555555-6666-4777-8888-%012d', $i),
+        ['customer_id' => 2] + $subBody(sprintf('66666666-7777-4888-8999-%012d', $i)), $tokens[$i]], array_keys($tokens)));
+    $t = $tally($res);
+    $subs = $day()['submissions'] ?? [];
+    $check("HTTP: $n drivers submitting at once: $n new records, none lost", ($t['201 '] ?? 0) === $n && count($subs) === $n + 2
+        && count(array_unique(array_column($subs, 'driver_id'))) === $n + 1, json_encode($t));
+    $check('HTTP: the runs are untouched by the submissions', count($day()['runs'] ?? []) === 3 && ($day()['runs']['r2']['visits']['1']['rev'] ?? 0) === 1,
+        json_encode(array_keys($day()['runs'] ?? [])));
     $check('HTTP: every data file is valid JSON', $validJson() === [], implode(', ', $validJson()));
     $check('no PHP errors in the server log', !preg_match('/PHP (Fatal|Warning|Notice)|WMS \w+Exception|WMS Error/', (string) @file_get_contents($logFile)),
         substr((string) @file_get_contents($logFile), 0, 500));

@@ -57,7 +57,7 @@ export default function RoutePreview({ loaded, today }: { loaded: Loaded<JobDeta
         <RouteHead code={job.code} color={job.color} type={job.type} name={job.name}>
           <div className="meta">
             {stopsText(t, job.progress.total)}
-            {job.status ? ' · ' + statusText(t, job.status, { mine: job.mine, driver: job.holder?.name, resolved: job.progress.total - job.progress.pending, total: job.progress.total, kind: 'route' }) : ''}
+            {job.status ? ' · ' + statusText(t, job.status, { mine: job.mine, driver: job.holder?.name, resolved: job.progress.total - job.progress.pending, total: job.progress.total }) : ''}
           </div>
           {job.note && <div>{job.note}</div>}
         </RouteHead>

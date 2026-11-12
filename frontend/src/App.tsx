@@ -16,7 +16,7 @@ import ChangePasswordPage from './office/ChangePasswordPage';
 import OfficeLayout from './office/OfficeLayout';
 import CalendarPage from './office/CalendarPage';
 import RoutesPage from './office/RoutesPage';
-import TasksPage from './office/TasksPage';
+import SubmissionsPage from './office/SubmissionsPage';
 import CustomersPage from './office/CustomersPage';
 import HolidaysPage from './office/HolidaysPage';
 import SettingsPage from './office/SettingsPage';
@@ -95,7 +95,7 @@ export function AppRoutes() {
       >
         <Route index element={<CalendarPage />} />
         <Route path="routes" element={<RoutesPage />} />
-        <Route path="tasks" element={<TasksPage />} />
+        <Route path="submissions" element={<SubmissionsPage />} />
         <Route path="customers" element={<CustomersPage />} />
         <Route path="holidays" element={<HolidaysPage />} />
         <Route path="settings" element={<SettingsPage />} />

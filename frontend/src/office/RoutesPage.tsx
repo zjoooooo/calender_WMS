@@ -24,7 +24,7 @@ import {
 } from '../api';
 import { fmtDay, useI18n, weekdayOf } from '../i18n';
 import { useSession } from '../session';
-import { TypeTag } from '../ui/Chip';
+import { TypeTag, WasteTag } from '../ui/Chip';
 import { ConfirmDialog } from '../ui/Dialog';
 import { Drawer } from '../ui/Drawer';
 import { ErrorBanner, Loading } from '../ui/Feedback';
@@ -135,7 +135,7 @@ export default function RoutesPage() {
                     </span>
                   </td>
                   <td>
-                    <TypeTag type={r.type} />
+                    <TypeTag type={r.type} /> <WasteTag code={r.waste_type} abbr={(meta?.waste_types ?? []).find((x) => x.code === r.waste_type)?.abbr} />
                   </td>
                   <td>{r.name}</td>
                   <td className="small">{routeRuleText({ ...r, recurring: r.recurring ?? !r.date }, t, lang).split(' · ').slice(1).join(' · ')}</td>
@@ -454,6 +454,7 @@ function TemplateEditor({ id, onClose }: { id: number; onClose: () => void }) {
             (picking ? (
               <CustomerPicker
                 autoFocus
+                wasteType={route.waste_type}
                 excludeIds={draft.stops.map((s) => s.customer_id)}
                 onPick={(c) => {
                   setExtra((m) => ({ ...m, [c.id]: c }));

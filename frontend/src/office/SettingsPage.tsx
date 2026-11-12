@@ -1,7 +1,7 @@
 // Settings page (§9.2):
 // - Waste types (admin; read-only for office): code, name, abbr, unit, weigh method, routable (read-only
-//   after create), recurring tasks, confirm-over, active, and the display order (dnd-kit sortable + ↑ ↓).
-//   No delete. Deactivation can return 409 WASTE_TYPE_IN_USE {routes | tasks}.
+//   after create), confirm-over, active, and the display order (dnd-kit sortable + ↑ ↓).
+//   No delete. Deactivating a routable type that routes still collect returns 409 WASTE_TYPE_IN_USE {routes}.
 // - Trucks (office and admin): the plates drivers pick from, each with an active toggle.
 // - Day rollover (admin; read-only for office): 00:00–06:00; ROLLOVER_SHIFTS_TODAY "Try again after …".
 import { useEffect, useState, type CSSProperties, type FormEvent, type ReactNode } from 'react';
@@ -39,7 +39,6 @@ import { WasteTag } from '../ui/Chip';
 import { Dialog } from '../ui/Dialog';
 import { ErrorBanner, Loading, useErrorText } from '../ui/Feedback';
 import { useToast } from '../ui/Toast';
-import { taskScheduleText } from './labels';
 
 export default function SettingsPage() {
   const { t } = useI18n();
@@ -339,7 +338,6 @@ function WasteTypesSection() {
                   <th>{t('wt.colUnit')}</th>
                   <th>{t('wt.colWeigh')}</th>
                   <th>{t('wt.colRoutable')}</th>
-                  <th>{t('wt.colRecurring')}</th>
                   <th>{t('wt.colConfirmOver')}</th>
                   <th>{t('wt.colActive')}</th>
                   {isAdmin && <th aria-label={t('common.actions')} />}
@@ -409,7 +407,6 @@ function WasteTypeRow(props: {
       <td>{w.unit}</td>
       <td>{t(`wm.${w.weigh_method}`)}</td>
       <td>{w.routable ? t('common.yes') : t('common.no')}</td>
-      <td>{w.routable ? '–' : w.recurring_tasks ? t('common.yes') : t('common.no')}</td>
       <td className="num">{w.confirm_over ?? '–'}</td>
       <td>{w.active ? <span className="tag ok">{t('common.active')}</span> : <span className="tag">{t('common.inactive')}</span>}</td>
       {admin && (
@@ -424,7 +421,7 @@ function WasteTypeRow(props: {
 }
 
 function WasteTypeDialog({ type, onClose }: { type: WasteType | null; onClose: () => void }) {
-  const { t, lang } = useI18n();
+  const { t } = useI18n();
   const qc = useQueryClient();
   const toast = useToast();
   const errText = useErrorText();
@@ -435,7 +432,6 @@ function WasteTypeDialog({ type, onClose }: { type: WasteType | null; onClose: (
   const [unit, setUnit] = useState(type?.unit ?? 'kg');
   const [weigh, setWeigh] = useState<WeighMethod>(type?.weigh_method ?? 'on_site');
   const [routable, setRoutable] = useState(type?.routable ?? false);
-  const [recurring, setRecurring] = useState(type?.recurring_tasks ?? false);
   const [confirmOver, setConfirmOver] = useState(type?.confirm_over == null ? '' : String(type.confirm_over));
   const [active, setActive] = useState(type?.active ?? true);
   const [busy, setBusy] = useState(false);
@@ -459,7 +455,6 @@ function WasteTypeDialog({ type, onClose }: { type: WasteType | null; onClose: (
           unit: unit.trim() || 'kg',
           weigh_method: weigh,
           routable,
-          recurring_tasks: routable ? false : recurring,
           confirm_over: co,
         });
         toast(t('wt.created', { code: created.code }));
@@ -468,7 +463,6 @@ function WasteTypeDialog({ type, onClose }: { type: WasteType | null; onClose: (
           name: name.trim(),
           abbr: abbr.trim().toUpperCase(),
           weigh_method: weigh,
-          recurring_tasks: type.routable ? false : recurring,
           confirm_over: co,
           active,
         });
@@ -549,13 +543,6 @@ function WasteTypeDialog({ type, onClose }: { type: WasteType | null; onClose: (
           </label>
           <span className="hint">{t('wt.routableHint')}</span>
         </div>
-        <div className="field full">
-          <label className="check">
-            <input type="checkbox" checked={!routable && recurring} disabled={routable} onChange={(e) => setRecurring(e.target.checked)} />
-            {t('wt.colRecurring')}
-          </label>
-          <span className="hint">{t('wt.recurringHint')}</span>
-        </div>
         {!isNew && (
           <div className="field full">
             <label className="check">
@@ -577,18 +564,6 @@ function WasteTypeDialog({ type, onClose }: { type: WasteType | null; onClose: (
               {inUse.routes.map((r) => (
                 <li key={r.route_id}>
                   <span className="code">{r.code}</span> {r.name}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {inUse?.tasks && inUse.tasks.length > 0 && (
-          <div className="full small">
-            <div>{t('wt.inUseTasks')}</div>
-            <ul className="list-plain">
-              {inUse.tasks.map((tk) => (
-                <li key={tk.task_id}>
-                  #{tk.task_id} · {taskScheduleText(tk.schedule, t, lang)}
                 </li>
               ))}
             </ul>

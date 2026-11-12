@@ -1,9 +1,9 @@
 // Create / edit customer (R4, §6.9). Reusable: the route picker's "Create new customer" passes
-// initialTypes=['REL'] and requireRoutable; the task dialog pre-ticks the task's type.
+// initialTypes=[the route's waste type] and requireType (the new customer must have that type).
 // - waste_types: at least one; active types are chips; an inactive type already on the customer shows
 //   as a greyed chip that can still be removed.
-// - Removing a type that is in use -> 409 CUSTOMER_IN_USE: the dialog lists the routes/tasks and offers
-//   [Remove from these routes/tasks and save] (detach: true). RUN_EXISTS -> RunExistsDialog.
+// - Removing a type while the customer is on a route of that type -> 409 CUSTOMER_IN_USE: the dialog lists
+//   the routes and offers [Remove from these routes and save] (detach: true). RUN_EXISTS -> RunExistsDialog.
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -30,8 +30,8 @@ export interface CustomerFormDialogProps {
   customer: Customer | null;
   /** Pre-ticked types for a new customer. */
   initialTypes?: string[];
-  /** Require at least one routable type (route picker quick-create). */
-  requireRoutable?: boolean;
+  /** The waste type the new customer must have (route picker quick-create: the route's type). */
+  requireType?: string;
   /** Pre-filled name for a new customer (e.g. the search text). */
   initialName?: string;
   onClose: () => void;
@@ -84,8 +84,9 @@ export function CustomerFormDialog(props: CustomerFormDialogProps) {
   const save = async (extra: Extra = {}) => {
     if (!name.trim()) return setError(t('err.required_field', { field: t('customers.fieldName') }));
     if (picked.length === 0) return setError(t('customers.needType'));
-    if (props.requireRoutable && !picked.some((c) => types.find((w) => w.code === c)?.routable)) {
-      return setError(t('customers.needRoutable', { routable: routableNames(types) }));
+    if (props.requireType && !picked.includes(props.requireType)) {
+      const w = types.find((x) => x.code === props.requireType);
+      return setError(t('customers.needRoutable', { routable: w?.abbr || props.requireType }));
     }
     // Store in waste-type order (the server does the same, R4).
     const ordered = types.map((w) => w.code).filter((c) => picked.includes(c));
@@ -129,7 +130,7 @@ export function CustomerFormDialog(props: CustomerFormDialogProps) {
     void save();
   };
 
-  const inUseItems = inUse ? [...(inUse.routes ?? []), ...(inUse.tasks ?? [])] : [];
+  const inUseItems = inUse?.routes ?? [];
 
   return (
     <>

@@ -1,5 +1,5 @@
-// Copy to date (R15, §6.4) for a route occurrence, and Copy / Move this date (R19) for a task occurrence.
-// Route: target date ≥ today; the resulting type and suggested code come from
+// Copy to date (R15, §6.4) for a route occurrence (the copy keeps the route's waste type).
+// Target date ≥ today; the resulting type and suggested code come from
 // GET /api/routes/suggest-code?type=copy (called whenever the date changes): "Regular (only this date)" on a
 // work day (Adhoc when the source is adhoc), "Special (only this date)" on a rest day. "Skip the original" is
 // ticked by default when the source is a runnable recurring date. Modes: 'ph' = [Run on PH] (same date),
@@ -9,14 +9,11 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   copyRouteDate,
-  copyTaskDate,
   getRoute,
-  getTask,
   isApiError,
   listHolidays,
   suggestRouteCode,
   type RouteOccurrence,
-  type TaskOccurrence,
 } from '../api';
 import { fmtDay, useI18n } from '../i18n';
 import { TypeTag } from '../ui/Chip';
@@ -27,14 +24,14 @@ import { useCalendar } from './calendarContext';
 import { nextWorkDayAfter } from './calendarModel';
 import { useGuardedWrite } from './officeShared';
 
-export function CopyDialog({ occ, mode, onClose }: { occ: RouteOccurrence | TaskOccurrence; mode: 'copy' | 'ph' | 'move'; onClose: () => void }) {
+export function CopyDialog({ occ, mode, onClose }: { occ: RouteOccurrence; mode: 'copy' | 'ph' | 'move'; onClose: () => void }) {
   const { t, lang } = useI18n();
   const { data } = useCalendar();
   const toast = useToast();
   const errText = useErrorText();
   const w = useGuardedWrite();
   const today = data.today;
-  const isRoute = occ.kind === 'route';
+  const isRoute = true;
   const runnable = occ.recurring && occ.status === 'scheduled' && occ.date >= today && !occ.frozen;
   // Move: the first work day after the paused date (holidays from the loaded range, refined by the list).
   const holQ = useQuery({ queryKey: ['holidays'], queryFn: () => listHolidays(), enabled: mode === 'move', retry: false });
@@ -54,8 +51,8 @@ export function CopyDialog({ occ, mode, onClose }: { occ: RouteOccurrence | Task
   const [name, setName] = useState('');
 
   const suggestQ = useQuery({
-    queryKey: ['suggest-code', 'copy', isRoute ? occ.route_id : 0, to],
-    queryFn: () => suggestRouteCode({ type: 'copy', date: to, route_id: (occ as RouteOccurrence).route_id }),
+    queryKey: ['suggest-code', 'copy', occ.route_id, to],
+    queryFn: () => suggestRouteCode({ type: 'copy', date: to, route_id: occ.route_id }),
     enabled: isRoute && /^\d{4}-\d{2}-\d{2}$/.test(to) && !occ.frozen,
     retry: false,
   });
@@ -75,18 +72,14 @@ export function CopyDialog({ occ, mode, onClose }: { occ: RouteOccurrence | Task
         let rev: number | undefined = occ.rev;
         if (occ.frozen) {
           try {
-            rev = isRoute ? (await getRoute(occ.route_id)).rev : (await getTask((occ as TaskOccurrence).task_id)).rev;
+            rev = (await getRoute(occ.route_id)).rev;
           } catch (err) {
             if (!isApiError(err, 'NOT_FOUND')) throw err;
             rev = undefined;
           }
         }
         const extra = { ...(skip ? { skip_source: true } : {}), ...(rel ? { release_run: true } : {}) };
-        if (isRoute) {
-          return (await copyRouteDate(occ.route_id, occ.date, { rev, to, ...(code.trim() ? { code: code.trim().toUpperCase() } : {}), ...(name.trim() ? { name: name.trim() } : {}), ...extra })).created.code;
-        }
-        await copyTaskDate((occ as TaskOccurrence).task_id, occ.date, { rev, to, ...extra });
-        return fmtDay(to, lang);
+        return (await copyRouteDate(occ.route_id, occ.date, { rev, to, ...(code.trim() ? { code: code.trim().toUpperCase() } : {}), ...(name.trim() ? { name: name.trim() } : {}), ...extra })).created.code;
       },
       (what) => {
         toast(t('copy.done', { what }));
@@ -95,8 +88,8 @@ export function CopyDialog({ occ, mode, onClose }: { occ: RouteOccurrence | Task
     );
   };
 
-  const titleKey = mode === 'ph' ? 'copy.runOnPh' : mode === 'move' ? (isRoute ? 'copy.moveWorkDay' : 'copy.moveDate') : 'copy.title';
-  const label = isRoute ? occ.code : `${occ.waste_type} ${data.customers[String(occ.customer_id)]?.name ?? ''}`;
+  const titleKey = mode === 'ph' ? 'copy.runOnPh' : mode === 'move' ? 'copy.moveWorkDay' : 'copy.title';
+  const label = occ.code;
   return (
     <>
       <Dialog

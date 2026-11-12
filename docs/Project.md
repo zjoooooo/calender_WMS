@@ -1,6 +1,6 @@
-# WMS Route & Task Calendar: v1 Design
+# WMS Route Calendar: v1 Design
 
-- Version: v1 final, 2026-11-11, updated with the Round 4 decisions (Linux VPS hosting, night shifts with a 04:00 day rollover, drag-and-drop stop reordering). Today in every example is Wed 2026-11-11.
+- Version: v1 final, 2026-11-11, updated with the Round 4 decisions (Linux VPS hosting, night shifts with a 04:00 day rollover, drag-and-drop stop reordering) and the Round 7 decisions (2026-11-12: the waste types Recycling and EROSE, one waste type per route, free driver submissions instead of tasks). Today in every example is Wed 2026-11-11.
 - Audience: the developer who builds v1. Read this document instead of the earlier design files.
 - User decisions come from `requirements.md`. If this document disagrees with it, `requirements.md` wins.
 - §3 lists every rule with an ID (R1 to R36), and later sections refer to those IDs. Error codes are in CAPS, for example `PAST_DATE_LOCKED`.
@@ -10,23 +10,23 @@
 ## 1 Goals & scope (v1 / later)
 
 ### Goals
-1. The office plans **REL collection routes** on a calendar with week and month views. Routes are containers holding an ordered list of customers, and they come in three types: regular, special and adhoc.
-2. The office plans **standalone tasks** for the waste types that never go on a route. OTC tasks are one-off only. COMPACTOR tasks are one-off or recurring weekly. Tasks may fall on any day, including Sundays and public holidays.
-3. Drivers use a phone web app. They claim today's routes and tasks themselves (the first to confirm gets the job) and record a result for each customer: a weight per waste type, an optional photo, an optional signature, a weighbridge ticket when the type needs one, and a note, or "not collected" with a reason.
+1. The office plans **collection routes** on a calendar with week and month views. Routes are containers holding an ordered list of customers, and they come in three types: regular, special and adhoc. Each route collects **one waste type**: REL (general waste) or Recycling (R6a).
+2. The other waste types (OTC, COMPACTOR, EROSE) are **never planned**. There are no tasks. A driver **submits** such a collection freely on the phone, at any time: waste type, customer, weight (R17–R19). The office reads these submissions on a Submissions page, and they count in the day totals.
+3. Drivers use a phone web app. They claim today's routes themselves (the first to confirm gets the job) and record a result for each customer: a weight per waste type, an optional photo, an optional signature, a weighbridge ticket when the type needs one, and a note, or "not collected" with a reason.
 4. The office sees driver progress live on the calendar and can correct any result. Every correction is kept in an audit history.
 5. Production runs on a **Linux cloud VPS** (Ubuntu 24.04 LTS): Caddy with automatic HTTPS in front of PHP 8.3-FPM, a JSON data folder, systemd starting everything at boot, and a nightly backup. One script, `deploy/install.sh`, sets the server up. Phones and office PCs reach it over HTTPS from the internet. Development and trials run on the user's Windows PC, started by .bat files (PHP built-in server + Vite on 0.0.0.0 ports).
 6. Night shifts are supported: the working day rolls over at a configurable hour (default 04:00), so work done after midnight still belongs to the previous day (R1).
 
 ### In v1
-- Calendar: week view with one-line route rows and month view with route-code chips. Routes are identified by a code, a colour bar and a type tag. Clicking a code highlights that route, and search matches a code or a customer name. Tasks appear separately from route containers.
+- Calendar: week view with one-line route rows and month view with route-code chips. Routes are identified by a code, a colour bar and a type tag. Clicking a code highlights that route, and search matches a code or a customer name. Every route line carries a short waste-type tag (REL / RCY).
 - Route editing: add, edit and delete route containers; add, remove and reorder customers (drag and drop with mouse or touch, plus ↑ ↓ buttons and "move to #"). A change can apply to "only this date" or to "this date and the following ones". Other route actions: skip a date, copy to another date (to run on a PH or move to a work day), change the schedule, and urgent pickup.
-- Tasks: OTC one-off tasks; COMPACTOR one-off and recurring tasks; skipping or moving a single date.
+- Free submissions: a driver submits an OTC, COMPACTOR or EROSE collection at any time (type, customer, weight; photos, signature, weighbridge ticket and truck plate as for a route stop), also with no signal. The office sees them by date on the Submissions page (read only).
 - Master data pages: customers (each registers its waste types), waste types (configurable), holidays (Singapore 2026–2027 prefilled, maintained by users), trucks (the vehicle list drivers pick from) and users.
 - Settings: the day rollover hour for night shifts (default 04:00, admin only).
 - Logins: office users and drivers both sign in with a username and password. Each user switches the UI language between Chinese and English.
-- Driver app: claim, switch route midway, give back, record results, correct own results, and an offline outbox with idempotent retries.
+- Driver app: claim, switch route midway, give back, record results, correct own results, free submissions, and an offline outbox with idempotent retries.
 - Office run actions: release a job, assign a driver, close out, back-fill a result, and correct a result with a reason.
-- Daily totals per waste type, shown in the calendar.
+- Daily totals per waste type, shown in the calendar (route results plus submissions).
 
 ### Later (details in §16)
 Reports and CSV/Excel export (the first v2 item), billing, per-customer rules that make a photo or signature required, office assignment of trucks ahead of time, route optimisation and GPS tracking, a SQLite or MySQL store, and push notifications.
@@ -34,7 +34,7 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
 ### Sizing assumptions (these drive the simple choices)
 - Up to about 25 drivers and 5 office users.
 - 10 to 25 routes a day, each with about 5 to 40 stops.
-- Up to about 20 tasks a day.
+- Up to about 50 free submissions a day.
 - Up to about 3,000 customers.
 - One time zone (Singapore). Night shifts end before the rollover hour (default 04:00), and morning shifts start at or after it. The admin sets the rollover between the end of the latest night shift and the start of the earliest morning shift, because the jobs of day D cannot be claimed before D at that hour.
 
@@ -44,19 +44,19 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
 
 | Term | Meaning |
 |---|---|
-| Waste type | A configurable kind of waste: `{code, name, abbr, unit, weigh_method, routable, recurring_tasks, confirm_over, active}`. The seed types are REL, OTC and COMPACTOR (R3). |
-| Routable type | A waste type with `routable = true` (REL in the seed). Only routable types are collected on routes. |
-| Non-routable type | A waste type with `routable = false` (OTC and COMPACTOR). These are collected only through tasks. |
+| Waste type | A configurable kind of waste: `{code, name, abbr, unit, weigh_method, routable, confirm_over, active}`. The seed types are REL, RECYCLING, OTC, COMPACTOR and EROSE (R3). |
+| Routable type | A waste type with `routable = true` (REL and RECYCLING in the seed). Only routable types are collected on routes, and every route collects exactly one of them (R6a). |
+| Non-routable type | A waste type with `routable = false` (OTC, COMPACTOR and EROSE). These are never planned: drivers submit them freely (see Submission). |
 | Customer | A collection point. It registers the waste types it has (`waste_types`). A **routable customer** has at least one active routable type. |
-| Route | A planned container of customers, ordered in visit order. It has a type (regular, special or adhoc), a **code** (for example `N1`), a colour and a name. |
+| Route | A planned container of customers, ordered in visit order. It has a type (regular, special or adhoc), a **code** (for example `N1`), a colour, a name and **one waste type** (`waste_type`, R6a). |
 | Recurring route | A route with `start`/`end` plus weekdays (regular) or Sunday/PH flags (special). |
 | One-off route | A route with a single `date`: an adhoc on a work day, a special on a rest day, or a regular copy on a work day (made only by Copy to date, R15). |
 | Template | A recurring route's own stop list. It is the same list every day the route runs. |
-| Override | A per-date change to a recurring route (`cancelled`, `stops`, `note`) or to a recurring task (`cancelled`, `note`). |
-| Occurrence | A route or task on one date, as computed for the calendar. |
-| Effective stops | The customer list of a route occurrence after the override has been applied and inactive or non-routable customers have been dropped (R8). |
-| Task | A standalone job for exactly ONE customer and ONE non-routable waste type. It is either one-off (`date`) or recurring (`start`, `end`, `days`). It never goes inside a route. |
-| Job | A runnable occurrence: a route job with key `r<route_id>@<date>`, or a task job with key `t<task_id>@<date>`. |
+| Override | A per-date change to a recurring route (`cancelled`, `stops`, `note`). |
+| Occurrence | A route on one date, as computed for the calendar. |
+| Effective stops | The customer list of a route occurrence after the override has been applied and inactive customers and customers no longer registered with the route's waste type have been dropped (R8). |
+| Submission | A driver's free record of one collection of ONE non-routable waste type at ONE customer: the weight, plus optional photos, signature, note, a weighbridge ticket when the type needs one, and the truck plate. It is not planned, not claimed and not part of any run (R17–R19). |
+| Job | A runnable occurrence of a route, with key `r<route_id>@<date>`. |
 | Run | The execution record of one job. It is created at the first claim, assign, office entry or office close-out, and holds the holder, the holds log and the visits. It is never deleted (R21). |
 | Hold | One driver's period of holding a run: `{driver_id, vehicle_no, by, from, to, end}`. |
 | Holder | The driver who currently holds a run (`run.driver_id` on a run dated today, R25). On a past run, `driver_id` is only the last holder, shown in history; it does not count as holding. |
@@ -67,7 +67,7 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
 | PH | A public holiday from the user-maintained holiday list. |
 | Frozen plan | The plan of a past date, written once into `days/<date>.json` so that the past never changes (R13). |
 | Past lock | Plan dates before today (the op_date) cannot be written (R11). Results (visits) are not locked. |
-| Outbox | The phone's persistent queue of unsent result writes and photos (IndexedDB). |
+| Outbox | The phone's persistent queue of unsent result writes (route stops and submissions) and photos (IndexedDB). |
 | op_id | A UUID that the client generates for each result write. A server that sees the same op_id twice applies it once (R30). |
 | Roles | `admin` (an office user who can also manage users, waste types and the rollover hour), `office`, `driver`. |
 
@@ -84,7 +84,7 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
   - Example with H = 4: Thu 12 Nov 03:59:59 → op_date Wed 11 Nov; Thu 12 Nov 04:00:00 → op_date Thu 12 Nov.
   - The operational day D runs from `day_start(D)` = D at H:00 to `day_end(D)` = (D + 1) at H:00, both +08:00.
   - With H = 0 the rule is plain midnight.
-- **Every "today" in this document means `op_date(now)`**, and "yesterday" or "today − 1" means op_date − 1. That covers: the driver's Today list and claims (R23), the holding rule (R25), run statuses (R22), the `LATE` flag and the edit deadline (R28), the past lock (R11), the day freeze (R13), generation from today on (R7, R18), `next_work_day`, and the calendar's Today marker. "Rollover" replaces "midnight" everywhere: the moment op_date changes.
+- **Every "today" in this document means `op_date(now)`**, and "yesterday" or "today − 1" means op_date − 1. That covers: the driver's Today list and claims (R23), the holding rule (R25), run statuses (R22), the `LATE` flag and the edit deadline (R28), the past lock (R11), the day freeze (R13), generation from today on (R7), `next_work_day`, and the calendar's Today marker. "Rollover" replaces "midnight" everywhere: the moment op_date changes.
 - Timestamps (`from`, `to`, `captured_at`, `received_at`, `at`) stay real clock times. A hold or a visit at 02:30 on Thu 12 Nov on a Wed 11 Nov job is normal for a night shift. Day files, totals and reports use the job's date, never the timestamp's calendar date.
 - **Changing H** is refused with 422 `ROLLOVER_SHIFTS_TODAY` {today, would_be, retry_after} when it would change the current op_date (forward or back), so a frozen day can never become today again. That happens only while the clock hour is in [min(old, new), max(old, new)); `retry_after` is max(old, new):00 on the current calendar date. Any change is therefore accepted from 06:00 to 23:59. It takes effect at once for the next rollover and the edit deadline (R28).
 - The client never derives today, a weekday, a day class, a lock state or the rollover from its own clock. It reads them from `/api/meta` (`today`, `rollover_hour`, `day_ends_at`) and from the payloads.
@@ -107,28 +107,30 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
 - Fields:
   - `code`: matches `^[A-Z0-9_]{1,10}$`, is unique, and can never change.
   - `name`: 1–30 characters.
-  - `abbr`: matches `^[A-Z0-9]{1,10}$`. It is used on chips. The seed uses the code itself (the user named the types REL, OTC and COMPACTOR).
+  - `abbr`: matches `^[A-Z0-9]{1,10}$`. It is used on chips. The seed uses the code itself, except RECYCLING, whose abbreviation is `RCY`.
   - `unit`: 1–6 characters, default `kg`. It can never change.
   - `weigh_method`: `on_site` or `weighbridge`.
   - `routable`: a boolean that can never change.
-  - `recurring_tasks`: a boolean. It only matters when `routable = false`.
   - `confirm_over`: a number or null. A weight at or above it asks the person for confirmation.
   - `active`.
-- Seed, created on first start. Every seed type has `unit = kg` and `weigh_method = on_site`.
+- Seed, created on first start, in this order. Every seed type has `unit = kg` and `weigh_method = on_site`.
 
-  | code | abbr | routable | recurring_tasks | confirm_over |
+  | code | name | abbr | routable | confirm_over |
   |---|---|---|---|---|
-  | REL | REL | true | false | 1000 |
-  | OTC | OTC | false | false | 1000 |
-  | COMPACTOR | COMPACTOR | false | true | null |
+  | REL | REL | REL | true | 1000 |
+  | RECYCLING | Recycling | RCY | true | 1000 |
+  | OTC | OTC | OTC | false | 1000 |
+  | COMPACTOR | COMPACTOR | COMPACTOR | false | null |
+  | EROSE | EROSE | EROSE | false | null |
 
-- Changing `weigh_method`, `recurring_tasks` or `confirm_over` affects only writes made after the change.
-- `code`, `unit` and `routable` never change, because history, routes and tasks depend on them. To change one of them, create a new type.
+- A data folder that already exists is never given new seed types by itself: an admin adds RECYCLING and EROSE in Settings. New installs and the demo have all five.
+
+- Changing `weigh_method` or `confirm_over` affects only writes made after the change.
+- `code`, `unit` and `routable` never change, because history and routes depend on them. To change one of them, create a new type. A `recurring_tasks` value stored by an earlier version is ignored and stays in the file (R19).
 - Types are never hard-deleted, only deactivated.
-- Deactivation is refused with 409 `WASTE_TYPE_IN_USE` {routes | tasks} in these cases:
-  - a routable type, while any customer that has it is on a stop list dated on or after today;
-  - a non-routable type, while any task of that type generates a date on or after today.
-- An inactive type is hidden from forms and refused in new weights. It stays on customers and in history.
+- Deactivating a **routable** type is refused with 409 `WASTE_TYPE_IN_USE` {routes} while any route that collects it runs today or later (a split route is listed once). A route stored without a waste type counts as REL (R6a).
+- A **non-routable** type can always be deactivated: nothing is planned for it. It then leaves the drivers' pick list.
+- An inactive type is hidden from forms and refused in new weights and new submissions. It stays on customers and in history.
 
 **R4 CUSTOMERS.**
 - Fields:
@@ -139,17 +141,12 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
   - `active`.
 - A customer is **routable** when its `waste_types` contains at least one active routable type.
 - Master edits are global and take effect at once. Visits keep their own snapshot of the customer.
-- Removing a type that is in use is refused with 409 `CUSTOMER_IN_USE` {routes, tasks}. "In use" means either of these:
-  - the last routable type, while the customer is on a stop list dated on or after today;
-  - a type that one of the customer's tasks uses, while that task generates a date on or after today.
-- The refusal does not apply when the request carries `detach: true`. Detach does all of the following in the same transaction:
-  - removes the customer from route templates, from overrides dated on or after today and from one-off routes dated on or after today (only if no routable type remains);
-  - ends the customer's recurring tasks of the removed types with `end = today − 1` (a series that starts on or after today is deleted);
-  - deletes the customer's one-off tasks of those types dated on or after today;
-  - returns the list of what it removed.
+- A type cannot be removed from a customer while the customer is on a stop list, dated on or after today, of a route that collects that type: 409 `CUSTOMER_IN_USE` {routes}.
+- The refusal does not apply when the request carries `detach: true`. In the same transaction, detach removes the customer from those routes (their templates, their overrides dated on or after today, and one-off routes dated on or after today) and returns the list of what it removed.
+- Removing a non-routable type is never refused, because nothing is planned for it. Submissions already made keep their own customer snapshot (R17).
 - R26 applies to a detach.
-- Archive = detach every type, then set `active = false`.
-- Restore sets only `active = true`. Nothing is added back to any route or task.
+- Archive = detach from every route, then set `active = false`.
+- Restore sets only `active = true`. Nothing is added back to any route.
 - There is no hard delete in v1.
 
 ### Routes
@@ -185,6 +182,15 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
 - Any other combination returns 422 `DAY_CLASS_VIOLATION`.
 - A change to a one-off's date is checked against this rule again.
 
+**R6a ROUTE WASTE TYPE** (Round 7).
+- One route collects **one** waste type, `route.waste_type`. It is picked when the route is created.
+- `POST /api/routes` requires it (422 `VALIDATION` when it is missing). It must be an existing, active, routable type (REL or RECYCLING in the seed); otherwise 422 `TYPE_NOT_ROUTABLE`.
+- It never changes. A write that sends another value returns 422 `TYPE_IMMUTABLE`; a form may resend it unchanged. To collect another type, create a new route.
+- A "following" save (R12), a schedule change (R14) and a copy to another date (R15: Run on PH, Move to work day, re-plan) keep the route's waste type. Urgent pickup asks for it.
+- A route record stored before round 7 has no `waste_type`. It reads as `REL` everywhere. The field is never written into such a record, not even when the route is edited, and the records a split makes from it have none either. Nothing in an existing data file is rewritten for this rule.
+- Only customers registered with the route's waste type go on its stop lists (R10), and R8 drops a customer that lost the type. On the route the driver enters only that type's weight (R27).
+- The calendar, the Routes page, the route drawer and the driver's cards show the type's abbreviation as a short tag (`REL`, `RCY`) next to the R / S / ⚡A tag.
+
 **R7 ROUTE GENERATION.** Generation is defined for any date d > `plan.frozen_through` with start ≤ d ≤ (end or open). The calendar uses it live for d ≥ today, and R13 uses it once to snapshot the dates it freezes. Dates ≤ `frozen_through` come only from their frozen plan.
 - **regular**: generates d when weekday(d) is in `days`.
   - If d is a holiday, the status is `holiday_skipped`. Regular routes **pause automatically on a Monday–Saturday PH**, and the office can move or run them through R15.
@@ -196,7 +202,7 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
 
 **R8 EFFECTIVE STOPS** for (route, d):
 - `override(d).stops ?? route.stops`.
-- Drop customers that are inactive or no longer routable.
+- Drop customers that are inactive or no longer registered with the route's waste type (R6a).
 - Array order is visit order, and `seq` is the position, counted from 1.
 
 **R9 ROUTE OVERRIDES.**
@@ -211,7 +217,7 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
 - Overrides dated before today are purged on the next write.
 
 **R10 STOP LISTS.**
-- Every customer on a stop list must exist, be active (422 `CUSTOMER_INACTIVE`) and be **routable** (422 `CUSTOMER_NOT_ROUTABLE`).
+- Every customer on a stop list must exist, be active (422 `CUSTOMER_INACTIVE`) and be registered with the route's waste type (422 `CUSTOMER_NOT_ROUTABLE` {customer_id, name, waste_type}).
 - A customer appears at most once in any stop list (422 `DUPLICATE_STOP`).
 - An empty list is legal and returns the warning `EMPTY_ROUTE`.
 - The same customer may be on several routes on one date. The picker labels such a customer "also on N2".
@@ -220,8 +226,7 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
 - These dates must be ≥ today when a plan write sets them:
   - route start, one-off date and override date;
   - copy target;
-  - holiday date;
-  - task date or start, and task override date.
+  - holiday date.
 - `end` must be ≥ today − 1.
 - Otherwise the write returns 422 `PAST_DATE_LOCKED`.
 - The check applies to creates and to a field whose value changes. An edit form that resends an unchanged past `start`, `date` or `end` (for example a rename of a route that started on 2 Nov) is accepted.
@@ -241,7 +246,7 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
 **R13 DAY FREEZE.**
 - At the start of every request, under the lock, the server first checks that the clock has not gone back: if `plan.frozen_through` ≥ today (a server clock stepped back past a rollover, or a demo's `fake_now` was removed), the request returns 503 `CLOCK_BEHIND_FREEZE` {frozen_through, today} and writes nothing. A frozen day can never become today again.
 - It then checks whether `plan.frozen_through` < today − 1.
-- If so, it writes `days/<d>.json.plan` from the current plan for every d from `frozen_through + 1` to today − 1. The plan includes routes, tasks and their statuses (cancelled and holiday_skipped ones too).
+- If so, it writes `days/<d>.json.plan` from the current plan for every d from `frozen_through + 1` to today − 1. The plan includes every route occurrence with its status (cancelled and holiday_skipped ones too).
 - It then sets `frozen_through = today − 1`.
 - Dates before today are rendered only from their frozen plan plus their runs. Today and later dates are computed live.
 - A date ends at its rollover (R1), not at midnight: Wed 11 Nov is frozen by the first request at or after Thu 12 Nov 04:00 (default H), never at 00:00.
@@ -249,7 +254,7 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
 
 **R14 CHANGE SCHEDULE FROM D** (D > today) is one transaction that does four things:
 - sets `end = D − 1` on the route;
-- creates a copy of the route (new id; same code and colour; the `stops` sent with the request, or else the same stops) with `start = D` and the new `days` or `sun`/`ph` (or the old ones when none are sent);
+- creates a copy of the route (new id; same code, colour and waste type; the `stops` sent with the request, or else the same stops) with `start = D` and the new `days` or `sun`/`ph` (or the old ones when none are sent);
 - moves overrides dated ≥ D to the new route;
 - re-points `copied_from.route_id` to the new id on every one-off route whose `copied_from` = {old id, date ≥ D}, so "covered by" labels stay correct.
 
@@ -259,7 +264,8 @@ Edits to `days`, `sun`, `ph`, `start`, `end`, `name`, `note`, `code` and `color`
 - **Source.** The source date may be any date. A past date is read from its frozen plan.
 - **Target.** The target T must be ≥ today.
 - **What is created.**
-  - Stops: the source's effective stops, minus customers that are now inactive or not routable.
+  - Stops: the source's effective stops, minus customers that are now inactive or no longer registered with the route's waste type.
+  - Waste type: the source's (R6a).
   - Type: if class(T) = rest, `special` (a one-off). If class(T) = work, `adhoc` when the source is adhoc, otherwise `regular` (a one-off, R6). Adhoc stays reserved for emergencies (Urgent pickup, "+ Route ⚡ Adhoc").
   - Code suggested per R5, the source's colour, and the name `<name> (from <src as "Fri 25 Dec">)`.
   - `copied_from = {route_id, date: src}`.
@@ -281,43 +287,50 @@ Edits to `days`, `sun`, `ph`, `start`, `end`, `name`, `note`, `code` and `color`
   - adding a holiday on the date of an adhoc or a regular one-off;
   - removing a non-Sunday holiday from under a special one-off.
 - Recurring routes simply recompute.
-- **Holidays never affect tasks.**
 - A holiday write that affects today is also subject to R26.
 - The calendar returns `missing_holiday_years`: every year in the visible range, or within the next 60 days, that has no holidays. The UI shows a banner for them.
 
-### Tasks (OTC, COMPACTOR)
+### Submissions (OTC, COMPACTOR, EROSE)
 
-**R17 TASKS.**
-- A task is a standalone job for **one** customer and **one** non-routable waste type. It is never inside a route container.
-- Validation:
-  - `waste_type` must be active and non-routable (422 `TYPE_ROUTABLE`).
-  - The customer must be active (422 `CUSTOMER_INACTIVE`) and registered for that waste type (422 `CUSTOMER_LACKS_TYPE`).
-- Shape:
-  - one-off: `{date}`;
-  - recurring: `{start, end|null, days}`, where `days` is a non-empty, sorted subset of **1..7** (Sunday is allowed).
-- A recurring task is allowed only when `waste_type.recurring_tasks = true` (422 `RECURRING_NOT_ALLOWED`). With the seed types, OTC is one-off only and COMPACTOR can be one-off or recurring.
-- Day rules:
-  - **R6/R7 do not apply.** A task may fall on any day: a work day, a Sunday or a PH.
-  - The regular/special/adhoc day rules do not apply.
-- What can change:
-  - `waste_type`, `customer_id` and the kind (one-off or recurring) never change (422 `TASK_FIELD_IMMUTABLE`). To change one, create a new task.
-  - `note`, `date` (one-off) and `days`/`start`/`end` (recurring) are editable, subject to R11. Edits apply from today onward.
-- Delete removes the task and its overrides. Past days stay as they are, because they are frozen.
+**R17 SUBMISSIONS.**
+- Nothing is planned for a non-routable waste type: no task, no job, no line on the calendar, no claim.
+- A submission is a driver's record of one collection: ONE non-routable waste type at ONE customer, with the weight. Photos, signature, note, the weighbridge ticket (the type's `weigh_method`) and the `confirm_over` question work as for a route stop (R27). It also carries the truck plate, because no claim picked one.
+- Only a driver writes submissions: at any time of the day, also while holding a route, and with no signal (outbox, §7.7). The office reads them on the Submissions page (§6.8). In this version the office cannot create, change or delete one.
+- **Identity** is `(date, id)`:
+  - `date` is the operational date the phone made it on (§7.7);
+  - `id` is a UUID v4 the phone generates (anything else: 404 `NOT_FOUND`);
+  - the record lives in `days/<date>.json` under `submissions[id]`, so sending the same submission again can never make a second record.
+- Every write carries `op_id` and `base_rev`, like a visit (R30). A write whose `op_id` is in the record's `ops` is a **replay**: the recorded result is returned and nothing changes. This check runs before every rule below.
+- **A new submission** (no record with that id on that date):
+  - `date` must be ≤ today and ≥ today − `submission_max_age_days` (config, 7). Otherwise 422 `NOT_TODAY` {today, oldest}. A phone that was offline for longer keeps the entry in Not sent, and the driver tells the office.
+  - `waste_type`: a routable type returns 422 `TYPE_ROUTABLE`; an unknown or inactive type 422 `TYPE_NOT_ALLOWED`.
+  - `customer_id`: unknown returns 422 `VALIDATION`; archived 422 `CUSTOMER_INACTIVE`; not registered with the type 422 `CUSTOMER_LACKS_TYPE`.
+  - `vehicle_no` is required (422 `VEHICLE_REQUIRED`) and must be an active plate of the trucks list (422 `VEHICLE_UNKNOWN`); it is normalised as in R23.
+  - `outcome` is `collected`. There is no "missed", because nothing was planned (422 `VALIDATION`).
+  - The content follows R27 with that one weighable type: `WEIGHT_INVALID`, `WEIGHT_REQUIRED`, `TYPE_NOT_ALLOWED` (a weight of another type), `TICKET_REQUIRED`, `FILE_MISSING`, and at most `max_photos` photos.
+  - The result is 201.
+- **Stored by the server:** `id`, `date`, `waste_type`, `vehicle_no`, a customer snapshot `{code, name, address}` (taken at the first write and kept), `captured_at` (device clock), `received_at` (server clock), `driver_id`, `by`, `rev`, `flags`, `ops` and `history` (§4.8).
+- **`LATE`.** A write that the server receives at or after `day_end(date)` gets the flag and the warning `LATE`: a submission from a phone that was offline over the rollover, or a late correction. A night-shift submission at 03:30 on Thu for Wed is not `LATE`.
+- Submissions count in the day totals of their date (R32). They are not shown one by one on the calendar.
 
-**R18 TASK GENERATION.** Like R7, it is defined for any date d > `plan.frozen_through`: live for d ≥ today, and once for the dates R13 freezes.
-- A one-off task generates its own date.
-- A recurring task generates d when start ≤ d ≤ (end or open) and weekday(d) is in `days`. **This includes public holidays** (the user confirmed that recurring COMPACTOR tasks run on PH). To leave out a PH, the office skips that single date.
-- An override with `cancelled = true` sets the status to `cancelled`. Otherwise the status is `scheduled`.
+**R18 CHANGING AND DELETING A SUBMISSION.**
+- Only the driver who made it can write to it. Another driver's id returns 404 `NOT_FOUND`; an office token returns 403 `FORBIDDEN`.
+- The waste type and the customer never change (422 `VALIDATION`, field `waste_type` or `customer_id`). A wrong one is deleted and submitted again.
+- The weight, ticket, photos, signature, note and truck plate can change. Each change raises `rev` by 1 and appends the previous version to `history`.
+- **Delete** is a write with `outcome = null`. The record stays in the day file with `outcome = null` and its history, and it leaves every list and the totals. Deleting a submission that does not exist (never sent, or already deleted) returns 200 and changes nothing. A later write with the same id continues the same record.
+- **Edit window**, the same as for a route stop (R28): a change or a delete must arrive before the edit deadline, `day_end(date)` + `driver_edit_grace_hours`; otherwise 422 `EDIT_WINDOW_CLOSED` {deadline}. The driver app offers changes only on today's submissions.
+- A change does not check again that the customer is active or that the type is active, so a correction is never blocked by a later change of the master data.
 
-**R19 TASK OVERRIDES.**
-- They exist only for recurring tasks, with at most one per (task_id, date).
-- The date must be ≥ today and must be one the task generates (otherwise `NOT_AN_OCCURRENCE`).
-- Fields: `cancelled` and `note`. An override that is not cancelled and has an empty note is deleted.
-- **Move one date** = `POST /tasks/{id}/dates/{src}/copy {to, skip_source:true}`. In one transaction it creates a one-off task on T ≥ today (same customer, type and note; `copied_from = {task_id, date}`) and cancels the source date. When src = today, the body may carry `release_run` (R26). The cancelled source row shows "→ Sat 21 Nov" (`covered_by`, §4.8).
-- Copying from a past date without skip_source is allowed, for example to re-plan a task that was missed.
+**R19 OLD TASK DATA.**
+- Until round 7 the office planned OTC and COMPACTOR as tasks, and drivers claimed them. That feature and its code are removed: `/api/tasks…` and job keys `t<id>` return 404.
+- Data files written before round 7 may still hold task data:
+  - in `plan.json`: `tasks`, `task_overrides`, `seq.task`, and `recurring_tasks` on waste types;
+  - in day files: runs keyed `t<id>` (also inside `dropped_runs`) and frozen plan entries of kind `"task"`.
+- This data stays on disk exactly as it is. Every save writes it back unchanged: a plan, customer or holiday write, a driver result, a submission, a driver deactivation and the day freeze all leave it byte for byte the same.
+- Nothing reads it. It is not shown on the calendar, in any list or in the driver app; its weights are **not counted** in the day totals; it does not block plan writes (R26) or deactivations (R3, R4).
 
 **R20 OFFICE CONCURRENCY.**
-- Routes and tasks each carry a `rev`. Every write to the item or to its overrides bumps it, and every such write must send the rev it is based on.
+- Every route carries a `rev`. Every write to the route or to its overrides bumps it, and every such write must send the rev it is based on.
 - A mismatch returns 409 `STALE_REVISION` {current}. The UI refetches and keeps the draft on screen.
 - An edit of a split route reaches its other records too (§6.5), and the office says before the save what each of them will keep. Such a save may also send `parts`: the records `[{id, rev}]` the screen showed that on. When one of them changed meanwhile, or a record was added or removed, the save returns 409 `STALE_REVISION` (field `parts`) {parts: the current list}, and the screen shows the notices again on the records as they are now.
 - Writes to customers, holidays, waste types, trucks and users are last-write-wins.
@@ -325,17 +338,15 @@ Edits to `days`, `sun`, `ph`, `start`, `end`, `name`, `note`, `code` and `color`
 ### Jobs, runs and drivers
 
 **R21 JOBS AND RUNS.**
-- A job is a scheduled occurrence. It is either a **route job** (`r5@2026-11-11`) or a **task job** (`t6@2026-11-11`).
-- There is at most one run per job. It is stored in `days/<date>.json` under `runs["r5"]` or `runs["t6"]`.
+- A job is a scheduled occurrence of a route: a **route job** (`r5@2026-11-11`). There is no other kind of job; a submission is not a job (R17).
+- There is at most one run per job. It is stored in `days/<date>.json` under `runs["r5"]`.
 - A run is created only by:
   - a driver claim (R23);
   - an office assign (R24);
   - an office result entry (R29);
   - an office close-out (§6.12) on a job with no run: a holder-less run with every stop missed `not_visited`.
 - A run is never deleted. When R26 `release_run` removes its job from the plan, the run is moved to the day's `dropped_runs` with its history.
-- A run never copies the plan:
-  - A route job's stop list is the occurrence's effective stops: live for today, frozen for past dates.
-  - A task job's stop list is `[task.customer_id]`.
+- A run never copies the plan: its stop list is the occurrence's effective stops, live for today and frozen for past dates.
 - Counts:
   - `pending` = stop-list customers with no collected or missed visit;
   - `resolved` = collected + missed;
@@ -359,8 +370,8 @@ Edits to `days`, `sun`, `ph`, `start`, `end`, `name`, `note`, `code` and `color`
 3. If another driver holds it, the result is 409 `RUN_TAKEN` {driver, since, collected, total}.
 4. Otherwise the job must be scheduled with pending ≥ 1 (422 `NOT_RUNNABLE`, which also covers done jobs).
 5. `vehicle_no` is required (422 `VEHICLE_REQUIRED`). It is normalised to upper case without spaces and must be an active plate from the trucks list that the office maintains in Settings (422 `VEHICLE_UNKNOWN`). Drivers pick it; there is no free text. While the list is empty, the plate picker reads "No trucks set up yet: ask the office".
-6. Route jobs only: `finishIdleRouteHold(me)` first closes, with `end = finished`, any route job I hold with pending = 0. Then, if I hold another route job with pending > 0, the result is 409 `DRIVER_HAS_ACTIVE_RUN` {job, code, pending}. With `switch = true`, that run is given back first, in the same transaction (R24, `end = switched`).
-7. **Task jobs never conflict.** A driver may hold one route job and any number of task jobs at the same time.
+6. `finishIdleRouteHold(me)` first closes, with `end = finished`, any route job I hold with pending = 0. Then, if I hold another route job with pending > 0, the result is 409 `DRIVER_HAS_ACTIVE_RUN` {job, code, pending}. With `switch = true`, that run is given back first, in the same transaction (R24, `end = switched`).
+7. A submission never conflicts with a claim: it is not a job and needs none (R17).
 8. The claim creates the run if there is none (201), otherwise it reuses the existing one (200), and appends a hold `{driver_id, vehicle_no, by:"self", from}`.
 
 The first claim wins. The client never shows a claim before the server has confirmed it.
@@ -371,24 +382,23 @@ The first claim wins. The client never shows a claim before the server has confi
   2. Then the holder is cleared and the current hold is closed. The run and its holds are always kept, so a late outbox write from the driver is still accepted (R28, `LATE`):
      - if pending = 0, with `end = finished`;
      - otherwise with `end = left`, `switched` or `released`. The job becomes `open`, or shows as `not_started` again when resolved = 0 (R22). Any driver, including the same one, may pick it up that day.
-- Task jobs have no Finish step, because done is derived. "Give back" a task is the same as leave.
 - **Assign** (office):
   - The job's date must be today, and the job must be scheduled with pending ≥ 1.
   - If another driver holds the job, that hold ends with `end = reassigned`.
   - The target driver X must be an active driver.
-  - For a route job: `finishIdleRouteHold(X)` runs first, as in R23 step 6. Then, if X holds another route job with pending > 0, the result is 409 `DRIVER_HAS_ACTIVE_RUN`. With `switch = true`, X's other route is given back with `end = switched`.
+  - `finishIdleRouteHold(X)` runs first, as in R23 step 6. Then, if X holds another route job with pending > 0, the result is 409 `DRIVER_HAS_ACTIVE_RUN`. With `switch = true`, X's other route is given back with `end = switched`.
   - Assign appends `{driver_id: X, vehicle_no: null, by: "user:<office id>"}`.
   - The driver app makes X pick a plate before entering results; picking the plate is a claim call that returns 200 because X already holds the job.
 - **Deactivating a driver** releases every job that driver holds (`end = released`).
 
 **R25 HOLDING.**
 - A driver holds a job when `run.driver_id` = that driver, `run.date` = today and pending > 0.
-- A driver holds at most **one route job** and any number of task jobs.
+- A driver holds at most **one route job**.
 - A route job has at most one driver at a time: two trucks never share a route on the same day (user decision). A big route is split with an "only this date" edit plus an adhoc route.
 - Runs from earlier dates are never held: at the rollover (R1, default 04:00, not midnight) they become `incomplete` with no write.
 
 **R26 RUN INVARIANT ON PLAN WRITES.**
-- After any plan, holiday, customer (detach or archive) or task write is applied in memory, every run in today's day file must still match a today occurrence whose status is `scheduled`.
+- After any plan, holiday or customer (detach or archive) write is applied in memory, every run in today's day file must still match a today occurrence whose status is `scheduled`.
 - Otherwise the write is refused with 409 `RUN_EXISTS` {runs:[{job, code_or_customer, driver, resolved}]}, and nothing is saved.
 - With `release_run = true`, the write goes ahead only if every affected run has resolved = 0. Those runs are moved from `runs` to `dropped_runs` in the same day file (kept with their visit history, never displayed).
 - An affected run with no holder and resolved = 0 does not block; it is moved to `dropped_runs` without asking.
@@ -399,10 +409,8 @@ The first claim wins. The client never shows a claim before the server has confi
 
 **R27 VISIT CONTENT.**
 - There is one visit per (run, customer). `outcome` is `collected`, `missed` or `null` (undone: the stop is pending again).
-- **Weighable types:**
-  - Route job: exactly the customer's registered, active, routable types. (An `OFF_PLAN` customer that was detached and has none left may be weighed in any active routable type, so an offline collection is never lost.)
-  - Task job: exactly the task's waste type.
-  - Any other key returns 422 `TYPE_NOT_ALLOWED`. **OTC and COMPACTOR weights can therefore never be entered on a route.** If a customer needs another type, the driver calls the office, which edits the customer.
+- **Weighable type:** exactly the route's one waste type (R6a), also for an `OFF_PLAN` stop.
+  - Any other key returns 422 `TYPE_NOT_ALLOWED`. **OTC, COMPACTOR and EROSE weights can therefore never be entered on a route**, and a REL weight never on a Recycling route. The non-routable types are submitted freely (R17).
 - **collected:**
   - `weights` is `{code: number}`. Each value is 0–99999.9 with at most 1 decimal; "," is accepted as the decimal separator (422 `WEIGHT_INVALID` otherwise).
   - At least one value must be > 0 (422 `WEIGHT_REQUIRED`). A registered type that is absent counts as 0.
@@ -420,9 +428,7 @@ The first claim wins. The client never shows a claim before the server has confi
 
 **R28 DRIVER RESULT WRITES.**
 - The driver must appear in `run.holds` (otherwise 409 `NOT_HOLDER`).
-- The customer must belong to the job (otherwise 422 `NOT_ON_JOB`):
-  - task job: only `task.customer_id`. This applies to office writes too, because a task has exactly one customer.
-  - route job: a customer on the effective stop list, or one that is not on it but is in `run.removed` or already has a visit in this run. Such a write is accepted with the flag `OFF_PLAN`, so a real collection is never refused because the office removed the stop after the driver loaded it. Drivers cannot add other customers on site (requirements: call the office). Office writes on route jobs are not limited by this rule (R29); they may record any routable customer as `OFF_PLAN`.
+- The customer must belong to the job (otherwise 422 `NOT_ON_JOB`): a customer on the effective stop list, or one that is not on it but is in `run.removed` or already has a visit in this run. Such a write is accepted with the flag `OFF_PLAN`, so a real collection is never refused because the office removed the stop after the driver loaded it. Drivers cannot add other customers on site (requirements: call the office). Office writes are not limited by this rule (R29); they may record any customer registered with the route's waste type as `OFF_PLAN`.
 - A **first** result for a pending stop is accepted at any time. Changing an existing visit (correction or undo) must happen before the **edit deadline** = `day_end(run date)` + `driver_edit_grace_hours` (config, 8 h), i.e. the run's rollover plus 8 hours: 12:00 on run date + 1 with the default 04:00 rollover (otherwise 422 `EDIT_WINDOW_CLOSED`). The driver UI offers corrections only on today's (op_date) jobs; this server window only lets corrections queued before the rollover still arrive.
 - The stop must be pending, or its visit must have been written last by this driver (otherwise 409 `VISIT_CHANGED` {visit}).
 - **`LATE`.** The write's effective time is `t = captured_at` when `hold.from ≤ captured_at ≤ received_at`, where `hold.from` is the start of this writer's latest hold on the run (server clock); otherwise `t = received_at`. A writer who is not `run.driver_id` (the holder, or for a past run its last holder), or whose `t` ≥ `day_end(run date)`, adds the flag `LATE`.
@@ -430,7 +436,7 @@ The first claim wins. The client never shows a claim before the server has confi
   - The bounds keep a wrong phone clock from moving `t` outside the driver's own hold or past the moment the server received the write.
 
 **R29 OFFICE RESULT WRITES AND CORRECTIONS.**
-- Office and admin users may write any visit, on any job, on any date (on a task job only for the task's customer, R28 `NOT_ON_JOB`).
+- Office and admin users may write any visit, on any job, on any date.
 - Changing an existing visit requires `why` (422 `WHY_REQUIRED`) and adds the flag `OFFICE_EDITED`.
 - A first visit on a scheduled job dated ≤ today that has no run creates a run with no holder. This is a back-fill, for example of a route done on paper. The office may set `driver_id` on such a new visit.
 - The office may add or remove photos and the signature.
@@ -443,14 +449,15 @@ The first claim wins. The client never shows a claim before the server has confi
 
 The replay check (step 1) runs before the R28 checks. A retry whose response was lost therefore never turns into `EDIT_WINDOW_CLOSED` or `NOT_HOLDER`.
 
-**R31 SAME CUSTOMER ON TWO JOBS.**
-- Each run has its own visit. Visits are never merged and are not unique per date.
-- A typical case is customer A on route N1 (REL) and an OTC task for A on the same day.
-- The driver app shows "also on `<code or task>` (`<outcome>`)". Day totals include both visits.
+**R31 SAME CUSTOMER ON TWO ROUTES, OR ON A ROUTE AND IN A SUBMISSION.**
+- Each run has its own visit. Visits are never merged and are not unique per date. A submission is a record of its own.
+- A typical case is customer A on route N1 (REL) and on route R1 (Recycling) on the same day, or on N1 with an OTC submission for A that day.
+- For another route the driver app shows "also on `<code>` (`<outcome>`)". Day totals include every visit and every submission.
 
 **R32 TOTALS.**
-- Totals are the sum of weights over collected visits, per waste-type code, rounded to 0.1 on output, in the type's unit.
-- A day's totals cover every route job and task job dated that day (its op_date), including collections made after midnight on a night shift.
+- Totals are the sum of weights over collected visits and over submissions that are not deleted, per waste-type code, rounded to 0.1 on output, in the type's unit.
+- A day's totals cover every route job dated that day and every submission stored under that day (its op_date), including collections made after midnight on a night shift.
+- Runs left by the old task feature are not counted (R19).
 - Totals are labelled "provisional" while any job of that day is `active` or `open`.
 
 ### Accounts, files, storage
@@ -508,8 +515,8 @@ The replay check (step 1) runs before the R28 checks. A retry whose response was
   - The driver app polls every 30 s while it is visible.
   - The office calendar polls every 30 s when its range contains today, and also on window focus.
   - **Rollover**: every polled response carries `today`. When it differs from the client's copy (the rollover has passed), the client refetches `/api/meta`; the calendar moves its Today marker and the driver app reloads its Today list. The client also sets one refetch timer for the duration (`day_ends_at` − `now`) taken from `/api/meta`, so a wrong phone clock does not matter. It never computes the rollover from its own clock.
-  - When `today` changes (from a poll or from that timer), the client **invalidates every query** (calendar ranges, routes, tasks, open drawers, the driver's jobs), re-arms the timer from the new `day_ends_at`, and decides whether to poll using the new today. So a calendar range that did not contain the old today (for example next week, viewed on Sunday night) also gets fresh `past`, `can_create`, `ops` and run statuses, and an open drawer drops edit controls that would now fail with `PAST_DATE_LOCKED`.
-- **Network.** Claim, switch, give back and assign need the network. Result writes and photos go through the phone outbox.
+  - When `today` changes (from a poll or from that timer), the client **invalidates every query** (calendar ranges, routes, submissions, open drawers, the driver's jobs), re-arms the timer from the new `day_ends_at`, and decides whether to poll using the new today. So a calendar range that did not contain the old today (for example next week, viewed on Sunday night) also gets fresh `past`, `can_create`, `ops` and run statuses, and an open drawer drops edit controls that would now fail with `PAST_DATE_LOCKED`.
+- **Network.** Claim, switch, give back and assign need the network. Result writes, submissions and photos go through the phone outbox.
 - **Audit log.** Every successful non-GET request appends one line to `data/audit/YYYY-MM.jsonl`: `{at, user_id, username, method, path, status, body}`. The keys `password`, `old` and `new` are removed from `body` at any depth, and file bytes are never logged.
 
 ---
@@ -552,7 +559,7 @@ backend/data/                  (git-ignored. On the VPS: /opt/wms/backend/data, 
   initial-admin.txt            first-start admin password (deleted after the first password change)
   plan.json      plan.json.bak
   users.json     users.json.bak
-  days/2026-11-11.json         one file per date: frozen plan (past dates) + runs
+  days/2026-11-11.json         one file per date: frozen plan (past dates) + runs + submissions
   files/0b/0b6e1c2a-....jpg    photos and signatures
   audit/2026-11.jsonl          one line per write request
 ```
@@ -564,14 +571,18 @@ backend/data/                  (git-ignored. On the VPS: /opt/wms/backend/data, 
   "frozen_through": "2026-11-10",
   "seeded_years": [2026],
   "settings": { "rollover_hour": 4 },
-  "seq": { "customer": 40, "route": 42, "task": 6 },
+  "seq": { "customer": 40, "route": 42 },
   "waste_types": [
     { "code": "REL", "name": "REL", "abbr": "REL", "unit": "kg", "weigh_method": "on_site",
-      "routable": true,  "recurring_tasks": false, "confirm_over": 1000, "active": true },
+      "routable": true,  "confirm_over": 1000, "active": true },
+    { "code": "RECYCLING", "name": "Recycling", "abbr": "RCY", "unit": "kg", "weigh_method": "on_site",
+      "routable": true,  "confirm_over": 1000, "active": true },
     { "code": "OTC", "name": "OTC", "abbr": "OTC", "unit": "kg", "weigh_method": "on_site",
-      "routable": false, "recurring_tasks": false, "confirm_over": 1000, "active": true },
+      "routable": false, "confirm_over": 1000, "active": true },
     { "code": "COMPACTOR", "name": "COMPACTOR", "abbr": "COMPACTOR", "unit": "kg", "weigh_method": "on_site",
-      "routable": false, "recurring_tasks": true,  "confirm_over": null, "active": true }
+      "routable": false, "confirm_over": null, "active": true },
+    { "code": "EROSE", "name": "EROSE", "abbr": "EROSE", "unit": "kg", "weigh_method": "on_site",
+      "routable": false, "confirm_over": null, "active": true }
   ],
   "trucks": [ { "plate": "SBA1234X", "active": true }, { "plate": "GBA1234X", "active": true } ],
   "holidays": [ { "date": "2026-12-25", "name": "Christmas Day" } ],
@@ -579,32 +590,25 @@ backend/data/                  (git-ignored. On the VPS: /opt/wms/backend/data, 
     { "id": 12, "code": "C0012", "name": "ABC Restaurant", "address": "12 Jalan Besar",
       "phone": "+65 9123 4567", "note": "bins at back lane", "waste_types": ["REL", "OTC"], "active": true },
     { "id": 40, "code": "C0040", "name": "Golden Bakery", "address": "5 Tuas South Ave 2",
-      "phone": "", "note": "", "waste_types": ["REL", "COMPACTOR"], "active": true }
+      "phone": "", "note": "", "waste_types": ["REL", "RECYCLING", "COMPACTOR"], "active": true }
   ],
   "routes": [
-    { "id": 5, "code": "N1", "color": 1, "type": "regular", "name": "North 1 · Woodlands", "note": "", "rev": 4,
+    { "id": 5, "code": "N1", "color": 1, "type": "regular", "waste_type": "REL", "name": "North 1 · Woodlands", "note": "", "rev": 4,
       "start": "2026-11-02", "end": null, "days": [1, 3, 5],
       "stops": [ { "customer_id": 12, "note": "3 bins" },
                  { "customer_id": 40, "note": "" } ] },
-    { "id": 7, "code": "S1", "color": 5, "type": "special", "name": "Sunday Market", "note": "", "rev": 1,
+    { "id": 7, "code": "S1", "color": 5, "type": "special", "waste_type": "REL", "name": "Sunday Market", "note": "", "rev": 1,
       "start": "2026-11-15", "end": null, "sun": true, "ph": true, "stops": [ { "customer_id": 21, "note": "" } ] },
-    { "id": 41, "code": "A1", "color": 2, "type": "adhoc", "name": "Adhoc 12 Nov", "note": "Call 11 Nov 09:10 (Mr Tan): overflow",
+    { "id": 9, "code": "R1", "color": 6, "type": "regular", "waste_type": "RECYCLING", "name": "Recycling · North", "note": "", "rev": 1,
+      "start": "2026-11-02", "end": null, "days": [1, 3, 5], "stops": [ { "customer_id": 40, "note": "" } ] },
+    { "id": 41, "code": "A1", "color": 2, "type": "adhoc", "waste_type": "REL", "name": "Adhoc 12 Nov", "note": "Call 11 Nov 09:10 (Mr Tan): overflow",
       "rev": 1, "date": "2026-11-12", "copied_from": null, "stops": [ { "customer_id": 12, "note": "" } ] },
-    { "id": 42, "code": "N1-25", "color": 1, "type": "special", "name": "North 1 · Woodlands (from Fri 25 Dec)", "note": "",
+    { "id": 42, "code": "N1-25", "color": 1, "type": "special", "waste_type": "REL", "name": "North 1 · Woodlands (from Fri 25 Dec)", "note": "",
       "rev": 1, "date": "2026-12-25", "copied_from": { "route_id": 5, "date": "2026-12-25" },
       "stops": [ { "customer_id": 12, "note": "3 bins" }, { "customer_id": 40, "note": "" } ] }
   ],
   "route_overrides": [
     { "route_id": 5, "date": "2026-11-18", "cancelled": false, "stops": null, "note": "use small truck" }
-  ],
-  "tasks": [
-    { "id": 3, "waste_type": "COMPACTOR", "customer_id": 40, "note": "Bin at loading bay", "rev": 2,
-      "start": "2026-11-03", "end": null, "days": [2, 5] },
-    { "id": 6, "waste_type": "OTC", "customer_id": 12, "note": "Old furniture", "rev": 1,
-      "date": "2026-11-11", "copied_from": null }
-  ],
-  "task_overrides": [
-    { "task_id": 3, "date": "2026-11-20", "cancelled": true, "note": "Customer closed for renovation" }
   ]
 }
 ```
@@ -613,11 +617,10 @@ Field notes:
 - **Routes.**
   - A route that has `date` is a one-off. Any other route is recurring.
   - In `stops`, array order is visit order. A stop is `{customer_id, note}`.
-  - `copied_from` (on a one-off route or task) links it to the occurrence it was copied from (R15, R19). The name `from` is used only by the change-schedule body.
-- **Overrides.**
-  - Route override: `stops: null` means inherit from the template.
-  - Task override: has only `cancelled` and `note`.
-- **Tasks.** A task that has `date` is a one-off; otherwise it is recurring (`start`, `end`, `days`).
+  - `copied_from` (on a one-off route) links it to the occurrence it was copied from (R15). The name `from` is used only by the change-schedule body.
+- **Overrides.** `stops: null` means inherit from the template.
+- **Route waste type.** Every route created from round 7 on stores `waste_type`. A record stored before has none: it reads as `REL` and is never given the field (R6a).
+- **Old task keys.** A data folder written before round 7 may also hold `tasks`, `task_overrides`, `seq.task`, and `recurring_tasks` on its waste types. They stay in the file exactly as they are through every save, and nothing reads them (R19). A new install has none of them.
 - **Holiday list.** It is kept sorted by date.
 - **Never deleted.** Customers and waste types are never deleted, so every id or code in history still resolves.
 
@@ -697,19 +700,26 @@ Singapore 2026, from the MOM list:
           ]
         }
       }
-    },
-    "t6": {
-      "job": "t6", "driver_id": 3,
-      "holds": [ { "driver_id": 3, "vehicle_no": "GBA1234X", "by": "self", "from": "2026-11-11T11:02:00+08:00", "to": null, "end": null } ],
-      "removed": [],
-      "visits": {}
     }
   },
-  "dropped_runs": []
+  "dropped_runs": [],
+  "submissions": {
+    "3f0c1b9d-6bcd-4f3a-9a1e-2b9d6a0c31f1": {
+      "id": "3f0c1b9d-6bcd-4f3a-9a1e-2b9d6a0c31f1", "date": "2026-11-11", "waste_type": "OTC", "vehicle_no": "GBA1234X",
+      "customer_id": 12, "outcome": "collected", "weights": { "OTC": 300.0 }, "tickets": {},
+      "photos": [], "signature": null, "reason": null, "note": "Old furniture", "why": null,
+      "driver_id": 3, "by": "user:3",
+      "customer": { "code": "C0012", "name": "ABC Restaurant", "address": "12 Jalan Besar" },
+      "captured_at": "2026-11-11T11:02:00+08:00", "received_at": "2026-11-11T11:02:03+08:00",
+      "rev": 1, "flags": [], "op_id": "5c0e7a1e-...",
+      "ops": [ { "op_id": "5c0e7a1e-...", "result": "applied" } ],
+      "history": []
+    }
+  }
 }
 ```
 - **Run.**
-  - It is addressed by `(date, job)`, where `job` = `r<route_id>` or `t<task_id>`. The file's `date` is the operational date (R1); on a night shift its hold and visit timestamps can fall on the next calendar day before the rollover, for example `2026-11-12T02:40:00+08:00`.
+  - It is addressed by `(date, job)`, where `job` = `r<route_id>`. The file's `date` is the operational date (R1); on a night shift its hold and visit timestamps can fall on the next calendar day before the rollover, for example `2026-11-12T02:40:00+08:00`.
   - `driver_id` is the current holder, or null.
   - `holds` is append-only. `end` is one of `finished`, `left`, `switched`, `released` or `reassigned`.
   - A run stores no status, no stop list and no copy of the route name.
@@ -720,24 +730,29 @@ Singapore 2026, from the MOM list:
   - `driver_id` is the driver credited with the collection.
   - `flags` is a subset of `OFF_PLAN`, `LATE`, `CONFLICT` and `OFFICE_EDITED`.
   - `history` holds every earlier version and every rejected body.
+- **Submission** (R17, R18).
+  - It is addressed by `(date, id)`; the file's `date` is the operational date the phone made it on.
+  - It has the fields of a visit plus `id`, `date`, `waste_type` and `vehicle_no`. `reason` and `why` are always null.
+  - `outcome` is `collected`, or `null` for a deleted submission (kept with its history, never listed or counted).
+  - `flags` is empty or `LATE`.
+  - A day file written before round 7 has no `submissions` key; that reads as none.
+- **Old task runs.** A day file written before round 7 may hold runs keyed `t<id>`. They stay in the file and are never read (R19).
 - **`plan` for a past date** (written by R13). It includes cancelled and holiday_skipped occurrences, and snapshots identity so that later renames never change the past:
 ```json
 [
-  { "key": "r5@2026-11-06", "kind": "route", "route_id": 5, "code": "N1", "color": 1, "type": "regular",
+  { "key": "r5@2026-11-06", "kind": "route", "route_id": 5, "code": "N1", "color": 1, "type": "regular", "waste_type": "REL",
     "name": "North 1 · Woodlands", "note": "", "status": "scheduled", "edited": false,
     "recurring": true, "days": [1, 3, 5], "sun": null, "ph": null, "copied_from": null,
-    "stops": [ { "customer_id": 12, "note": "3 bins" }, { "customer_id": 40, "note": "" } ] },
-  { "key": "t3@2026-11-06", "kind": "task", "task_id": 3, "waste_type": "COMPACTOR", "customer_id": 40,
-    "recurring": true, "days": [2, 5], "start": "2026-11-03", "end": null, "copied_from": null,
-    "note": "", "status": "scheduled", "edited": false }
+    "stops": [ { "customer_id": 12, "note": "3 bins" }, { "customer_id": 40, "note": "" } ] }
 ]
 ```
 The snapshot carries every field the drawer header and rows show, so a past date renders purely from it, even after "Delete route" or a schedule split. Only `covered_by` is computed on read (from the one-offs' `copied_from`), because a copy can be made from a past date later.
+An entry written before round 7 has no `waste_type` (it reads as `REL`). Entries of kind `"task"` in such a file stay there and are skipped (R19).
 
 ### 4.8 Derived shapes (computed on read, never stored)
 **RouteOccurrence**
 ```json
-{ "key": "r5@2026-11-11", "kind": "route", "route_id": 5, "code": "N1", "color": 1, "type": "regular",
+{ "key": "r5@2026-11-11", "kind": "route", "route_id": 5, "code": "N1", "color": 1, "type": "regular", "waste_type": "REL",
   "name": "North 1 · Woodlands", "date": "2026-11-11", "recurring": true, "days": [1,3,5], "sun": null, "ph": null,
   "status": "scheduled", "edited": false, "frozen": false, "note": "", "rev": 4,
   "copied_from": null, "covered_by": [],
@@ -748,14 +763,15 @@ The snapshot carries every field the drawer header and rows show, so a past date
 - `covered_by` is `[{"route_id", "code", "date"}]`: the one-off copies whose `copied_from` points at this occurrence. The UI renders it as "covered by N1-25 (Fri 25 Dec)".
 - `off_plan` lists visits in this run for customers that are not on the stop list (R28).
 
-**TaskOccurrence**
+**Submission** (as stored, §4.7; the driver API returns it without `ops` and `history`, the office API with both plus `"driver": "Ali"`)
 ```json
-{ "key": "t6@2026-11-11", "kind": "task", "task_id": 6, "waste_type": "OTC", "customer_id": 12,
-  "date": "2026-11-11", "recurring": false, "days": null, "status": "scheduled", "edited": false, "frozen": false,
-  "note": "Old furniture", "rev": 1, "copied_from": null, "covered_by": [],
-  "visit": VisitSummary|null, "run_status": "active", "run": RunSummary|null }
+{ "id": "3f0c1b9d-6bcd-4f3a-9a1e-2b9d6a0c31f1", "date": "2026-11-11", "waste_type": "OTC", "vehicle_no": "GBA1234X",
+  "customer_id": 12, "outcome": "collected", "weights": { "OTC": 300.0 }, "tickets": {}, "photos": [], "signature": null,
+  "reason": null, "note": "Old furniture", "why": null, "driver_id": 3, "by": "user:3",
+  "customer": { "code": "C0012", "name": "ABC Restaurant", "address": "12 Jalan Besar" },
+  "captured_at": "2026-11-11T11:02:00+08:00", "received_at": "2026-11-11T11:02:03+08:00", "rev": 1, "flags": [],
+  "op_id": "5c0e7a1e-...", "ops": [ { "op_id": "5c0e7a1e-...", "result": "applied" } ], "history": [] }
 ```
-- `covered_by` is `[{"task_id", "date"}]`, computed like the route version. A cancelled source row shows "→ Sat 21 Nov".
 **RunSummary**
 ```json
 { "driver": { "id": 3, "name": "Ali" }, "vehicle_no": "GBA1234X", "holders": ["Bala", "Ali"], "left_by": null,
@@ -797,34 +813,30 @@ for r in plan.routes:
 for each emitted recurring occurrence with an override on d:
   if override.cancelled and status == 'scheduled': status = 'cancelled'
   note = override.note ; edited = true
-stops = effectiveStops(r, d)       # R8: override.stops ?? route.stops, minus inactive/non-routable
+stops = effectiveStops(r, d)       # R8: override.stops ?? route.stops, minus inactive customers and customers without the route's waste type
 ```
 
-### 5.3 Task generation (server, `Schedule::tasksOn(plan, d)`)
-```
-for t in plan.tasks:
-  if t.date: if t.date == d: emit(t, 'scheduled'); continue
-  if t.start <= d and (not t.end or d <= t.end) and isoWeekday(d) in t.days:
-     emit(t, 'scheduled')          # holidays and Sundays included
-  apply task override (cancelled -> 'cancelled', note, edited)
-```
+### 5.3 Nothing is generated for the other waste types
+Nothing is generated for OTC, COMPACTOR and EROSE: no occurrence, no job and no line on the calendar. A submission exists only once a driver has made it (R17). The calendar reads a day's submissions only for that day's totals (§5.9).
 
 ### 5.4 What each kind of day allows
-| Day | regular | recurring special | adhoc | special one-off | tasks (OTC / COMPACTOR) |
-|---|---|---|---|---|---|
-| Mon–Sat work day | runs on its weekdays; a one-off copy is allowed (R15) | – | allowed | not allowed | allowed, run |
-| Mon–Sat PH | **paused** (`holiday_skipped`) | runs if `ph` | not allowed | allowed | allowed, run |
-| Sunday | never | runs if `sun` | not allowed | allowed | allowed, run |
-| Sunday that is a PH | never | runs once if `sun` or `ph` | not allowed | allowed | allowed, run |
+| Day | regular | recurring special | adhoc | special one-off |
+|---|---|---|---|---|
+| Mon–Sat work day | runs on its weekdays; a one-off copy is allowed (R15) | – | allowed | not allowed |
+| Mon–Sat PH | **paused** (`holiday_skipped`) | runs if `ph` | not allowed | allowed |
+| Sunday | never | runs if `sun` | not allowed | allowed |
+| Sunday that is a PH | never | runs once if `sun` or `ph` | not allowed | allowed |
+
+A submission can be made on any day (R17).
 
 `day.can_create`:
-- work day: `["regular", "adhoc", "task"]`;
-- rest day: `["special", "special_once", "task"]`;
+- work day: `["regular", "adhoc"]`;
+- rest day: `["special", "special_once"]`;
 - past day: `[]`.
 
 ### 5.5 Overrides, holidays and edits
-- An override changes one date of a recurring route (stops, note, cancelled) or of a recurring task (note, cancelled). Overrides are cleaned up per R9 and R19.
-- Adding or removing a holiday instantly recomputes every recurring route from today on. Stored one-offs are protected by `HOLIDAY_CONFLICT` (R16), and today's runs by `RUN_EXISTS` (R26). Tasks are unaffected.
+- An override changes one date of a recurring route (stops, note, cancelled). Overrides are cleaned up per R9.
+- Adding or removing a holiday instantly recomputes every recurring route from today on. Stored one-offs are protected by `HOLIDAY_CONFLICT` (R16), and today's runs by `RUN_EXISTS` (R26).
 - A holiday_skipped regular occurrence is not runnable. The office resolves it with Copy to date (R15): "Run on PH" (special one-off on the same date) or "Move to work day" (regular one-off). The paused row then shows "covered by N1-25 (Fri 25 Dec)".
 
 ### 5.6 Run overlay and status
@@ -837,13 +849,12 @@ for t in plan.tasks:
 - On a past date the office can still work on run data: enter, correct and close out results.
 
 ### 5.8 Order and grouping inside one day (used by every view)
-1. A **Tasks** group comes first: task occurrences sorted by waste-type order, then by customer name.
-2. **Routes** follow, scheduled and cancelled: adhoc first, then by code in natural order (R5).
-3. A **Paused** group comes last: the holiday_skipped regular routes, collapsed into one line.
+1. **Routes** come first, scheduled and cancelled: adhoc first, then by code in natural order (R5).
+2. A **Paused** group comes last: the holiday_skipped regular routes, collapsed into one line.
 
 ### 5.9 Calendar request
 - `GET /api/calendar?view=week|month&anchor=D[&week_start=sun]` returns the whole grid. Weeks start on Monday by default (`week_start=sun`: Sunday, as the office calendar asks), and the month grid is 6 × 7.
-- For each day the server sends `class`, `holiday`, `past`, `can_create`, `ops` (today and past days only), `totals`, and the occurrence lists.
+- For each day the server sends `class`, `holiday`, `past`, `can_create`, `ops` (today and past days only), `totals` (route visits plus that day's submissions, R32), and the route occurrences.
 - The client never computes a weekday, a day class, a status or a lock. It only renders, filters, searches and highlights.
 
 ---
@@ -857,7 +868,7 @@ for t in plan.tasks:
 ### 6.1 Route container (drawer) and draft
 - Clicking a route row (week view) or chip (month view) opens the **route drawer** for (route, date):
   - Header: colour bar, CODE, type tag, name, the rule ("Regular · Mon Wed Fri" / "Special · every Sunday + every PH" / "Adhoc · only Thu 12 Nov"), the note and the status line.
-  - Body: the stop list. Each row shows a drag handle (⠿), the customer, address, the customer's **routable** type tags only (REL) and the result, with ↑ ↓ ✕ controls. Clicking the seq number lets you type a new position ("move to #"), which helps on long lists.
+  - Body: the stop list. Each row shows a drag handle (⠿), the customer, address, the customer's **routable** type tags only (REL, RCY) and the result, with ↑ ↓ ✕ controls. Clicking the seq number lets you type a new position ("move to #"), which helps on long lists.
   - **Reorder** has three equal ways, and all of them only change the draft order (the same `arrayMove`):
     - **Drag and drop** (`@dnd-kit/core` + `@dnd-kit/sortable`, §11.1) by the ⠿ handle, so a click on the row still works:
       - mouse (`MouseSensor`): the drag starts after 5 px of movement;
@@ -867,7 +878,7 @@ for t in plan.tasks:
     - **↑ ↓** buttons, one step at a time.
     - **Move to #**: type a position in the seq field.
   - Visited rows (today with a run) can be reordered too; they keep their result. Nothing is saved until [Save]. The same `StopList` component is used by the Routes page template editor.
-  - OTC and COMPACTOR are never tagged inside a route container (user rule). A customer's OTC or COMPACTOR work appears only as an "also on: OTC task" link, and only when such a task exists that day. The same holds for route search hits and the driver's S2, S3 and S4 stop cards.
+  - OTC, COMPACTOR and EROSE never appear inside a route container (user rule). The header shows the route's waste-type tag (`REL` / `RCY`) next to the type tag. The same holds for route search hits and the driver's S2, S3 and S4 stop cards.
   - Footer: [Save] [Cancel] and a menu.
 - **Edits** go into a local draft keyed by the occurrence key:
   - add customer;
@@ -878,10 +889,10 @@ for t in plan.tasks:
 
   The draft shows an amber outline, struck-through removed rows, and sticky [Save] [Discard]. It survives the 30 s refetch.
 - **Customer picker.**
-  - It searches name, code and address, and lists **only routable customers** (R10). Customers with only OTC or COMPACTOR never appear.
+  - It searches name, code and address, and lists **only customers registered with the route's waste type** (R10). A customer without that type never appears, whatever other types it has.
   - It hides customers already in the list and archived customers.
   - It labels customers "also on N2 that day".
-  - It ends with **Create new customer**: name, address, phone and waste-type chips, with REL pre-ticked and at least one routable type required. The customer is created at once and added to the draft.
+  - It ends with **Create new customer**: name, address, phone and waste-type chips, with the route's waste type pre-ticked and required. The customer is created at once and added to the draft.
 - **Today with a run.**
   - Visited rows show their result and have no ✕.
   - Pending rows can be added, removed and reordered freely. The driver sees the change within 30 s.
@@ -925,6 +936,7 @@ for t in plan.tasks:
   - colour (10 swatches);
   - name;
   - note;
+  - waste type, shown read-only (it never changes, R6a);
   - Mon–Sat chips (regular) or Every Sunday / Every PH (special);
   - start and end.
 - **Apply** has two choices:
@@ -951,43 +963,31 @@ for t in plan.tasks:
   - The Adhoc code defaults to `A<n>`, its name to "Adhoc 12 Nov", and its note records the caller and the reason.
 - **Rest day**: [Special · every Sunday/PH] or [Special · this date only].
 - **Past day**: none of these are offered.
+- **Waste type**: every create form has a select of the active routable types (REL, Recycling), with the first one preselected. It cannot be changed afterwards (R6a).
 
-### 6.7 Urgent pickup (REL, the user's example)
+### 6.7 Urgent pickup (the user's example)
 - The dialog has:
   - date chips: [Today] [Next work day (default, from `/api/meta`)] [Pick…]. Whenever the date changes, the dialog calls `GET /api/routes/suggest-code?type=adhoc&date=…`, which returns the code, the day class and the resulting type;
-  - a multi-add customer picker (routable customers only) with quick-create.
+  - the waste type: REL (default) or Recycling. Changing it clears the picked customers;
+  - a multi-add customer picker (customers registered with that waste type only) with quick-create.
 - **Target:**
   - (•) **New one-off.** On a rest date the label visibly switches to "Special, only this date" with a one-line reason; it is never converted silently.
-  - ( ) **Add to an existing route on that date.** This is an "only this date" edit. If that route is running today, the driver gets the stops live.
+  - ( ) **Add to an existing route of that waste type on that date.** This is an "only this date" edit. If that route is running today, the driver gets the stops live.
 - It takes about 4 interactions.
-- A footer link reads "Is this OTC or COMPACTOR? Create a task instead" and opens §6.8.
 
-### 6.8 Tasks (OTC / COMPACTOR)
-- **"+ Task"** is in the top bar and in every day cell from today onward. The dialog has:
-  1. **Type**: chips of the active non-routable types (OTC, COMPACTOR).
-  2. **Customer**: a search over all active customers.
-     - Customers registered for the type are listed first.
-     - Others show [Add OTC to this customer], which PATCHes the customer and then selects it, because R17 needs the type registered.
-     - "Create new customer" pre-ticks the type.
-  3. **When**:
-     - One-off date: default is the clicked date or today; any day is allowed.
-     - Recurring (only when `recurring_tasks`): Mon–Sun chips, start (default the clicked date) and an optional end.
-     - A recurring task shows the hint "Runs on public holidays too; skip single dates if needed."
-  4. **Note**.
-
-  Save sends `POST /api/tasks`.
-- **Task drawer**, opened by clicking a task row:
-  - Content: type, customer (with address and phone), schedule, note, status and driver, the result (weights, ticket, photos, signature) and the history.
-  - Menu for a one-off: [Edit note] [Change date] [Delete].
-  - Menu for a recurring date: [Skip this date] / [Restore] [Move this date…] [Edit series (days, end)] [End series from date] [Delete series].
-  - Run actions as in §6.12.
-  - Every write is rev-checked (R20) and subject to R26 on today.
-- **Tasks page**: the full list (§9.2).
+### 6.8 Submissions page (office, read only)
+- Navigation: **Submissions** (`/submissions?date=YYYY-MM-DD`; no date = today). The day drawer of today and of past days links to that day's page.
+- It lists the submissions of one operational day (`GET /api/submissions?date=`), every driver's, in the order the server received them. Deleted submissions are not listed.
+- Head: [‹] [Today] [›], a date field (no future dates), the count and the totals per waste type of the rows shown.
+- Filters on the loaded day: waste type, driver, and customer (name or code).
+- Columns: time, type tag, customer (name and code), weight, ticket number, truck plate, driver, and photos / signature / flags (`LATE`).
+- [Details] opens a row: address, note, when the server received it, the photos and the signature (a click opens one full size), and the change history.
+- The page has no create, edit or delete (R17). Today's page refetches every 30 s.
 
 ### 6.9 Customers
-- "Edit customer" (from the Customers page or from a stop or task menu) saves at once and applies everywhere ("Changes this customer everywhere").
+- "Edit customer" (from the Customers page or from a stop menu) saves at once and applies everywhere ("Changes this customer everywhere").
 - ✕ on a stop removes the stop, never the customer.
-- Removing a waste type that is in use shows the `CUSTOMER_IN_USE` list with [Remove from these routes/tasks and save] (`detach: true`) or [Cancel].
+- Removing a waste type that is in use shows the `CUSTOMER_IN_USE` list with [Remove from these routes and save] (`detach: true`) or [Cancel].
 - **Archive**: a confirmation lists everything that will be removed, and the result dialog lists what was removed.
 - **Restore** re-adds nothing.
 
@@ -1005,21 +1005,20 @@ for t in plan.tasks:
   - a schedule change;
   - a one-off date change;
   - a holiday change;
-  - a task change: skip, move, delete, end or a date change;
   - a customer detach or archive.
 - **When nothing has been done yet** (resolved = 0), the dialog reads "Ali has N1 (0 done). [Release Ali and continue] [Cancel]". The second attempt is sent with `release_run`.
 - **When work has been done** (resolved ≥ 1), the dialog reads "Refused: Ali has done 3 of 8. Close out, or remove only the pending stops, then re-plan the leftovers." Today's menu items are disabled, with the tooltip "Ali has this job".
 
-### 6.12 Run actions (office; routes and tasks)
+### 6.12 Run actions (office)
 - **Today:**
   - [Assign driver ▾]: a list of active drivers, each showing their current route, so the office can see conflicts (R24).
   - [Release]: gives the job back. Shown only when the job has a holder.
   - [Close out]: every pending stop becomes missed with `not_visited`. On a `not_started` job, which has no run, it creates a holder-less run with every stop missed (R21).
   - [Enter / correct results].
 - **Past cells:**
-  - `incomplete`: [Close out] and [Re-plan leftovers…]. Re-plan opens Urgent pickup prefilled with the not-visited customers, or Copy for a task.
+  - `incomplete`: [Close out] and [Re-plan leftovers…]. Re-plan opens Urgent pickup prefilled with the not-visited customers.
   - `no_record`: [Enter results], a back-fill (R29), and [Close out], which marks every stop `not_visited` in one action instead of one dialog per stop.
-- **Result dialog.** Clicking any stop row or task opens it. It contains:
+- **Result dialog.** Clicking any stop row opens it. It contains:
   - outcome;
   - a weight per weighable type and tickets;
   - photos (view, add, remove) and signature (view, remove);
@@ -1045,33 +1044,33 @@ for t in plan.tasks:
 
 ### 7.2 Device-only states
 - **preview**: a selected but unconfirmed job. Nothing is written to the server and nothing is reserved.
-- **draft**: the form values of a stop or task. They are saved to IndexedDB on every change.
+- **draft**: the form values of a stop or submission. They are saved to IndexedDB on every change.
 - **outbox entry**: an unsent result write plus its photos.
 - **not sent**: an entry the server refused (422 or `NOT_HOLDER`). It stays visible and editable.
 
 ### 7.3 A driver's day
 1. **Log in** once with a username and password. The token lasts 30 days and is revoked by a password change or a deactivation.
-2. **Today (S1)** lists the jobs of the op_date (R1): a night shift from 22:00 Wed to 03:00 Thu works entirely on Wednesday's jobs, and Thursday's jobs appear at 04:00. S1 has a **My work** block and two tabs:
-   - My work shows the held route, the held tasks and any job the office assigned.
-   - **Routes** has the sections Needs driver, Available, Taken and Done.
-   - **Tasks** has the same sections: Needs driver, Available, Taken and Done.
-3. **Select** a route or task. This opens a read-only preview (S2 or S2T) with a truck-plate picker, pre-filled with this phone's last plate (or the plate of the driver's current route for a task).
+2. **Today (S1)** lists the routes of the op_date (R1): a night shift from 22:00 Wed to 03:00 Thu works entirely on Wednesday's jobs, and Thursday's jobs appear at 04:00. S1 has:
+   - **My work**: the held route, and a route the office assigned.
+   - **Routes**, in the sections Needs driver, Available, Taken and Done.
+   - **Other waste (no route)**: the button [Submit OTC / COMPACTOR / EROSE] and the driver's own submissions of today.
+3. **Select** a route. This opens a read-only preview (S2) with a truck-plate picker, pre-filled with this phone's last plate.
 4. **Confirm** = claim (R23). It needs the network.
-   - 201 or 200: the run view (route) or the result form (task) opens.
+   - 201 or 200: the run view opens.
    - 409 `RUN_TAKEN`: the app shows "Taken by Chong 07:45" and refreshes the list.
    - 409 `DRIVER_HAS_ACTIVE_RUN` (a route while holding another route): the Switch sheet opens (§7.5).
    - 422 `NOT_TODAY` or `NOT_RUNNABLE`: the list refreshes.
-5. **Each route stop (S4)**: enter a weight for each of the customer's routable types (REL), plus a ticket where `weigh_method = weighbridge`, optional photos, an optional signature and a note.
+5. **Each route stop (S4)**: enter the weight of the route's waste type (REL or Recycling), plus a ticket where `weigh_method = weighbridge`, optional photos, an optional signature and a note.
    - [Collected: save & next] saves the stop, puts it in the outbox and opens the next pending stop.
    - Or [Not collected], then a reason.
    - Stops can be done in any order.
-6. **A task (S4 for the task)**: the same form, with a single weight field for the task's type (OTC or COMPACTOR). On save the task becomes done, and the app returns to Today.
+6. **A free submission (S8)**, at any time, also while holding a route and with no signal: [Submit OTC / COMPACTOR / EROSE], pick the waste type, pick the customer (only customers registered with that type; searchable; the list is cached on the phone), then fill the same form with one weight field plus the truck plate. There is no claim. On save it goes to the outbox and the app returns to Today, where it is listed; tapping it reopens the form to change or delete it (R18).
 7. **Route end**:
    - When pending = 0: [Finish route].
    - Otherwise: [Leave route…] (S5), with two choices: give back (the route becomes open) or mark the rest not collected with a reason (the route becomes done).
-8. **Next job**: pick the next route (one route at a time) and take any tasks at any time.
+8. **Next job**: pick the next route (one route at a time).
 
-A customer on the route asks for extra bulky waste? The driver **calls the office**, because drivers cannot add customers or other waste types on site (the server enforces this: `NOT_ON_JOB`, `TYPE_NOT_ALLOWED`). The office creates an OTC task for that customer today, and the driver takes it from the Tasks tab, which is allowed while holding the route.
+A customer on the route asks for extra bulky waste? The driver **calls the office**, because drivers cannot add customers or other waste types on site (the server enforces this: `NOT_ON_JOB`, `TYPE_NOT_ALLOWED`). A customer that is registered with OTC, COMPACTOR or EROSE needs no call: the driver makes a submission (R17). Otherwise the office edits the customer or the route first.
 
 ### 7.4 Transitions (each is one locked server transaction)
 | # | Trigger | From → To | Effect |
@@ -1089,7 +1088,7 @@ A customer on the route asks for extra bulky waste? The driver **calls the offic
 | T11 | Day rollover (R1, default 04:00, not midnight) | active / open → incomplete; not_started → no_record | no write; the outbox can still deliver first results at any time (`LATE` unless captured before the rollover during the driver's hold, R28) and queued corrections until the edit deadline, rollover + 8 h = 12:00 by default (R28) |
 | T12 | Office back-fill | not_started / no_record → a run with no holder: open (today) or incomplete (past), or done once every stop is entered | R29 |
 
-Tasks use the same machine with a stop list of one customer: T1–T3, T4 (done when the single visit is resolved), T5, T6 (give back), T8, T9, T11 and T12. T7 does not apply, because tasks never conflict.
+Submissions have no state machine: a submission exists, or it was deleted (R17, R18).
 
 ### 7.5 Switch route midway
 - **When it is offered:**
@@ -1098,7 +1097,7 @@ Tasks use the same machine with a stop list of one customer: T1–T3, T4 (done w
 - **The sheet** reads: "Leave W2? 3 stops done, 5 left. The 5 go back to Needs driver; your 3 stay recorded under your name." It offers [Switch to ⚡A2] and [Cancel, keep W2].
 - **Server**: `claim {switch: true}` (T7) runs in one transaction. If the target is taken or not runnable, nothing changes and the driver keeps W2.
 - **Unsaved stop values**: if a stop form has any, the sheet warns first. The values stay as a device draft.
-- **Tasks the driver holds are unaffected.**
+- **Submissions are unaffected**: they do not belong to a route.
 
 ### 7.6 Corrections after submit (who, how, audit)
 | Who | What | Until when | How | Audit |
@@ -1112,11 +1111,16 @@ After the rollover (default 04:00), the previous day's jobs are no longer listed
 ### 7.7 Offline outbox (`src/driver/outbox.ts`, IndexedDB via `idb-keyval`)
 - **Stores:**
   - `files`: uuid → {blob, ext, uploaded}.
-  - `outbox`: key `<date>/<job>/<customer_id>` → {body, op_id, base_rev, file refs, created_at}.
+  - `outbox`: key `<date>/<job>/<customer_id>` (a submission entry has the job `sub:<uuid>`) → {body, op_id, base_rev, file refs, created_at}.
   - `notsent`: refused entries.
 - **Coalescing**: a new edit to the same stop replaces the entry with the new body and a new `op_id`, unless that entry is in flight. File blobs that are no longer referenced are deleted.
+- **Submissions** ride the same outbox (`src/driver/submission.ts`):
+  - The entry's job is `sub:<uuid>`; the uuid is made on the phone and is the submission's id (R17). Its body also carries `waste_type`, `customer_id` and `vehicle_no`.
+  - The entry's date is the operational date at the moment the form opens, `opDateNow`: the server's `today`, `now` and `day_ends_at` from the last `/api/driver/today` response, plus the time that has passed on the phone since that response arrived. Before the rollover it is `today`; after it, one day later for every 24 h. The phone's clock is never read as a date, so a wrong clock does not matter and a submission made offline after the rollover gets the new day.
+  - The flush sends such an entry to `PUT /api/driver/submissions/{date}/{id}`. A lost answer is sent again with the same id and `op_id`: the server replays it and no second record is made.
+  - A change made before the entry was sent replaces it (one request). A delete of a submission that was never sent is sent too, and the server has nothing to delete.
 - **Flush:**
-  - Entries are sent one at a time, in insertion order, with a 15 s timeout. For each entry, its photos and signature are uploaded first (`PUT /api/files/...`, which is idempotent), then the visit is sent with PUT.
+  - Entries are sent one at a time, in insertion order, with a 15 s timeout. For each entry, its photos and signature are uploaded first (`PUT /api/files/...`, which is idempotent), then the visit (or the submission) is sent with PUT.
   - A flush starts after every save, on the `online` event, on focus, and every 15 s (backing off to 60 s while it fails).
 - **Results:**
   - 200 (including a replay): the entry and its blobs are dropped, and `base_rev` is updated.
@@ -1128,7 +1132,7 @@ After the rollover (default 04:00), the previous day's jobs are no longer listed
 - **Eviction**: after login the app calls `navigator.storage.persist()`, so the browser does not evict the outbox under storage pressure.
 - **The UI:**
   - The run view merges server state with unsent entries, which carry a cloud icon until acknowledged.
-  - The last `/driver/today` and job responses are cached per user and shown at once with their data time.
+  - The last `/driver/today`, job, submit-customer and my-submissions responses are cached per user and shown at once with their data time.
 - **What needs signal**: claim, switch, give back and finish are disabled while offline, labelled "Needs signal".
 - **Opening the app offline**: a service worker (`vite-plugin-pwa`, served over HTTPS) caches the app shell, so the app opens with zero signal. Service workers need a secure context, so offline and phone tests always go through the VPS's HTTPS origin (M1b onward), never `http://<pc-ip>` on the local Windows PC.
 
@@ -1147,7 +1151,7 @@ After the rollover (default 04:00), the previous day's jobs are no longer listed
 | D10 calendar shows actuals | Frozen plan + run overlay, plus `no_record`. |
 | D11 closed / no waste / refused | Missed reasons. An optional photo can serve as evidence. |
 | D12 blank vs 0 | Every shown field is required, with a [0] chip when the stop has two or more weighable types (with one type, 0 alone is refused, so there is no chip and the hint points to Not collected → No waste). The server treats an absent type as 0 and requires at least one value > 0. |
-| D13 unregistered type | Not on site: only the customer's registered routable types are weighable (`TYPE_NOT_ALLOWED` otherwise). The driver calls the office, which edits the customer; the form updates on the next poll. Task: not applicable. |
+| D13 unregistered type | Not on site: only the route's waste type is weighable (`TYPE_NOT_ALLOWED` otherwise). A non-routable type of the same customer is submitted freely (R17); a type the customer is not registered with needs the office, which edits the customer. |
 | D14 customer types change mid-run | Pending stops refresh on poll. An open form never changes. Visits keep their snapshot. |
 | D15 waste-type list changes | R3: code, unit and routable are immutable, and deactivation is guarded. |
 | D16 typos | "," is normalised. `confirm_over` asks for confirmation. Corrections follow R28/R29, with history. |
@@ -1156,11 +1160,11 @@ After the rollover (default 04:00), the previous day's jobs are no longer listed
 | D19 dead phone / two devices | A run belongs to the driver, not the device. The same-principal rule (R30) applies. The office can back-fill. |
 | D20 forgotten Finish | Status is derived. The office has Release and Close out, and sees "last activity". |
 | D21 holiday changed on a day with runs | R26. |
-| D22 adhoc or task added today | A "New today" banner on the next poll. The office can also assign. |
+| D22 adhoc added today | A "New today" banner on the next poll. The office can also assign. |
 | D23 same customer on two jobs | R31. |
-| D24 one driver, several jobs | Route jobs one at a time, with a plate per hold. Tasks in parallel. |
-| D25 unplanned stop | **Not allowed** (user rule). The driver calls the office, which adds the customer to today's route or creates an OTC task. It shows on the phone within 30 s. |
-| D26 what drivers are offered | Scheduled, today, pending ≥ 1 (routes and tasks). |
+| D24 one driver, several jobs | Route jobs one at a time, with a plate per hold. Submissions at any time, each with its own plate. |
+| D25 unplanned stop | **Not allowed** (user rule). The driver calls the office, which adds the customer to today's route. It shows on the phone within 30 s. OTC, COMPACTOR and EROSE are submitted without the office (R17). |
+| D26 what drivers are offered | Scheduled routes of today with pending ≥ 1. For submissions: the active non-routable types and the customers registered with them. |
 | D27 report date | No moves exist. Copies are real-date one-offs, and totals use the job's date. |
 | D28 deployment | JSON + global lock. Linux VPS with Caddy (automatic HTTPS) + PHP-FPM, auto-start by systemd, nightly backup timer, one-shot `deploy/install.sh` (§11.4). Local trials on Windows with .bat files. |
 | D29 identity | User accounts (R33/R34). |
@@ -1187,29 +1191,29 @@ After the rollover (default 04:00), the previous day's jobs are no longer listed
 | Add a customer to today's route ("this date", "following" or Urgent pickup) | The stop appears with a NEW badge. A done run reopens (active if the holder is still set, otherwise open). |
 | Remove a pending customer, or archive/detach a customer | The stop disappears, with the toast "Office removed ABC Restaurant". A later offline collection for it is kept (`OFF_PLAN`). |
 | Reorder, change a stop note or the route note, edit a customer | Pending stops update. An open form is never re-rendered; the changes apply after it is saved. Submitted visits keep their snapshot. |
-| Create a task for today | It appears in the Tasks tab, with a "New task today" banner. |
+| Add a route for today (Urgent pickup, + Route) | It appears under Routes, with a "New today" banner. |
 | Assign a job to X | X sees "Assigned by office" in My work. The previous holder sees "Office moved N1 to Bala". |
-| Release | The holder sees "Office took back N1 / the OTC task" and returns to Today. |
+| Release | The holder sees "Office took back N1" and returns to Today. |
 | Skip, delete or end today's job with a run | Blocked by R26. With `release_run` (resolved = 0), the phone shows "Office cancelled". |
 | Close out | The job moves to Done. Pending stops show "not visited". |
 | Correct a visit | The phone shows the new value. A queued driver edit with an older `base_rev` gets 409, and its body is kept (`CONFLICT`). |
 | Back-fill | A job done on paper shows as done or open. |
 
 ### 8.3 How the calendar shows progress (status = icon + short text, never colour alone)
-Rows show glyph + short word + count, like the mockup the user approved ("◑ 李明 进行中 3/8", "待接手"). The route name is truncated first, so the row stays on one line. Task rows use the same pattern without the count. Where the table shows `zh/en`, the row shows only the word in the user's language.
+Rows show glyph + short word + count, like the mockup the user approved ("◑ 李明 进行中 3/8", "待接手"). The route name is truncated first, so the row stays on one line. Where the table shows `zh/en`, the row shows only the word in the user's language.
 
-| Status (`run_status`; the last row is the occurrence status) | Route row (week view, one line) | Task row | Detail (tooltip and drawer) |
-|---|---|---|---|
-| planned | `8` (stop count, muted) | – | "Planned" |
-| not_started | `○ 未领取/Unclaimed 0/8` | `○ 未领取/Unclaimed` | "Not started" |
-| active | `◑ Ali 3/8` | `◑ Ali` | "Ali · 3/8 · GBA1234X · REL 420.5 kg · last activity 10:12" (grey "quiet 25 min" after 15 min with no activity) |
-| open | `⇄ 待接手/Needs driver 3/8` (amber) | `⇄ 待接手/Needs driver` (amber) | "Needs driver · left by Bala 10:15" |
-| done | `✓ Ali 8/8` (green) | `✓ Ali` / `✗ Not collected` | "Done · 1 missed · REL 980 kg · Bala → Ali" |
-| incomplete | `! Incomplete 6/8` (red) | `! Incomplete` (red) | "Incomplete" + [Close out] |
-| no_record | `– No record` (grey) | `– No record` | [Enter results] [Close out] |
-| cancelled | struck-through ghost "skipped" | struck-through | [Restore] |
+| Status (`run_status`; the last row is the occurrence status) | Route row (week view, one line) | Detail (tooltip and drawer) |
+|---|---|---|
+| planned | `8` (stop count, muted) | "Planned" |
+| not_started | `○ 未领取/Unclaimed 0/8` | "Not started" |
+| active | `◑ Ali 3/8` | "Ali · 3/8 · GBA1234X · REL 420.5 kg · last activity 10:12" (grey "quiet 25 min" after 15 min with no activity) |
+| open | `⇄ 待接手/Needs driver 3/8` (amber) | "Needs driver · left by Bala 10:15" |
+| done | `✓ Ali 8/8` (green) | "Done · 1 missed · REL 980 kg · Bala → Ali" |
+| incomplete | `! Incomplete 6/8` (red) | "Incomplete" + [Close out] |
+| no_record | `– No record` (grey) | [Enter results] [Close out] |
+| cancelled | struck-through ghost "skipped" | [Restore] |
 
-- **Today's day header** shows the ops line `○3 ◑6 ⇄1 ✓2` and the totals "REL 2,410 kg · OTC 300 kg · COMPACTOR 5,200 kg" (provisional while any job is active or open).
+- **Today's day header** shows the ops line `○3 ◑6 ⇄1 ✓2` and the totals "REL 2,410 kg · OTC 300 kg · COMPACTOR 5,200 kg" (route results plus submissions; provisional while any job is active or open).
 - **Past day headers** show the totals plus counts of incomplete and no_record jobs.
 - **Month lines** show the same status in short form at the right: the glyph, the driver (active, done) and the count, e.g. `◑ Ali 3/8`, `○ 0/8`, `✓ Ali`; future dates show the stop count (muted). The full text is in the tooltip.
 - **Today's day drawer**, sorted Needs driver, Not started, Working, Done, is the live dispatch board. No extra page is needed.
@@ -1249,21 +1253,20 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
 - **Top bar** (laid out like a desktop calendar app):
   - a big title at the left: "November 2026" / "2026年11月" (month bold, year regular); the week view adds its date range in small text;
   - at the right: [‹] [Today] [›] (grouped) and [Week | Month] (Month is the default: no `view` in the URL = month, `?view=week` = week);
-  - [⚡ Urgent pickup] and [+ Task];
-  - navigation: Calendar, Routes, Tasks, Customers, Holidays, Settings, Users (admin only);
+  - [⚡ Urgent pickup];
+  - navigation: Calendar, Routes, Submissions, Customers, Holidays, Settings, Users (admin only);
   - user menu: language, change password, sign out everywhere;
   - the missing-holiday banner.
 - **Filter bar**:
   - search: route code, route name, or customer name or code;
   - type chips: `R`, `S` and `⚡A`;
-  - task chips, one per non-routable type: `OTC` and `COMPACTOR`. Every chip toggles visibility;
   - [Clear highlight], shown while a highlight or search is active;
   - month view only: [Expand all / Collapse all] for the collapsed cells.
 - **Legend row**: every route code that appears in the visible range, as `▌CODE short-name`, sorted A, R, S and then by code. Clicking a code highlights it.
 - **Highlight and search.**
   - Clicking a code (in the legend, a row or a chip) highlights that code on every date. Everything else dims to 18% opacity.
   - Clicking the same code again, or pressing Esc, clears the highlight.
-  - Search dims everything that does not match. It covers routes (code, name, stop customers) and tasks (customer).
+  - Search dims everything that does not match. It covers routes (code, name, stop customers).
   - Highlight and search are exclusive: the last one used wins.
 - **Date colours (both views)**: today's date (the op_date) is shown in **blue** (white digits in a filled blue circle or pill); a public holiday's date is shown in **red**. On a PH that is today, the blue wins and the holiday bar or tag stays red. Light and dark themes use the tokens `--cal-today`, `--cal-ph` and `--cal-ph-bg`.
 - **Week view**: 7 columns, Sunday to Saturday (`week_start=sun`, the same order as the month view). Each column has:
@@ -1271,27 +1274,22 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
     - Today (the op_date) gets the blue date, a "Today" tag and a blue accent ring. Between 00:00 and the rollover the tag stays on the previous date and reads "Today · until {time}" (§9.1), so the night shift is still visible as live.
     - Past days get a lock.
     - Rest days get a faint rose tint; a PH also gets a red date and a red "★ PH · name" tag.
-    - A summary line: "12 routes · 96 stops · 4 tasks · 1 paused".
+    - A summary line: "12 routes · 96 stops · 1 paused".
     - Today's ops line, and the totals for today and past days.
-  - **Tasks group**, at the top so that tasks are never buried under 10+ routes:
-    - With 3 tasks or fewer, each task is one row.
-    - With more than 3, the group collapses to one line, "▣ Tasks 5 · OTC 2 · COMPACTOR 3 · ○2 unclaimed ▸", which expands in place. It also expands automatically when a search or highlight matches a task in it.
-    - **Task row (one line)**: grey fill, rounded pill, **no colour bar**; then the abbr tag (`OTC` / `COMPACTOR`), "↻" for a recurring task, the customer name (ellipsis) and the status (glyph + short word, §8.3) at the right. It never looks like a route container.
-  - **Route rows (one line each)**: a 5 px colour bar, **CODE** (bold mono), the type tag (`R` / `S` / `⚡A`, with a dashed amber border for adhoc), the name (ellipsis, truncated first but never below about 3 characters), and the status glyph + short word + count at the right (§8.3). In a narrow day column (under about 300 px, e.g. a 1440 px laptop) the status word ("Unclaimed", "Needs driver") moves to the tooltip, like the month lines: "○ 0/10"; a driver's name stays ("◑ Devi 0/8"). Stops are not listed in the week view.
+  - **Route rows (one line each)**: a 5 px colour bar, **CODE** (bold mono), the type tag (`R` / `S` / `⚡A`, with a dashed amber border for adhoc), the route's waste-type tag (`REL` / `RCY`), the name (ellipsis, truncated first but never below about 3 characters), and the status glyph + short word + count at the right (§8.3). In a narrow day column (under about 300 px, e.g. a 1440 px laptop) the status word ("Unclaimed", "Needs driver") moves to the tooltip, like the month lines: "○ 0/10"; a driver's name stays ("◑ Devi 0/8"). Stops are not listed in the week view.
   - **Paused group**: "⏸ 3 regular routes paused (PH) ▸", counting only the routes that still need a decision ("⏸ 11 regular routes paused (PH) · 2 covered"). Expanded rows offer [Run on PH] and [Move to work day…]; a covered row shows "→ N1-25 Fri 25 Dec" once.
-  - **Footer** (today and later): [+ Route] [+ Task].
+  - **Footer** (today and later): [+ Route].
 - **Month view** (the default view; modelled on the Apple Calendar month view the user sent, Round 5):
   - A header row of weekday names, **Sunday to Saturday** (`week_start=sun`), and only the week rows that hold a day of the month (4–6 rows of the server's 6 × 7 grid). Thin gridlines, no gaps.
   - Each cell: the day number at the top right (about 19 px; the 1st of a month reads "Nov 1" / "11月1日"; days of other months muted), today in the blue circle and a PH in red (see Date colours). Today and past days show the **day's totals per waste type** left of the number, small and muted ("REL 1,475.5 kg"; tooltip adds "provisional" while the day is open), as in the week header (R32).
   - A PH cell starts with a red-tinted, full-width **holiday bar** "★ Deepavali (observed)". Paused PH routes follow as one line "⏸ 12 paused ▸" ("⏸ 11 paused · 1 covered ▸" once some are covered; not counted in the 4 below), which opens the day drawer ([Run on PH], [Move to work day…]).
-  - Then **one line per item**: routes first (day order, §5.8), then tasks, after the type and task filters.
-    - Route line: colour bar, **CODE** (bold mono), type tag (`R` / `S` / `⚡A`; adhoc gets a dashed amber outline), the name (ellipsis, truncated first) and a short status at the right (§8.3 month lines). Skipped dates are struck through.
-    - Task line: grey pill, the abbr tag (`OTC` / `COMPACTOR`), "↻" when recurring, the customer and a short status.
+  - Then **one line per route** (day order, §5.8), after the type filters.
+    - Route line: colour bar, **CODE** (bold mono), type tag (`R` / `S` / `⚡A`; adhoc gets a dashed amber outline), the waste-type tag (`REL` / `RCY`), the name (ellipsis, truncated first) and a short status at the right (§8.3 month lines). Skipped dates are struck through.
     - Highlight and search dim lines the same way as rows.
-  - **Collapse rule**: a cell with **more than 4 lines** shows the first 4 and then "N more ▾" (tooltip: the hidden codes / tasks). Clicking it expands the cell in place, with "Show less ▴" at the end. Cells with 4 lines or fewer have no control. The expanded state is kept per date by the page, so the 30 s refetch never collapses it; a cell also opens by itself while a search or highlight matches one of its hidden lines.
-  - **Clicks**: a route line opens that route's drawer (§6.1: edit stops, reorder, …); a task line opens the task drawer; the day number opens the **day drawer** (about 460 px), which renders the same column as the week view. Today and later cells get a **"+"** at the top left (shown on hover or focus, always on touch screens) with the same create menu as the week view's footer (the route kinds of `can_create`, and + Task), so routes are added without leaving the month view.
+  - **Collapse rule**: a cell with **more than 4 lines** shows the first 4 and then "N more ▾" (tooltip: the hidden codes). Clicking it expands the cell in place, with "Show less ▴" at the end. Cells with 4 lines or fewer have no control. The expanded state is kept per date by the page, so the 30 s refetch never collapses it; a cell also opens by itself while a search or highlight matches one of its hidden lines.
+  - **Clicks**: a route line opens that route's drawer (§6.1: edit stops, reorder, …); the day number opens the **day drawer** (about 460 px), which renders the same column as the week view; on today and past days its header links to that day's Submissions page (§6.8). Today and later cells get a **"+"** at the top left (shown on hover or focus, always on touch screens) with the same create menu as the week view's footer (the route kinds of `can_create`), so routes are added without leaving the month view.
 - **Route drawer**: §6.1.
-- **Task drawer**: §6.8.
+- **Submissions page**: §6.8.
 - **Split routes** (R12 / R14): a route split by a "following" save or a schedule change is stored as several records with the same code, but every office screen treats it as **one route**. The records are grouped by the server's `series` (or, for data without it, by code, type and periods that follow each other), and the route's real period is `route_start` / `route_end` (or the first record's start and the last one's end).
   - The route drawer header shows the route's period ("Regular · Mon Wed Fri · from 11 Nov"), never the split boundary ("until 19 Nov") of the record the date belongs to.
   - "End route from D" is sent to the record that runs on D.
@@ -1307,7 +1305,6 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
     - Under "Apply schedule changes", one notice per other part of a split route that has a schedule of its own: what it keeps and what it will run after the save ("Already planned: from Mon 21 Dec this route runs Tue Thu. That plan is kept; …"). It updates while the clerk ticks weekdays, switches Apply or picks the date (§6.5, "Said before the save").
   - Route create (one form per type)
   - Urgent pickup
-  - Task create / edit
   - Result (visit)
   - Run exists. When no driver holds the job any more but stops are done (the office took it back), the title reads "Work is already done on this job today" and the text "Refused: 3 stops of E1 are already done today (no driver holds it now). Close out, …", never "nobody has done 3".
   - Customer in use / archive result
@@ -1323,13 +1320,10 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
   - Before the save, below the Apply choice, one notice per other part whose customers after the save differ from the list being saved, naming the customers it also has and the ones it does not have (§6.5, "Said before the save"). The notices scroll in an area capped at about a quarter of the screen's height, so the stop list and Save stay on screen.
 - Actions: [Change schedule from date…], [End], [Delete]. On a split route they act on the whole route: [Delete] names every part it removes, and [End] goes to the part that runs on the chosen date.
 
-**Tasks page.**
-- A table with these columns: type, customer, schedule ("Once Sat 15 Nov" / "Tue, Fri from 17 Nov"), end, next date, note and today's status.
-- Filters: type, one-off or recurring, and active or ended.
-- Actions: Edit, End, Delete.
+**Submissions page.** Per §6.8.
 
 **Customers page.**
-- A searchable table with these columns: code, name, address, waste-type tags, routes (codes), tasks (types), and an archived filter.
+- A searchable table with these columns: code, name, address, waste-type tags, routes (codes), and an archived filter.
 - The form requires at least one waste-type chip.
 - Actions: [Archive] (with a removal preview) and [Restore].
 
@@ -1337,7 +1331,7 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
 
 **Settings page.**
 - **Waste types** (admin):
-  - Columns: code, name, abbr, unit, weigh method (On site / Weighbridge), routable (read-only after create), recurring tasks, confirm-over, active, and drag order (the same dnd-kit sortable list as the route drawer).
+  - Columns: code, name, abbr, unit, weigh method (On site / Weighbridge), routable (read-only after create), confirm-over, active, and drag order (the same dnd-kit sortable list as the route drawer).
   - There is no delete.
 - **Trucks** (office): the vehicle list, a list of plates, each with an active toggle. Drivers pick their plate only from the active plates (R23).
 - **Day rollover** (admin; read-only for office users): an hour picker from 00:00 to 06:00, default 04:00, with the hint "Work done before this hour counts for the previous day (night shifts). The calendar's Today, driver lists, claims, locks and the edit deadline all follow it. Set it between the end of the latest night shift and the start of the earliest morning shift: a day's jobs cannot be claimed before that hour." A change that would move today is refused with `ROLLOVER_SHIFTS_TODAY` and the message "Try again after {retry_after}" (R1).
@@ -1353,10 +1347,10 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
 
 **S1 Today.**
 - **Top bar**: the op_date (between 00:00 and the rollover: "Wed 11 Nov · night shift until {time}. Thu 12 Nov jobs appear at {time}", §9.1), the driver's name, and a sync pill: "Synced 10:14" / "2 unsent" / "Offline · data from 10:12".
-- **My work**: a "Continue N1 3/8" card and one card per held task. Jobs assigned by the office show an "Assigned by office" tag.
-- **Tabs**: [Routes (12)] [Tasks (4)].
-  - **Route card** (72 px): colour bar, **CODE in 20 px mono**, type tag, name, "8 stops", the first 3 customers, the note and the status. A taken route is grey and cannot be tapped ("Chong 4/10"). A route the office took back reads "⇄ Needs driver 3/10 · taken back by office" / "办公室已收回" (`released_by_office`); one a driver gave back reads "· left by Bala".
-  - **Task card**: the abbr badge (`OTC` / `COMPACTOR`), "↻" for a recurring task, the customer name and address, the note, the status, and "also on your route N1" where it applies.
+- **My work**: a "Continue N1 3/8" card. A route assigned by the office shows an "Assigned by office" tag.
+- **Routes (12)**: a heading with the count, then the sections Needs driver, Available, Taken and Done.
+  - **Route card** (72 px): colour bar, **CODE in 20 px mono**, type tag, waste-type tag (`REL` / `RCY`), name, "8 stops", the first 3 customers, the note and the status. A taken route is grey and cannot be tapped ("Chong 4/10"). A route the office took back reads "⇄ Needs driver 3/10 · taken back by office" / "办公室已收回" (`released_by_office`); one a driver gave back reads "· left by Bala".
+- **Other waste (no route)**: the button [+ Submit OTC / COMPACTOR / EROSE] (the abbreviations of the active non-routable types), then one card per submission of mine today: the type tag, the customer, the weight and the plate, and "not sent yet" while it is still in the outbox. Tapping a card reopens it (S8).
 - **Banners**: "New today" for new jobs this driver can still act on (not done, not taken by someone else). The "Not sent: show the office" list appears when it is not empty.
 
 **S2 Route preview (= select).**
@@ -1366,19 +1360,15 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
   - If the driver holds another route, it reads [Switch to this route] and opens the sheet in §7.5.
   - Offline, it is disabled and reads "Needs signal".
 
-**S2T Task preview.**
-- Content: the type, customer, address, [Navigate] [Call], the note and the plate select.
-- [Confirm: I take this task]. It works while the driver holds a route.
-
 **S3 Run (route).**
 - Header: code, progress "3 / 8", and the totals per type.
-- Pending stops as large cards in seq order, with a NEW badge and "also on …" where they apply. Cards show only routable type tags (`weigh_types`), never OTC or COMPACTOR (§6.1).
+- Pending stops as large cards in seq order, with a NEW badge and "also on …" where they apply. Cards show only the route's waste type (`weigh_types`), never OTC, COMPACTOR or EROSE (§6.1).
 - A collapsible Done list: ✓ or ✗, the weights, and a cloud icon while unsent.
 - [Finish route] when pending = 0. Otherwise, in the overflow menu: [Leave route…] and [⇄ Switch route].
 
-**S4 Result form** (a route stop, or a task):
+**S4 Result form** (a route stop, or a submission):
 - The customer name in large type, the address with [Navigate] (a Google Maps or Waze link) and [Call], the stop note and the customer note.
-- **One field per weighable type**, rendered from the stop's `weigh_types` (route: the customer's registered routable types; task: the task's type). There is no way to add another type on site.
+- **One field per weighable type**, rendered from the stop's `weigh_types` (route: the route's one waste type; submission: the type the driver picked). There is no way to add another type on site.
   - a label "REL (kg)";
   - `inputmode=decimal`, a 28 px font, "," accepted;
   - a [0] chip (only when the stop has two or more weighable types);
@@ -1387,12 +1377,12 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
 - [Add photo]: the camera opens, and thumbnails appear, up to 5.
 - [Signature]: a full-screen finger pad, with Clear and Save.
 - An optional note.
-- [Collected: save] in big green. For a route stop it then goes to the next stop (only while the driver still holds the route); for a task, back to Today.
+- [Collected: save] in big green. For a route stop it then goes to the next stop (only while the driver still holds the route); for a submission, back to Today.
 - The form also watches the job: when the office releases or reassigns it, the phone says "Office took back N1" / "Office moved N1 to Bala" and returns to Today, as the run view does (§8.2).
 - A stop with an unsent result always opens with its queued values, photos, signature and note (the form waits until the phone's outbox has been read).
-- [Not collected] opens a reason sheet: No waste / Closed / No access / Refused / Other….
+- [Not collected] (route stops only: nothing was planned for a submission) opens a reason sheet: No waste / Closed / No access / Refused / Other….
 - When the form is reopened from Done (today's jobs only): [Save correction] and [Undo].
-- For a task, the overflow menu has [Give back] while the result is not yet saved.
+- A submission's form also has the **truck plate** select (required, pre-filled with the phone's last plate). Reopened, it offers [Save correction] and [Delete this submission].
 
 **S5 Leave sheet.** "5 stops not done" with three choices: [Give back: another driver or the office can take them], [Mark all not collected…] (asks for a reason), [Cancel].
 
@@ -1400,12 +1390,18 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
 
 **S7 Not sent.** Refused entries with the server's reason. Each one can be opened, edited and resent, or shown to the office. An entry refused with `TICKET_REQUIRED` opens with that ticket field. A reply that is not the API's JSON (a Wi-Fi sign-in page, a proxy page) counts as no signal: the result stays queued and is resent, it never goes to Not sent.
 
+**S8 Submit (free submission).**
+- Step 1, **waste type**: one button per active non-routable type (OTC, COMPACTOR, EROSE). With only one type it is preselected.
+- Step 2, **customer**: the customers registered with that type, from the cached `GET /api/driver/customers` list, with a search over name, code and address. At most 50 are shown at a time ("N more: type to search").
+- Step 3: the S4 form with one weight field and the truck plate. Saving puts the submission in the outbox and returns to Today.
+- It works with no signal once the phone has loaded Today and the customer list.
+
 **Tap counts:**
 - start a route: 2 taps;
 - each stop: typing the weight + 1 tap;
 - a not-collected stop: 2 taps;
 - switch route: 3 taps;
-- take and complete a task: 2 taps + typing.
+- a free submission: 3 taps + typing.
 
 ---
 
@@ -1427,7 +1423,7 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
 - **Auth**: `Authorization: Bearer <token>` on every endpoint except `POST /api/login` and `GET /api/health`.
 - **Path parameters**:
   - dates are `YYYY-MM-DD`;
-  - jobs are `r<route_id>` or `t<task_id>`;
+  - jobs are `r<route_id>`;
   - runs are `/runs/{date}/{job}`.
 - **Headers**: JSON responses send `Cache-Control: no-store`.
 
@@ -1449,7 +1445,7 @@ GET /api/meta ->
 {"today":"2026-11-11","now":"2026-11-11T07:40:02+08:00","timezone":"Asia/Singapore","next_work_day":"2026-11-12",
  "rollover_hour":4,"day_ends_at":"2026-11-12T04:00:00+08:00",
  "me":{"id":2,"username":"mei","name":"Mei","role":"office","lang":"zh"},
- "waste_types":[{"code":"REL","name":"REL","abbr":"REL","unit":"kg","weigh_method":"on_site","routable":true,"recurring_tasks":false,"confirm_over":1000,"active":true}, …],
+ "waste_types":[{"code":"REL","name":"REL","abbr":"REL","unit":"kg","weigh_method":"on_site","routable":true,"confirm_over":1000,"active":true}, …],
  "trucks":["SBA1234X","GBA1234X"],
  "config":{"max_photos":5,"driver_edit_grace_hours":8}}
 ```
@@ -1461,22 +1457,22 @@ GET /api/calendar?view=week|month&anchor=2026-11-11[&week_start=mon|sun] ->
 {"view":"week","week_start":"mon","from":"2026-11-09","to":"2026-11-15","today":"2026-11-11","prev_anchor":"2026-11-02","next_anchor":"2026-11-16",
  "missing_holiday_years":[2027],
  "days":[{"date":"2026-11-11","dow":3,"class":"work","holiday":null,"past":false,"in_month":true,
-          "can_create":["regular","adhoc","task"],
+          "can_create":["regular","adhoc"],
           "totals":{"REL":2410.0,"OTC":300.0},"provisional":true,
           "ops":{"not_started":3,"active":6,"open":1,"done":2,"incomplete":0,"no_record":0}}],
  "routes":[RouteOccurrence…],
- "tasks":[TaskOccurrence…],
  "customers":{"12":{"id":12,"code":"C0012","name":"ABC Restaurant","address":"12 Jalan Besar","waste_types":["REL","OTC"],"active":true}}}
 ```
 - `week_start` (optional, default `mon`; anything else than `mon` or `sun` is `422 VALIDATION`) sets the first column. With `sun`: the week view is the Sunday on or before the anchor to the Saturday after it, and the month view is the 42 days from the Sunday on or before the 1st (a month whose 1st is a Sunday starts on the 1st). `prev_anchor` / `next_anchor` keep their meaning (± 7 days; the 1st of the previous / next month). The office calendar always sends `sun`.
 - `ops` is present only for today and past days.
+- `totals` counts the collected route visits and that day's submissions (R32). There is no list of tasks or submissions in this response.
 - `customers` covers every customer referenced in the range, archived ones included.
 - Occurrences are already sorted per §5.8.
 - A recurring route occurrence also carries `route_start` / `route_end`: the route's real period when a split (R12/R14) made it several records (§6.5); `start` / `end` are the record's own. Both are null for a one-off.
 
 ### 10.5 Routes and containers (office)
 ```
-GET    /api/routes?ended=0      -> [{"id","code","color","type","name","days"|"sun","ph"|"date","start","end","series","route_start","route_end",
+GET    /api/routes?ended=0      -> [{"id","code","color","type","waste_type","name","days"|"sun","ph"|"date","start","end","series","route_start","route_end",
                                      "stop_count","next_date","route_next_date","today_status","rev"}]
        (one row per route record; the records of a split route share "series" and route_next_date is the route's next date)
 GET    /api/routes/{id}         -> Route + "overrides":[override dated >= today, of every live record of a split route] + "next_date","route_next_date"
@@ -1484,15 +1480,18 @@ GET    /api/routes/{id}         -> Route + "overrides":[override dated >= today,
        (parts: the records an edit of this one reaches, sorted by start: the live records of a split route, or only
         this one when it has ended; null for a one-off. The office predicts from them what a later part keeps, §6.5)
 POST   /api/routes
-  {"type":"regular","code":"N1","color":null,"name":"North 1","note":"","start":"2026-11-16","end":null,"days":[1,3,5],"stops":[{"customer_id":12,"note":"3 bins"}]}
-  {"type":"special","code":"S1","name":"Sunday Market","start":"2026-11-15","sun":true,"ph":true,"stops":[…]}
-  {"type":"special","code":"S2","name":"PH run","date":"2026-12-25","stops":[…]}
-  {"type":"adhoc","code":"A1","name":"Adhoc 12 Nov","note":"Call 11 Nov: overflow","date":"2026-11-12","stops":[…]}
+  {"type":"regular","waste_type":"REL","code":"N1","color":null,"name":"North 1","note":"","start":"2026-11-16","end":null,"days":[1,3,5],"stops":[{"customer_id":12,"note":"3 bins"}]}
+  {"type":"special","waste_type":"REL","code":"S1","name":"Sunday Market","start":"2026-11-15","sun":true,"ph":true,"stops":[…]}
+  {"type":"special","waste_type":"RECYCLING","code":"S2","name":"PH run","date":"2026-12-25","stops":[…]}
+  {"type":"adhoc","waste_type":"REL","code":"A1","name":"Adhoc 12 Nov","note":"Call 11 Nov: overflow","date":"2026-11-12","stops":[…]}
   -> 201 Route (color auto-assigned when null) ; warning EMPTY_ROUTE
+     | 422 VALIDATION (waste_type missing) | TYPE_NOT_ROUTABLE | CUSTOMER_NOT_ROUTABLE {"customer_id","name","waste_type"}
+       (waste_type: the one type the route collects, an active routable type; it never changes, R6a)
 PATCH  /api/routes/{id} {"rev":4,"code"?,"color"?,"name"?,"note"?,"days"?,"sun"?,"ph"?,"start"?,"end"?,"date"?,"stops"?,"parts"?,"release_run"?} -> Route
        (stops = the full template list. On a live record of a split route the edit reaches every live record, "end" is the
         route's end and "start" its first start (§6.5); the result is the record, or the record that now holds the end
         when the end deleted the opened one)
+        A resent "type" or "waste_type" must be unchanged: 422 TYPE_IMMUTABLE.
 POST   /api/routes/{id}/change-schedule {"rev":4,"from":"2026-12-01","days":[2,4],"end"?:null,"stops"?:[…],"parts"?:[…]} -> {"ended":Route,"created":Route}
        (schedule fields and stops are optional; the "following" save of R12 sends only stops. "from" may be in any live
         record of a split route; when it is a record's first day, "created" is that record with the new schedule and
@@ -1508,34 +1507,44 @@ PUT    /api/routes/{id}/dates/{date}
 DELETE /api/routes/{id}/dates/{date}?rev=4 -> reset to route default (deletes the override)
 POST   /api/routes/{id}/dates/{date}/copy {"rev":4,"to":"2026-12-26","code":"N1-26","name":"…","skip_source":false,"release_run"?:false} -> 201 {"created":Route}
        (release_run only with skip_source = true and src = today, R26)
+       (the copy keeps the source's waste_type)
 GET    /api/routes/suggest-code?type=adhoc|special|copy&date=2026-11-12[&route_id=5]
        -> {"code":"A2","class":"work","holiday":null,"type":"adhoc"|"special"|"regular"}
        (type=copy applies the R5 copy rule and the R15 type rule for route_id; codes in use are skipped)
 ```
 
-### 10.6 Tasks (office)
+### 10.6 Submissions (driver writes, office reads)
 ```
-GET    /api/tasks?type=OTC&kind=one_off|recurring&ended=0 -> [{"id","waste_type","customer":{id,code,name},"date"|"start","end","days","note","next_date","today_status","rev"}]
-GET    /api/tasks/{id}          -> Task + "overrides":[…]
-POST   /api/tasks {"waste_type":"OTC","customer_id":12,"date":"2026-11-15","note":"Old furniture"}
-POST   /api/tasks {"waste_type":"COMPACTOR","customer_id":40,"start":"2026-11-17","end":null,"days":[2,5],"note":""}
-       -> 201 Task | 422 TYPE_ROUTABLE | CUSTOMER_LACKS_TYPE | RECURRING_NOT_ALLOWED | PAST_DATE_LOCKED
-PATCH  /api/tasks/{id} {"rev":2,"note"?,"date"?,"days"?,"start"?,"end"?,"release_run"?} -> Task | 422 TASK_FIELD_IMMUTABLE
-DELETE /api/tasks/{id}?rev=2[&release_run=1] -> 204
-PUT    /api/tasks/{id}/dates/{date} {"rev":2,"cancelled":true,"note":"Closed","release_run":false} -> {"task":Task,"occurrence":TaskOccurrence}
-DELETE /api/tasks/{id}/dates/{date}?rev=2 -> reset
-POST   /api/tasks/{id}/dates/{date}/copy {"rev":2,"to":"2026-11-21","skip_source":true,"release_run"?:false} -> 201 {"created":Task}
-       (release_run only with skip_source = true and src = today, R26)
+GET /api/driver/customers                           (driver)
+  -> [{"id":50,"code":"C0050","name":"Only OTC Co","address":"9 Kallang Rd","waste_types":["OTC"]}]
+     (active customers with at least one active non-routable type; waste_types holds only those types; sorted by name)
+GET /api/driver/submissions[?date=2026-11-11]       (driver; no date = today)
+  -> {"today":"2026-11-11","date":"2026-11-11","submissions":[Submission…]}
+     (mine, not deleted, without ops and history, in the order the server received them)
+PUT /api/driver/submissions/{date}/{id}             (driver; id = a UUID v4 made on the phone)
+  {"op_id":"…","base_rev":0,"waste_type":"OTC","customer_id":50,"vehicle_no":"GBA1234X","outcome":"collected",
+   "weights":{"OTC":300},"tickets":{},"photos":["0b6e….jpg"],"signature":null,"note":"","captured_at":"2026-11-11T11:02:00+08:00"}
+  {"op_id":"…","base_rev":1,"outcome":null}                                              (delete)
+  -> 201 (new) | 200 (changed, deleted, replay): {"submission":Submission|null,"replay":false} ; warning LATE
+  -> 404 NOT_FOUND (the id is not a UUID; another driver's submission) | 403 FORBIDDEN (not a driver)
+  -> 422 NOT_TODAY {"today","oldest"} | TYPE_ROUTABLE | TYPE_NOT_ALLOWED | CUSTOMER_INACTIVE | CUSTOMER_LACKS_TYPE
+         | VEHICLE_REQUIRED | VEHICLE_UNKNOWN | WEIGHT_INVALID | WEIGHT_REQUIRED | TICKET_REQUIRED | FILE_MISSING
+         | EDIT_WINDOW_CLOSED {"deadline"} | VALIDATION (outcome "missed"; a changed waste_type or customer_id)
+GET /api/submissions?date=2026-11-11                (office, admin; no date = today)
+  -> {"today":"2026-11-11","date":"2026-11-11","totals":{"OTC":300.0},"submissions":[Submission + "driver":"Ali" …]}
+     (every driver's, not deleted, with ops and history; there is no office write in this version)
 ```
+- Rules: R17 and R18. Submission: §4.8.
+- `/api/tasks…` no longer exists (404, R19).
 
 ### 10.7 Customers, holidays, waste types, trucks, users, drivers
 ```
-GET   /api/customers?q=abc&archived=0&routable=1&type=OTC -> [Customer + "routes":["N1","S1"] + "tasks":["OTC"]]   (codes of routes and task types that use it from today on)
-GET   /api/customers/{id}      -> Customer + "routes":[{"route_id","code","name","type"}] + "tasks":[{"task_id","waste_type","schedule"}]
+GET   /api/customers?q=abc&archived=0&routable=1&type=OTC -> [Customer + "routes":["N1","S1"]]   (codes of routes that use it from today on)
+GET   /api/customers/{id}      -> Customer + "routes":[{"route_id","code","name","type","waste_type"}]
 POST  /api/customers {"code"?,"name","address","phone","note","waste_types":["REL"]} -> 201 Customer
 PATCH /api/customers/{id} {"name"?,"address"?,"phone"?,"note"?,"waste_types"?,"detach"?,"release_run"?}
-      -> Customer (+ "removed":[…] when detach) | 409 CUSTOMER_IN_USE {"routes":[…],"tasks":[…]}
-POST  /api/customers/{id}/archive {"release_run"?} -> {"removed":[{"kind":"route","route_id":5,"code":"N1","where":"template"|"override"|"one-off","date":null},{"kind":"task","task_id":3,"action":"ended"|"deleted"}]}
+      -> Customer (+ "removed":[…] when detach) | 409 CUSTOMER_IN_USE {"routes":[…]}   (a removed type that a live route of the customer collects, R4)
+POST  /api/customers/{id}/archive {"release_run"?} -> {"removed":[{"kind":"route","route_id":5,"code":"N1","where":"template"|"override"|"one-off","date":null}]}
 POST  /api/customers/{id}/restore -> Customer
 
 GET    /api/holidays?year=2026 -> [{"date","name"}]
@@ -1544,8 +1553,8 @@ DELETE /api/holidays/{date}[?release_run=1]
        -> 409 HOLIDAY_CONFLICT {"routes":[{"id","code","name","type","date"}]} | 409 RUN_EXISTS | 422 PAST_DATE_LOCKED
 
 GET   /api/waste-types
-POST  /api/waste-types {"code":"GLS","name":"Glass","abbr":"GLS","unit":"kg","weigh_method":"on_site","routable":false,"recurring_tasks":false,"confirm_over":null}   (admin)
-PATCH /api/waste-types/{code} {"name"?,"abbr"?,"weigh_method"?,"recurring_tasks"?,"confirm_over"?,"active"?}            (admin) | 409 WASTE_TYPE_IN_USE
+POST  /api/waste-types {"code":"GLS","name":"Glass","abbr":"GLS","unit":"kg","weigh_method":"on_site","routable":false,"confirm_over":null}   (admin)
+PATCH /api/waste-types/{code} {"name"?,"abbr"?,"weigh_method"?,"confirm_over"?,"active"?}            (admin) | 409 WASTE_TYPE_IN_USE {"routes":[…]} (a routable type that live routes collect)
 PUT   /api/waste-types/order {"codes":["REL","OTC","COMPACTOR"]}                                                          (admin)
 
 GET   /api/trucks -> [{"plate","active"}]
@@ -1558,8 +1567,8 @@ PATCH /api/settings {"rollover_hour":4}                                      (ad
 GET   /api/users                (admin) -> [{"id","username","name","role","lang","active","locked_until"}]   (locked_until = the latest per-IP lock still in force, or null)
 POST  /api/users {"username","name","role","lang","password"}  (admin) -> 201 | 422 USERNAME_TAKEN | PASSWORD_TOO_SHORT
 PATCH /api/users/{id} {"name"?,"role"?,"lang"?,"active"?,"password"?}  (admin; password = reset -> must_change_password; active=false releases jobs)
-GET   /api/drivers              (office) -> [{"id","name","active","route_job":{"date","job","code","pending"}|null,"task_jobs":[{"job","customer"}]}]
-      (route_job and task_jobs follow R25: jobs held today only. The Users page "current jobs" uses the same rule)
+GET   /api/drivers              (office) -> [{"id","name","active","route_job":{"date","job","code","pending"}|null}]
+      (route_job follows R25: the route held today only. The Users page "current jobs" uses the same rule)
 ```
 
 ### 10.8 Runs (office)
@@ -1579,37 +1588,34 @@ PUT  /api/runs/{date}/{job}/stops/{customer_id}
 ### 10.9 Driver (role driver)
 ```
 GET /api/driver/today ->
-{"today":"2026-11-11","now":"2026-11-11T07:40:02+08:00","me":{"id":3,"name":"Ali","lang":"en"},
+{"today":"2026-11-11","now":"2026-11-11T07:40:02+08:00","day_ends_at":"2026-11-12T04:00:00+08:00","me":{"id":3,"name":"Ali","lang":"en"},
  "my_route":null|{"date":"2026-11-11","job":"r9","code":"W2","name":"West 2","pending":5,"total":8,"vehicle_no":"GBA1234X","assigned":false},
- "my_tasks":[{"date":"2026-11-11","job":"t6","waste_type":"OTC","customer":"ABC Restaurant","vehicle_no":null,"assigned":true}],
  "waste_types":[…active…], "trucks":["SBA1234X","GBA1234X"],
- "routes":[{"job":"r5","date":"2026-11-11","code":"N1","color":1,"type":"regular","name":"North 1","note":"","stops":8,
+ "routes":[{"job":"r5","date":"2026-11-11","code":"N1","color":1,"type":"regular","waste_type":"REL","name":"North 1","note":"","stops":8,
             "first_customers":["ABC Restaurant","Kopi Tiam 88","Sin Hup"],"status":"open","driver":null,"left_by":"Bala",
-            "collected":3,"missed":0,"pending":5,"can_take":true}],
- "tasks":[{"job":"t6","date":"2026-11-11","waste_type":"OTC","recurring":false,"note":"Old furniture",
-           "customer":{"id":12,"name":"ABC Restaurant","address":"12 Jalan Besar"},
-           "status":"active","driver":{"id":3,"name":"Ali"},"can_take":false,"also_on":[{"job":"r5","code":"N1"}]}]}
+            "collected":3,"missed":0,"pending":5,"can_take":true}]}
 ```
 - `today` is the op_date (R1): at 02:30 on Thu 12 Nov it is still `2026-11-11`, and the lists are Wednesday's.
-- The lists contain today's scheduled jobs that have at least 1 stop, or a run.
-- Order: open, not_started, active, done; then by code (routes) or by customer (tasks).
+- The list contains today's scheduled routes that have at least 1 stop, or a run. `waste_types` holds every active type: the app offers the non-routable ones for a submission.
+- Order: open, not_started, active, done; then by code.
+- `day_ends_at` lets the phone work out the operational date of a submission made offline (§7.7).
 
 ```
 GET /api/driver/runs/{date}/{job} -> JobDetail (same shape before a claim and during the run):
 {"date":"2026-11-11","job":"r5","kind":"route","code":"N1","color":1,"type":"regular","name":"North 1","note":"",
- "waste_type":null,                       // task: "OTC"
+ "waste_type":"REL",                      // the one type this route collects
  "status":"active","holder":{"id":3,"name":"Ali"},"mine":true,"vehicle_no":"GBA1234X",
  "progress":{"collected":3,"missed":0,"pending":5,"total":8},"totals":{"REL":420.5},
  "stops":[{"seq":1,"on_plan":true,"stop_note":"3 bins",
    "customer":{"id":12,"code":"C0012","name":"ABC Restaurant","address":"12 Jalan Besar","phone":"+65 9123 4567","note":"bins at back lane"},
    "weigh_types":["REL"],"ticket_types":[],
-   "also_on":[{"job":"t6","label":"OTC task","outcome":null}],
+   "also_on":[{"job":"r9","kind":"route","label":"W2","outcome":null}],
    "visit":null|{"outcome","weights","tickets","photos","signature","reason","note","driver_id","rev","captured_at","flags"}}]}
 
 POST /api/driver/runs/{date}/{job}/claim {"vehicle_no":"GBA1234X","switch":false}
   -> 201 (created) | 200 (picked up / already mine): {"run":JobDetail,"left":null|{"job":"r9","result":"open"|"done"|"not_started"}}
   -> 409 RUN_TAKEN {"driver":"Chong","since":"…","collected":4,"total":10}
-  -> 409 DRIVER_HAS_ACTIVE_RUN {"job":"r9","code":"W2","pending":5}      (route jobs only; resend with "switch":true)
+  -> 409 DRIVER_HAS_ACTIVE_RUN {"job":"r9","code":"W2","pending":5}      (resend with "switch":true)
   -> 422 NOT_TODAY | NOT_RUNNABLE | VEHICLE_REQUIRED | VEHICLE_UNKNOWN | 404 NOT_FOUND
 
 PUT /api/driver/runs/{date}/{job}/stops/{customer_id}
@@ -1625,7 +1631,7 @@ POST /api/driver/runs/{date}/{job}/release {"mark_missed":false} | {"mark_missed
   -> {"result":"not_started"|"open"|"done"} | 409 NOT_HOLDER | 422 NOT_TODAY   (Finish = the same call; mark_missed is ignored when pending = 0; the run is kept;
      a past run is closed out only by the office, R24)
 ```
-- On a route stop, the `customer` object carries no waste-type list. The client renders `weigh_types` only (the customer's active routable types), so OTC and COMPACTOR never appear on a route stop card (§6.1). A non-routable task for the same customer that day shows only through `also_on`.
+- On a route stop, the `customer` object carries no waste-type list. The client renders `weigh_types` only (the route's one waste type), so OTC, COMPACTOR and EROSE never appear on a route stop card (§6.1). `also_on` lists the customer's other routes that day.
 
 ### 10.10 Files (driver, office, admin)
 ```
@@ -1640,9 +1646,9 @@ GET /api/files/{uuid}.{jpg|png} -> bytes (Cache-Control: private, max-age=315360
 |---|---|
 | Generic | `VALIDATION`, `NOT_FOUND`, `UNAUTHORIZED`, `FORBIDDEN` |
 | Accounts | `BAD_CREDENTIALS`, `ACCOUNT_LOCKED`, `PASSWORD_CHANGE_REQUIRED`, `PASSWORD_TOO_SHORT`, `USERNAME_TAKEN`, `LAST_ADMIN` |
-| Plan | `TYPE_IMMUTABLE`, `WEEKDAY_NOT_ALLOWED`, `DAY_CLASS_VIOLATION`, `PAST_DATE_LOCKED`, `NOT_AN_OCCURRENCE`, `DUPLICATE_STOP`, `CUSTOMER_INACTIVE`, `CUSTOMER_NOT_ROUTABLE`, `CODE_IN_USE`, `STALE_REVISION`, `HOLIDAY_CONFLICT`, `RUN_EXISTS` |
+| Plan | `TYPE_IMMUTABLE`, `WEEKDAY_NOT_ALLOWED`, `DAY_CLASS_VIOLATION`, `PAST_DATE_LOCKED`, `NOT_AN_OCCURRENCE`, `DUPLICATE_STOP`, `CUSTOMER_INACTIVE`, `CUSTOMER_NOT_ROUTABLE`, `CODE_IN_USE`, `STALE_REVISION`, `HOLIDAY_CONFLICT`, `RUN_EXISTS`, `TYPE_NOT_ROUTABLE` |
 | Master data and settings | `WASTE_TYPES_REQUIRED`, `UNKNOWN_WASTE_TYPE`, `WASTE_TYPE_IN_USE`, `CUSTOMER_IN_USE`, `ROLLOVER_SHIFTS_TODAY` |
-| Tasks | `TYPE_ROUTABLE`, `CUSTOMER_LACKS_TYPE`, `RECURRING_NOT_ALLOWED`, `TASK_FIELD_IMMUTABLE` |
+| Submissions | `TYPE_ROUTABLE`, `CUSTOMER_LACKS_TYPE` (and, shared with runs and visits: `NOT_TODAY`, `VEHICLE_REQUIRED`, `VEHICLE_UNKNOWN`, `TYPE_NOT_ALLOWED`, `WEIGHT_INVALID`, `WEIGHT_REQUIRED`, `TICKET_REQUIRED`, `FILE_MISSING`, `EDIT_WINDOW_CLOSED`, `CUSTOMER_INACTIVE`) |
 | Runs | `NOT_TODAY`, `NOT_RUNNABLE`, `RUN_TAKEN`, `DRIVER_HAS_ACTIVE_RUN`, `NOT_HOLDER`, `VEHICLE_REQUIRED`, `VEHICLE_UNKNOWN` |
 | Visits | `VISIT_CHANGED`, `NOT_ON_JOB`, `TYPE_NOT_ALLOWED`, `WEIGHT_INVALID`, `WEIGHT_REQUIRED`, `TICKET_REQUIRED`, `REASON_REQUIRED`, `WHY_REQUIRED`, `EDIT_WINDOW_CLOSED`, `FILE_MISSING` |
 | Files | `FILE_INVALID`, `FILE_TOO_LARGE` |
@@ -1686,11 +1692,13 @@ GET /api/files/{uuid}.{jpg|png} -> bytes (Cache-Control: private, max-age=315360
   src/Store.php           Store, Tx interfaces
   src/FileStore.php       flock, cached docs, atomic write + retry, .bak, first-start seed
   src/Blobs.php           photo/signature files
-  src/Schedule.php        dayClass, routesOn, tasksOn, effectiveStops, freeze (pure)
-  src/Plan.php            routes, overrides, copy, change-schedule, tasks, customers (+detach), holidays,
+  src/Schedule.php        dayClass, routesOn, effectiveStops, freeze (pure)
+  src/Plan.php            routes, overrides, copy, change-schedule, customers (+detach), holidays,
                           waste types, trucks, settings (rollover_hour); validation R3–R20; R26 check
   src/Runs.php            status/counts, claim, release, assign, visit write, revisions (R21–R32; pure functions
                           of (plan, day, users, today, now, principal))
+  src/Submissions.php     free submissions of the non-routable waste types: the driver's customer list, the driver
+                          write (create, change, delete), the driver's and the office's lists (R17, R18)
   src/Auth.php            login, token sign/verify, password, lockout, roles (R33–R34)
   src/Http.php            request parsing, ApiError(code, http, field, details)
   seed/holidays-sg.json   {"2026":[…],"2027":[…]} grouped by year (2027 filled in M2 from MOM; imported per R16 seeded_years)
@@ -1702,7 +1710,7 @@ GET /api/files/{uuid}.{jpg|png} -> bytes (Cache-Control: private, max-age=315360
                           fails). Exits non-zero with a log line when the disk has under 15% free. Deletes dated
                           folders older than --keep days.
   tools/init.php          first start from the command line (seed + admin password printed), used by install.sh
-  config.php              tz, data_dir, token_days=30, driver_edit_grace_hours=8, max_photos=5,
+  config.php              tz, data_dir, token_days=30, driver_edit_grace_hours=8, submission_max_age_days=7, max_photos=5,
                           max_jpeg_bytes=2000000, max_png_bytes=300000, fake_now=null
                           (the rollover hour is not here: it is an admin setting in plan.json, R1).
                           Merges the git-ignored backend/config.local.php when present, then getenv('WMS_DATA_DIR'),
@@ -1714,23 +1722,23 @@ GET /api/files/{uuid}.{jpg|png} -> bytes (Cache-Control: private, max-age=315360
 /frontend
   index.html  package.json  vite.config.ts  tsconfig.json
   vite.demo.ts                        the demo build's Vite plugin (§11.5): backend PHP + demo data -> one JSON asset
-  src/main.tsx  src/App.tsx           routes: /login /, /routes, /tasks, /customers, /holidays, /settings, /users, /driver/*
+  src/main.tsx  src/App.tsx           routes: /login /, /routes, /submissions, /customers, /holidays, /settings, /users, /driver/*
                                       (the demo build: only the office pages without Users, in the URL's #hash)
   src/api.ts                          the ONLY file that knows the backend JSON (types, fetch, token, error mapping),
                                       and the demo build's transport to the backend in the browser tab (§11.5)
   src/env.d.ts                        __WMS_DEMO__: true only in the demo build
   src/i18n/  index.ts zh.ts en.ts
   src/ui/    tokens.css palette.ts Dialog.tsx Drawer.tsx Chip.tsx StatusGlyph.tsx photo.ts (resize; driver and office) uuid.ts (getRandomValues)
-  src/office/ CalendarPage (TopBar, FilterBar, Legend, WeekView, MonthView, DayColumn, RouteRow, TaskRow,
-              RouteDrawer, StopList (dnd-kit sortable + ↑ ↓ + move to #; also used by RoutesPage), TaskDrawer,
-              ScopeDialog, CopyDialog, RouteForm, UrgentDialog, TaskDialog,
-              ResultDialog, RunExistsDialog, AssignDialog), RoutesPage, TasksPage, CustomersPage,
+  src/office/ CalendarPage (TopBar, FilterBar, Legend, WeekView, MonthView, DayColumn, RouteRow,
+              RouteDrawer, StopList (dnd-kit sortable + ↑ ↓ + move to #; also used by RoutesPage),
+              ScopeDialog, CopyDialog, RouteForm, UrgentDialog,
+              ResultDialog, RunExistsDialog, AssignDialog), RoutesPage, SubmissionsPage, CustomersPage,
               HolidaysPage, SettingsPage, UsersPage, LoginPage
-  src/driver/ DriverApp, Login, Today, RoutePreview, TaskPreview, Run, ResultForm, LeaveSheet, Done, NotSent,
-              outbox.ts, cache.ts, SignaturePad.tsx
+  src/driver/ DriverApp, Login, Today, RoutePreview, Run, ResultForm, SubmitPage, LeaveSheet, Done, NotSent,
+              outbox.ts, submission.ts (submissions in the outbox, opDateNow), cache.ts, SignaturePad.tsx
   src/demo/   the calendar demo build only (§11.5): DemoApp (loading screen, start, sign-in), DemoBar (banner,
               reset), runtime.ts (php-wasm), storage.ts (IndexedDB copy), texts.ts (zh/en), demo.css, modules.d.ts
-  scripts/seed-demo.mjs               demo data through the API (routes, customers, tasks; --with-runs: today's runs)
+  scripts/seed-demo.mjs               demo data through the API (REL and Recycling routes, customers; --with-runs: today's runs and two submissions)
   scripts/demo-data.mjs               the demo's data, made by the real backend (php -S + seed-demo.mjs) -> demo-data/
   e2e/        shell, office, driver and demo .e2e.cjs (Playwright, §13)
   demo-data/  dist-demo/              git-ignored: the demo's data and its build (npm run demo:data, npm run build:demo)
@@ -1963,7 +1971,7 @@ Round 6: GitHub Actions tests every commit and publishes a demo of the office ca
 **The demo.** The user chose an editable demo with no sign-in, of the calendar part only, on the free GitHub Pages of a public repository (docs/requirements.md, Round 6).
 - **What visitors get.** The office app at `https://<owner>.github.io/<repository>/` (here `https://zjoooooo.github.io/calender_WMS/`).
   - It signs in by itself as the demo admin and opens on the month view of the visitor's date.
-  - Everything on the calendar works and writes for real: routes and tasks, customers in a route (add, remove, drag, reorder), "this date" or "and all following", change schedule, copy, holidays and so on. Routes, Tasks, Customers, Holidays and Settings work too.
+  - Everything on the calendar works and writes for real: routes, customers in a route (add, remove, drag, reorder), "this date" or "and all following", change schedule, copy, holidays and so on. Routes, Submissions, Customers, Holidays and Settings work too.
   - Not in the demo: Users, change password, sign out and the driver app.
   - A plain banner (zh/en) says it is a demo with sample data and that changes stay only in this browser. It holds the action **重置演示数据 / Reset demo data**.
 - **The real backend runs in the browser.** `vite build --mode demo` (`npm run build:demo`) writes `frontend/dist-demo/`:
@@ -1971,9 +1979,9 @@ Round 6: GitHub Actions tests every commit and publishes a demo of the office ca
   - PHP 8.3 comes from WordPress Playground's php-wasm: the devDependencies `@php-wasm/universal` and `@php-wasm/web-8-3`, pinned at 3.1.54. Later releases require Node 24, and `frontend/.npmrc` sets `engine-strict` for Node 22. Only the PHP 8.3 package is used (`@php-wasm/web` would bundle every PHP version).
   - The browser runs JSPI where it has it (Chrome, Edge), and Asyncify otherwise (Safari, Firefox). Neither needs SharedArrayBuffer, so a plain static host works, with no COOP/COEP headers. Tested in Chromium only, both builds (Asyncify with JSPI hidden); Safari and Firefox are untested.
   - The first page is the normal app bundle and a loading screen (about 165 kB gzip). php-wasm's loader and its `.wasm` file (18 MB, about 7 MB gzip) load after it. The loading screen shows the size and the progress in zh/en, and an error screen has Retry.
-  - `vite.demo.ts` packs one JSON asset with the backend (`bootstrap.php`, `config.php`, `public/index.php`, `src/`, `seed/`) and the demo data. The data is made at build time by the real backend: `scripts/demo-data.mjs` runs `tools/init.php`, then `php -S` on a free port and `scripts/seed-demo.mjs --with-runs`, which adds today's runs, so statuses and REL totals show.
+  - `vite.demo.ts` packs one JSON asset with the backend (`bootstrap.php`, `config.php`, `public/index.php`, `src/`, `seed/`) and the demo data. The data is made at build time by the real backend: `scripts/demo-data.mjs` runs `tools/init.php`, then `php -S` on a free port and `scripts/seed-demo.mjs --with-runs`, which adds today's runs and two free submissions (OTC, COMPACTOR), so statuses and totals show.
   - At the start, `src/demo/runtime.ts` writes the PHP files and the data into php-wasm's in-memory filesystem (`/wms/backend`, `/wms/data`). A virtual `backend/config.local.php` (§11.2) sets `data_dir` and the visitor's time zone. No backend file changes.
-  - FileStore works there as on a server: flock, temp file + rename, `random_bytes`, `password_hash`. The backend's own tests pass under php-wasm (221 of 222; the one left needs `proc_open` to start a second PHP process).
+  - FileStore works there as on a server: flock, temp file + rename, `random_bytes`, `password_hash`. The backend's own tests pass under php-wasm (all but one; the one left needs `proc_open` to start a second PHP process).
   - `src/api.ts` sends each API call to PHP's request handler instead of `fetch`, with the method, path and query, headers (with the token) and JSON body, and turns the answer back into a `Response`. The rest of the app does not change. Calls run one at a time, and none goes to the network.
   - The 30 s calendar poll stays: a month request takes about 35 ms in the page.
 - **Today** is the visitor's date, in the visitor's time zone (the backend's own rollover, R1, still applies). The zone is the name the browser reports, also an older alias that PHP knows (Chrome reports `Asia/Calcutta`, `Europe/Kiev`); PHP checks it against `timezone_identifiers_list(DateTimeZone::ALL_WITH_BC)`. The data's days before the build day are frozen (R13). West of Singapore, in the first hours after a deploy, the visitor's date can still be before that, and the backend answers 503 `CLOCK_BEHIND_FREEZE`. The demo then uses Asia/Singapore for that visit.
@@ -2044,20 +2052,17 @@ Round 6: GitHub Actions tests every commit and publishes a demo of the office ca
       - PH auto-pause;
       - Sunday + PH generated once;
       - overrides and their cleanup;
-      - archived and non-routable customers dropped;
-      - tasks on Sunday and PH;
-      - recurring tasks on PH;
-      - task overrides.
+      - archived customers and customers without the route's waste type dropped.
     - Plan, with every error code:
       - `CODE_IN_USE`, including overlap vs. schedule split and adhoc code reuse on another date;
       - `CUSTOMER_NOT_ROUTABLE`;
       - `CUSTOMER_IN_USE`, detach and archive;
-      - `TYPE_ROUTABLE`, `CUSTOMER_LACKS_TYPE` and `RECURRING_NOT_ALLOWED`;
+      - the route waste type: required, `TYPE_NOT_ROUTABLE`, `TYPE_IMMUTABLE`, kept by a split, a schedule change and a copy, a route stored without it read as REL and never rewritten;
       - R12 scope cases (template replace when D is the next run date, R14 split otherwise, note to override(D));
       - R14 (re-pointing `copied_from`) and R15 (code suggestion, regular vs adhoc vs special result type, the `copied_from` link, skip_source with `release_run`);
       - holiday seed import per `seeded_years` (a new seed year is added once; a deleted holiday is not re-added; a seed year added late imports only dates > today and changes neither today's runs nor past days);
       - R11 on unchanged fields: `PATCH /api/routes/5 {rev, name, start: "2026-11-02"}` (start unchanged and in the past) returns 200; changing start to a past date returns `PAST_DATE_LOCKED`.
-    - Freeze: a template, task or holiday edit today leaves yesterday unchanged; a deleted route still renders from its snapshot.
+    - Freeze: a template or holiday edit today leaves yesterday unchanged; a deleted route still renders from its snapshot.
     - **Operational day and rollover** (R1; rollover 04:00 unless stated; jobs dated Wed 2026-11-11 and Thu 2026-11-12):
       - `Clock::opDate`: 2026-11-12T03:59:59 → 2026-11-11; 2026-11-12T04:00:00 → 2026-11-12; 2026-11-12T00:00:00 → 2026-11-11; with rollover 0, 2026-11-12T00:00:00 → 2026-11-12. `/api/meta` returns `today` and `day_ends_at` accordingly.
       - At 03:59: a claim on Wed's job succeeds and Thu's job returns `NOT_TODAY`; `/api/driver/today` lists Wed; a Wed plan write is accepted; Wed is not frozen; a held Wed run is `active`; a Wed result write by the holder has no `LATE` flag and counts in Wed's totals.
@@ -2072,7 +2077,7 @@ Round 6: GitHub Actions tests every commit and publishes a demo of the office ca
     - Runs:
       - the R22 status table;
       - claim order;
-      - route-vs-task holding (one route plus N tasks);
+      - one route at a time;
       - switch atomicity;
       - assign and reassign;
       - R24 outcomes (the run is never deleted; resolved = 0 shows as not_started; a late write after release is accepted with `LATE`);
@@ -2080,24 +2085,26 @@ Round 6: GitHub Actions tests every commit and publishes a demo of the office ca
       - close-out on a job with no run;
       - R26 with `release_run` (runs moved to `dropped_runs`) and `run.removed`.
     - Visits:
-      - weighable-type matrix (REL refused on a task, OTC refused on a route);
+      - weighable type (only the route's waste type; OTC, and REL on a Recycling route, refused);
       - `TICKET_REQUIRED` only for weighbridge types;
       - `FILE_MISSING`;
       - the R30 matrix (replay by op_id, base_rev match, same principal, conflict kept in history);
       - edit window (a late first result is accepted; a correction after the edit deadline, rollover + 8 h, is refused);
-      - `NOT_ON_JOB` (another customer on a task job; a customer never on the route; a customer in `run.removed` is accepted as `OFF_PLAN`);
+      - `NOT_ON_JOB` (a customer never on the route; a customer in `run.removed` is accepted as `OFF_PLAN`);
       - `OFF_PLAN`, `LATE`, `WHY_REQUIRED`.
+    - Submissions (`submissions_test.php`): create (201, record shape, customer snapshot, plate normalised); replay by `op_id` (no second record); a change (rev 2, history); delete (gone from lists and totals, kept on disk); another driver's id (404); the date rules (tomorrow and older than 7 days `NOT_TODAY`, yesterday accepted with `LATE`, a night-shift submission at 03:30 not `LATE`); `TYPE_ROUTABLE`, `TYPE_NOT_ALLOWED`, `CUSTOMER_INACTIVE`, `CUSTOMER_LACKS_TYPE`, `VEHICLE_REQUIRED`, `VEHICLE_UNKNOWN`, the weight, ticket and file errors; no "missed"; type and customer fixed; `EDIT_WINDOW_CLOSED`; roles; the three lists; the calendar's day totals.
+    - Old task data (`legacy_tasks_test.php`, on `fixtures/basic.json`, which still holds tasks, a `t6` run and routes without a waste type): after a route write, a customer write, a holiday write, a driver result, a submission, a driver deactivation and a rollover freeze, the task data is byte for byte what it was; the calendar shows no task and the `t6` run does not count in the totals.
     - Auth: lockout per username + IP (and cleared by reset), token expiry, `token_version` bump, role matrix, `PASSWORD_CHANGE_REQUIRED`, `LAST_ADMIN`, random seed admin password, audit redaction of `password`/`old`/`new`.
-- **Concurrency**: `php backend/tests/race.php` starts 10 CLI processes that claim the same job through `FileStore` on one temp data directory. Exactly one may win, and the files must stay valid JSON.
+- **Concurrency**: `php backend/tests/race.php` starts 10 CLI processes that claim the same job through `FileStore` on one temp data directory. Exactly one may win, and the files must stay valid JSON. Over HTTP it also sends one submission several times at once (same id and `op_id`, and same id with different `op_id`s): exactly one record results.
 - **Backup**: `php backend/tests/backup_test.php` runs `tools/backup.php` twice on a temp data dir with photos. The second dated folder holds every data file, including `secret.key` and `audit/`; its photos are hard links to the first folder's (same inode), and only a new photo is a fresh copy. `--keep` deletes only folders older than the limit.
 - **API smoke**: `php backend/tests/api_smoke.php` drives the router in-process over a temp data dir (with a `.demo` marker) through one scripted day:
   1. seed;
-  2. create routes and tasks;
+  2. create routes (the waste type required, `TYPE_NOT_ROUTABLE`, `CUSTOMER_NOT_ROUTABLE`, `TYPE_IMMUTABLE`); `/api/tasks` is 404;
   3. two drivers race to claim;
   4. submit stops with a photo upload;
   5. switch route;
   6. office adds a stop and removes another;
-  7. a driver takes an OTC task while holding a route;
+  7. a driver makes an OTC submission while holding a route: refusals, create with a photo, replay, correction, delete, the driver and office lists;
   8. office corrects a weight;
   9. `fake_now` moves to 02:30 the next calendar day (a night-shift stop on the same day's route is accepted without `LATE`), then to 03:59 (still the same day), then to 04:00 (the rollover), showing no_record and incomplete;
   10. close out.
@@ -2105,6 +2112,7 @@ Round 6: GitHub Actions tests every commit and publishes a demo of the office ca
   - `tsc --noEmit`;
   - `vitest` for:
     - `outbox.ts` (coalescing, order, files before visit, and the 200/409/422/401/network handling);
+    - `submission.ts`: a submission entry goes to its own endpoint with its own id, an edit before the send replaces the entry, the operational date from elapsed time (`opDateNow`), and the merged Today list;
     - `api.ts` mappers;
     - the search and highlight filter;
     - `StopList` reordering: a drag end, ↑ ↓ and "move to #" produce the same draft order (`arrayMove`);
@@ -2140,7 +2148,7 @@ Round 6: GitHub Actions tests every commit and publishes a demo of the office ca
 
 **M2 Master data.**
 - Contents:
-  - waste types (with routable, weigh method, abbr, unit, recurring_tasks and confirm_over; the deactivation guard);
+  - waste types (with routable, weigh method, abbr, unit and confirm_over; the deactivation guard);
   - customers (CRUD, waste-type chips, archive and restore, search);
   - holidays page (2026 seed; **2027 entered from the MOM list and confirmed by the user**, reaching existing data through `seeded_years`, R16);
   - trucks (the vehicle list drivers pick from, R23);
@@ -2164,7 +2172,7 @@ Round 6: GitHub Actions tests every commit and publishes a demo of the office ca
 
 **M4 Container editing.**
 - Contents:
-  - the route drawer with drafts (add routable customers only, remove, reorder, notes);
+  - the route drawer with drafts (add only customers registered with the route's waste type, remove, reorder, notes);
   - `StopList` reordering: drag and drop with `@dnd-kit/core` + `@dnd-kit/sortable` (mouse, touch, keyboard, auto-scroll), plus ↑ ↓ and "move to #"; reused in the Routes page template editor;
   - the scope dialog;
   - skip, restore and reset;
@@ -2175,35 +2183,27 @@ Round 6: GitHub Actions tests every commit and publishes a demo of the office ca
   - `STALE_REVISION` and `HOLIDAY_CONFLICT`.
 - **Demo:** the user's case "phone call today, tomorrow go to A and B" takes about 4 clicks. A customer removed "1 Dec and following" disappears only from 1 Dec (R12; the route is split, same code). The PH-paused N1 is run on 25 Dec as `N1-25`, and a paused route moved to a work day shows the R tag, not ⚡A. A 30-stop route is reordered by dragging with a mouse and on a tablet by touch; stop 28 is moved to #2 by typing; the draft saves through the scope dialog.
 
-**M5 Tasks (office).**
-- Contents:
-  - "+ Task" (OTC one-off, COMPACTOR one-off and recurring, with "add type to customer");
-  - task rows and the collapsed Tasks group in the week view, and the task chip in the month view;
-  - the task drawer (skip, move, edit series, end, delete);
-  - the Tasks page;
-  - search over tasks.
-- **Demo:** a COMPACTOR task every Tue and Fri appears on 25 Dec (a PH) and on Sundays when chosen. An OTC task on Sunday works. The day with 12 routes and 5 tasks stays readable.
+**M5 Tasks (office).** Built in v1 and **removed in Round 7** (M10): nothing is planned for OTC, COMPACTOR and EROSE any more.
 
 **M6 Driver claim and live status.**
 - Contents:
-  - the driver app: S0 login, S1 Today (routes and tasks), S2 and S2T previews with the plate;
+  - the driver app: S0 login, S1 Today (routes), the S2 preview with the plate;
   - claim, switch and give back;
   - office release and assign;
   - status glyphs, ops line and day drawer in the calendar;
   - the R26 dialog;
   - 30 s polling, and the rollover refetch when `today` changes (R36).
-- **Demo** (on the VPS, phones on 4G): two phones confirm the same route and one sees "Taken by Ali". Ali holds N1 and also takes two OTC tasks. Ali switches to A2 and N1 shows "Needs driver" in the office within 30 s. The office assigns N1 to Bala.
+- **Demo** (on the VPS, phones on 4G): two phones confirm the same route and one sees "Taken by Ali". Ali switches to A2 and N1 shows "Needs driver" in the office within 30 s. The office assigns N1 to Bala.
 
 **M7 Results and corrections.**
 - Contents:
   - S4 (weights per weighable type, [0] chip, confirm_over, ticket when weighbridge, photos with resize and upload, signature pad, note, not-collected reasons);
-  - task completion;
   - S3, S5 and S6;
   - driver correction and undo on today's jobs;
   - the office Result dialog (why, history, photos);
   - Close out and back-fill;
   - day totals.
-- **Demo:** a full route from Confirm to Done, with photos and a signature. A COMPACTOR task is completed. In Settings, OTC is switched to Weighbridge, and the ticket becomes required on the next OTC task. The office corrects a weight with a reason, and the phone shows it.
+- **Demo:** a full route from Confirm to Done, with photos and a signature. In Settings, OTC is switched to Weighbridge, and the ticket becomes required on the next OTC submission. The office corrects a weight with a reason, and the phone shows it.
 
 **M8 Field robustness.**
 - Contents:
@@ -2228,6 +2228,15 @@ Round 6: GitHub Actions tests every commit and publishes a demo of the office ca
   - `api_smoke.php`.
 - **Demo:** the VPS is rebooted and comes back with nobody logged in. The office works at `https://<domain>/` and drivers on 4G at `https://<domain>/driver`. Last night's backup is restored into a scratch data folder and opens correctly.
 
+**M10 Round 7: waste types, one type per route, free submissions.**
+- Contents:
+  - seed types REL, RECYCLING (Recycling, RCY), OTC, COMPACTOR, EROSE; `recurring_tasks` removed;
+  - one waste type per route (R6a): the create forms, Urgent pickup, the customer picker, the REL / RCY tag on the calendar, the Routes page and the driver's cards;
+  - the task feature removed (pages, dialogs, API, driver claims); old task data left on disk, unread (R19);
+  - free submissions (R17, R18): `Submissions.php`, the driver's Submit flow through the outbox, the office Submissions page, day totals;
+  - tests: `route_waste_type_test.php`, `submissions_test.php`, `legacy_tasks_test.php`, the smoke and race tests, `submission.test.ts`, and the four browser suites.
+- **Demo:** the office creates a Recycling route; only customers registered with Recycling can be added, and its lines show RCY. A driver in airplane mode submits COMPACTOR 880 kg with a photo; back online it arrives once. The office sees it on the Submissions page, and the day's totals include it.
+
 ---
 
 ## 15 Open questions (still undecided by the user; v1 is built with the default)
@@ -2239,7 +2248,7 @@ Round 6: GitHub Actions tests every commit and publishes a demo of the office ca
 
 **Decided since the previous version** (no longer open; the rules are in the sections named):
 - Hosting: a Linux cloud VPS for production; local development and trials stay on the Windows PC with .bat files (§1, §11.3, §11.4).
-- Recurring COMPACTOR tasks run on public holidays; the office skips single dates (R18).
+- Round 7: OTC, COMPACTOR and EROSE are not planned at all (no tasks); drivers submit them freely, and one route collects one waste type, REL or Recycling (R6a, R17–R19). This replaces the earlier decisions about tasks.
 - A PH-paused regular route copied or moved to another work day keeps type REGULAR (R tag, solid border, that date only); adhoc stays for emergencies (R6, R15).
 - Reports in v1: daily totals per waste type in the calendar only; CSV/Excel export is the first v2 item (R32, §16).
 - Two trucks never share one route on the same day: one route, one driver at a time (R23, R25).
@@ -2258,14 +2267,16 @@ Round 6: GitHub Actions tests every commit and publishes a demo of the office ca
 6. **Switching**: "Pause and keep my claim" when switching route. (v1 gives the remaining stops back.)
 7. **Weight checks**: checks against a customer's history (for example the median).
 8. **Route history**: route versions and template history; per-stop start/end dates inside one template (v1 splits the route from D instead, R12); carrying "following" edits into dates that already have their own list.
-9. **Moving occurrences**: dragging a route or task occurrence from one date to another, or "move" with ghosts. (Copy plus skip covers this. Drag-and-drop reordering of stops inside a route is in v1, §6.1.)
+9. **Moving occurrences**: dragging a route occurrence from one date to another, or "move" with ghosts. (Copy plus skip covers this. Drag-and-drop reordering of stops inside a route is in v1, §6.1.)
 10. **Dry runs**: dry-run previews and a conflict status with a Fix menu. (v1 refuses the write and explains why.)
 11. **Coverage warning**: a `DUPLICATE_COVERAGE` warning.
 12. **Holidays**: holiday import (CSV or online) and per-state calendars.
 13. **Deletion**: hard delete of customers and waste types.
 14. **Audit and customer pages**: an audit-log viewer UI (v1 writes the JSONL file) and a customer visit-history page.
-15. **Layouts and schedules**: a mobile layout for the office calendar; separate stop lists per weekday; fortnightly or monthly patterns; task time windows.
+15. **Layouts and schedules**: a mobile layout for the office calendar; separate stop lists per weekday; fortnightly or monthly patterns.
 16. **Storage**: a SQLite or MySQL Store (the interface is ready); cleanup of orphan and old photo files; moving photos to object storage.
 17. **Push**: websockets and push notifications. (v1 polls every 30 s.)
 18. **Languages**: Malay or other languages.
 19. **Operations**: off-site backup automation (v1 relies on provider snapshots plus a manual monthly download), uptime monitoring and alerting.
+
+20. **Submissions in the office**: creating, correcting and deleting a submission from the office (v1: read only), and showing submissions on the calendar one by one.

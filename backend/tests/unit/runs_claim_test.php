@@ -1,5 +1,5 @@
 <?php
-// R23 claim (§10.9, §7.4 T1/T2/T7): order of the checks, vehicle list, one route + N tasks, switch atomicity,
+// R23 claim (§10.9, §7.4 T1/T2/T7): order of the checks, vehicle list, one route at a time, switch atomicity,
 // finishIdleRouteHold, run reuse. Setup: tests/runs_lib.php (today Wed 2026-11-11, empty day file).
 require_once __DIR__ . '/../runs_lib.php';
 
@@ -51,18 +51,20 @@ return (static function (): array {
         },
 
         'a done job (pending 0) is NOT_RUNNABLE, also when its last holder never finished' => function () {
-            $e = RunsFx::env(['runs' => ['r50' => RunsFx::run('r50', 3, [RunsFx::visit(21)]), 't6' => RunsFx::run('t6', null, [RunsFx::visit(12, 'missed')],
+            $e = RunsFx::env(['runs' => ['r50' => RunsFx::run('r50', 3, [RunsFx::visit(21)])]]);
+            T::err(RunsFx::claim($e, 'r50', 'bala'), 422, 'NOT_RUNNABLE');
+            $e = RunsFx::env(['runs' => ['r50' => RunsFx::run('r50', null, [RunsFx::visit(21, 'missed')],
                 [RunsFx::hold(3, '2026-11-11T08:00:00+08:00', 'SBA1234X', '2026-11-11T08:30:00+08:00', 'left')])]]);
             T::err(RunsFx::claim($e, 'r50', 'bala'), 422, 'NOT_RUNNABLE');
-            T::err(RunsFx::claim($e, 't6', 'bala'), 422, 'NOT_RUNNABLE');
         },
 
-        'one route plus any number of tasks; a second route gives DRIVER_HAS_ACTIVE_RUN; switch is atomic' => function () {
+        'one route at a time: a second route gives DRIVER_HAS_ACTIVE_RUN; switch is atomic; the old task jobs cannot be claimed' => function () {
             $e = RunsFx::env();
             T::ok(RunsFx::claim($e, 'r5', 'ali'), 201);
-            T::ok(RunsFx::claim($e, 't6', 'ali'), 201);
-            T::ok(RunsFx::claim($e, 't11', 'ali'), 201);
-            T::ok(RunsFx::claim($e, 't12', 'ali', ['vehicle_no' => 'GBA1234X']), 201);
+            foreach (['t6', 't11', 't12'] as $t) {
+                T::err(RunsFx::claim($e, $t, 'ali'), 404, 'NOT_FOUND');
+                T::err($e->call('GET', "/api/driver/runs/2026-11-11/$t", null, 'ali'), 404, 'NOT_FOUND');
+            }
             $err = T::err(RunsFx::claim($e, 'r50', 'ali'), 409, 'DRIVER_HAS_ACTIVE_RUN');
             T::eq(['job' => 'r5', 'code' => 'N1', 'pending' => 2], $err['details']);
             // the target is taken: nothing changes, Ali keeps N1
@@ -77,9 +79,7 @@ return (static function (): array {
             T::eq(['job' => 'r5', 'result' => 'not_started'], $d['left']);
             T::subset(['driver_id' => null, 'holds' => [['driver_id' => 3, 'to' => '2026-11-11T10:00:00+08:00', 'end' => 'switched']]], RunsFx::diskRun($e, 'r5'));
             T::subset(['driver_id' => 3, 'holds' => [['driver_id' => 4, 'end' => 'left'], ['driver_id' => 3, 'by' => 'self', 'end' => null]]], RunsFx::diskRun($e, 'r50'));
-            foreach (['t6', 't11', 't12'] as $t) {
-                T::eq(3, RunsFx::diskRun($e, $t)['driver_id'], "$t is unaffected by the switch");
-            }
+            T::eq(['r5', 'r50'], array_keys($e->doc('day:2026-11-11')['runs']), 'no task run was created');
             T::eq('not_started', RunsFx::occ($e, 'r5@2026-11-11')['run_status']);
         },
 
@@ -101,17 +101,13 @@ return (static function (): array {
             $d = T::ok(RunsFx::claim($e, 'r5', 'ali'), 201);
             T::eq(null, $d['left']);
             T::subset(['driver_id' => null, 'holds' => [['end' => 'finished', 'to' => '2026-11-11T10:00:00+08:00']]], RunsFx::diskRun($e, 'r50'));
-            // a task claim never finishes or blocks route holds
-            $e2 = RunsFx::env(['runs' => ['r50' => RunsFx::run('r50', 3, [RunsFx::visit(21)])]]);
-            T::ok(RunsFx::claim($e2, 't6', 'ali'), 201);
-            T::eq(3, RunsFx::diskRun($e2, 'r50')['driver_id']);
         },
 
         'the first confirm wins: a second driver gets RUN_TAKEN and nothing is written' => function () {
             $e = RunsFx::env();
-            T::ok(RunsFx::claim($e, 't11', 'chong'), 201);
+            T::ok(RunsFx::claim($e, 'r50', 'chong'), 201);
             $before = $e->doc('day:2026-11-11');
-            T::subset(['details' => ['driver' => 'Chong', 'collected' => 0, 'total' => 1]], T::err(RunsFx::claim($e, 't11', 'bala'), 409, 'RUN_TAKEN'));
+            T::subset(['details' => ['driver' => 'Chong', 'collected' => 0, 'total' => 1]], T::err(RunsFx::claim($e, 'r50', 'bala'), 409, 'RUN_TAKEN'));
             T::eq($before, $e->doc('day:2026-11-11'));
         },
 
@@ -120,7 +116,6 @@ return (static function (): array {
             T::err(RunsFx::claim($e, 'r5', 'ali'), 422, 'NOT_RUNNABLE');
             $ph = RunsFx::env(['plan' => ['holidays' => [['date' => '2026-11-11', 'name' => 'Test PH']]]]);
             T::err(RunsFx::claim($ph, 'r5', 'ali'), 422, 'NOT_RUNNABLE');
-            T::ok(RunsFx::claim($ph, 't6', 'ali'), 201); // holidays never affect tasks
         },
     ];
 })();

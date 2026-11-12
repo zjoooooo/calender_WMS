@@ -8,6 +8,8 @@ $config = [
     'data_dir' => __DIR__ . '/data',
     'token_days' => 30,
     'driver_edit_grace_hours' => 8,
+    // A driver's free submission is accepted for today and for up to this many days back.
+    'submission_max_age_days' => 7,
     'max_photos' => 5,
     'max_jpeg_bytes' => 2000000,
     'max_png_bytes' => 300000,

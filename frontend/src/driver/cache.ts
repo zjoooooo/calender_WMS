@@ -65,6 +65,8 @@ function cacheStore(): KV<Cached<unknown>> {
 export const cacheKeys = {
   today: (uid: number) => `u${uid}:today`,
   job: (uid: number, date: string, job: string) => `u${uid}:job:${date}/${job}`,
+  customers: (uid: number) => `u${uid}:customers`,
+  submissions: (uid: number, date: string) => `u${uid}:job:${date}/submissions`, // pruned with the day's jobs
 };
 
 export async function readCache<T>(key: string): Promise<Cached<T> | undefined> {

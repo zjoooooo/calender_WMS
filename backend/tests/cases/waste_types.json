@@ -4,9 +4,11 @@
     "now": "2026-11-11T10:00:00+08:00",
     "call": { "method": "GET", "path": "/api/waste-types", "as": "mei" },
     "expect": { "status": 200, "data_subset": [
-      { "code": "REL", "abbr": "REL", "unit": "kg", "weigh_method": "on_site", "routable": true, "recurring_tasks": false, "confirm_over": 1000, "active": true },
-      { "code": "OTC", "abbr": "OTC", "unit": "kg", "weigh_method": "on_site", "routable": false, "recurring_tasks": false, "confirm_over": 1000, "active": true },
-      { "code": "COMPACTOR", "abbr": "COMPACTOR", "unit": "kg", "weigh_method": "on_site", "routable": false, "recurring_tasks": true, "confirm_over": null, "active": true }
+      { "code": "REL", "name": "REL", "abbr": "REL", "unit": "kg", "weigh_method": "on_site", "routable": true, "recurring_tasks": { "$absent": true }, "confirm_over": 1000, "active": true },
+      { "code": "RECYCLING", "name": "Recycling", "abbr": "RCY", "unit": "kg", "weigh_method": "on_site", "routable": true, "confirm_over": 1000, "active": true },
+      { "code": "OTC", "name": "OTC", "abbr": "OTC", "unit": "kg", "weigh_method": "on_site", "routable": false, "confirm_over": 1000, "active": true },
+      { "code": "COMPACTOR", "name": "COMPACTOR", "abbr": "COMPACTOR", "unit": "kg", "weigh_method": "on_site", "routable": false, "recurring_tasks": { "$absent": true }, "confirm_over": null, "active": true },
+      { "code": "EROSE", "name": "EROSE", "abbr": "EROSE", "unit": "kg", "weigh_method": "on_site", "routable": false, "confirm_over": null, "active": true }
     ] }
   },
   {
@@ -14,8 +16,8 @@
     "now": "2026-11-11T10:00:00+08:00",
     "call": { "method": "POST", "path": "/api/waste-types", "as": "admin", "body": { "code": "GLS", "name": "Glass" } },
     "expect": { "status": 201,
-      "data_subset": { "code": "GLS", "name": "Glass", "abbr": "GLS", "unit": "kg", "weigh_method": "on_site", "routable": false, "recurring_tasks": false, "confirm_over": null, "active": true },
-      "docs_subset": { "plan": { "waste_types": { "$len": 4 } } } }
+      "data_subset": { "code": "GLS", "name": "Glass", "abbr": "GLS", "unit": "kg", "weigh_method": "on_site", "routable": false, "recurring_tasks": { "$absent": true }, "confirm_over": null, "active": true },
+      "docs_subset": { "plan": { "waste_types": { "$len": 6 } } } }
   },
   {
     "name": "create validation: code format, duplicate, abbr, unit, weigh_method, unknown field",
@@ -28,6 +30,8 @@
       { "call": { "method": "POST", "path": "/api/waste-types", "as": "admin", "body": { "code": "GLS", "name": "Glass", "unit": "kilogram" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "unit" } } },
       { "call": { "method": "POST", "path": "/api/waste-types", "as": "admin", "body": { "code": "GLS", "name": "Glass", "weigh_method": "scale" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "weigh_method" } } },
       { "call": { "method": "POST", "path": "/api/waste-types", "as": "admin", "body": { "code": "GLS", "name": "Glass", "colour": "green" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "colour" } } },
+      { "call": { "method": "POST", "path": "/api/waste-types", "as": "admin", "body": { "code": "GLS", "name": "Glass", "recurring_tasks": true } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "recurring_tasks" } } },
+      { "call": { "method": "PATCH", "path": "/api/waste-types/COMPACTOR", "as": "admin", "body": { "recurring_tasks": false } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "recurring_tasks" } } },
       { "call": { "method": "POST", "path": "/api/waste-types", "as": "admin", "body": { "code": "GLS", "name": "" } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "name" } } },
       { "call": { "method": "POST", "path": "/api/waste-types", "as": "admin", "body": { "code": "GLS", "name": "Glass", "confirm_over": -1 } }, "expect": { "status": 422, "code": "VALIDATION", "error_subset": { "field": "confirm_over" } } }
     ]
@@ -42,19 +46,19 @@
       { "call": { "method": "PATCH", "path": "/api/waste-types/OTC", "as": "admin",
           "body": { "code": "OTC", "unit": "kg", "routable": false, "name": "One Time Collection", "weigh_method": "weighbridge", "confirm_over": 2000.5 } },
         "expect": { "status": 200, "data_subset": { "code": "OTC", "name": "One Time Collection", "weigh_method": "weighbridge", "confirm_over": 2000.5 },
-          "docs_subset": { "plan": { "waste_types": [ { "code": "REL" }, { "code": "OTC", "weigh_method": "weighbridge" }, { "code": "COMPACTOR" } ] } } } },
+          "docs_subset": { "plan": { "waste_types": [ { "code": "REL" }, { "code": "RECYCLING" }, { "code": "OTC", "weigh_method": "weighbridge" }, { "code": "COMPACTOR" }, { "code": "EROSE" } ] } } } },
       { "call": { "method": "PATCH", "path": "/api/waste-types/NOPE", "as": "admin", "body": { "name": "x" } }, "expect": { "status": 404, "code": "NOT_FOUND" } },
       { "call": { "method": "PATCH", "path": "/api/waste-types/OTC", "as": "mei", "body": { "name": "x" } }, "expect": { "status": 403, "code": "FORBIDDEN" } }
     ]
   },
   {
-    "name": "R3 guard: a routable type in use on a stop list from today on cannot be deactivated",
+    "name": "R3 guard: a routable type cannot be deactivated while a route that collects it runs today or later",
     "now": "2026-11-11T10:00:00+08:00",
     "given": { "fixture": "basic" },
     "call": { "method": "PATCH", "path": "/api/waste-types/REL", "as": "admin", "body": { "active": false } },
     "expect": { "status": 409, "code": "WASTE_TYPE_IN_USE",
-      "error_subset": { "details": { "routes": { "$contains": [ { "code": "N1" }, { "code": "S1" }, { "code": "A1" }, { "code": "N1-25" } ] } } },
-      "docs_subset": { "plan": { "waste_types": [ { "code": "REL", "active": true }, { "$any": true }, { "$any": true } ] } } }
+      "error_subset": { "details": { "routes": { "$contains": [ { "code": "N1" }, { "code": "S1" }, { "code": "A1" }, { "code": "N1-25" }, { "code": "S2" } ] }, "tasks": { "$absent": true } } },
+      "docs_subset": { "plan": { "waste_types": [ { "code": "REL", "active": true }, { "$any": true }, { "$any": true }, { "$any": true }, { "$any": true } ] } } }
   },
   {
     "name": "R3 guard: a routable type only on ended routes can be deactivated",
@@ -65,33 +69,41 @@
     "expect": { "status": 200, "data_subset": { "active": false } }
   },
   {
-    "name": "R3 guard: a non-routable type with a task generating a date from today on",
+    "name": "R3 guard: a routable type no live route collects can be deactivated, also while customers have it",
+    "now": "2026-11-11T10:00:00+08:00",
+    "given": { "fixture": "basic", "plan": { "customers": [
+      { "id": 12, "code": "C0012", "name": "ABC Restaurant", "address": "", "phone": "", "note": "", "waste_types": ["REL", "RECYCLING"], "active": true },
+      { "id": 21, "code": "C0021", "name": "Sunday Market Stall", "address": "", "phone": "", "note": "", "waste_types": ["REL"], "active": true },
+      { "id": 40, "code": "C0040", "name": "Golden Bakery", "address": "", "phone": "", "note": "", "waste_types": ["REL"], "active": true },
+      { "id": 70, "code": "C0070", "name": "Zed Ended Route", "address": "", "phone": "", "note": "", "waste_types": ["REL"], "active": true } ] } },
+    "call": { "method": "PATCH", "path": "/api/waste-types/RECYCLING", "as": "admin", "body": { "active": false } },
+    "expect": { "status": 200, "data_subset": { "code": "RECYCLING", "active": false } }
+  },
+  {
+    "name": "R3: a non-routable type can always be deactivated, also with old tasks of that type from today on; they stay on disk",
     "now": "2026-11-11T10:00:00+08:00",
     "given": { "fixture": "basic" },
     "steps": [
       { "call": { "method": "PATCH", "path": "/api/waste-types/COMPACTOR", "as": "admin", "body": { "active": false } },
-        "expect": { "status": 409, "code": "WASTE_TYPE_IN_USE", "error_subset": { "details": { "tasks": [ { "task_id": 3 }, { "task_id": 10 } ] } } } },
+        "expect": { "status": 200, "data_subset": { "code": "COMPACTOR", "active": false } } },
       { "call": { "method": "PATCH", "path": "/api/waste-types/OTC", "as": "admin", "body": { "active": false } },
-        "expect": { "status": 409, "code": "WASTE_TYPE_IN_USE", "error_subset": { "details": { "tasks": [ { "task_id": 6, "schedule": { "date": "2026-11-11" } } ] } } } }
+        "expect": { "status": 200, "data_subset": { "code": "OTC", "active": false },
+          "docs_subset": { "plan": { "tasks": [ { "id": 3, "waste_type": "COMPACTOR", "end": null }, { "id": 6, "waste_type": "OTC", "date": "2026-11-11" }, { "id": 9 }, { "id": 10 } ],
+            "task_overrides": { "$len": 1 } } } } },
+      { "call": { "method": "PATCH", "path": "/api/waste-types/OTC", "as": "admin", "body": { "active": true } },
+        "expect": { "status": 200, "data_subset": { "code": "OTC", "active": true } } }
     ]
-  },
-  {
-    "name": "R3 guard: OTC with only past tasks can be deactivated (tomorrow)",
-    "now": "2026-11-12T10:00:00+08:00",
-    "given": { "fixture": "basic" },
-    "call": { "method": "PATCH", "path": "/api/waste-types/OTC", "as": "admin", "body": { "active": false } },
-    "expect": { "status": 200, "data_subset": { "code": "OTC", "active": false } }
   },
   {
     "name": "order: a permutation reorders types and the customers' lists",
     "now": "2026-11-11T10:00:00+08:00",
     "given": { "fixture": "basic" },
     "steps": [
-      { "call": { "method": "PUT", "path": "/api/waste-types/order", "as": "admin", "body": { "codes": ["COMPACTOR", "OTC", "REL"] } },
-        "expect": { "status": 200, "data_subset": [ { "code": "COMPACTOR" }, { "code": "OTC" }, { "code": "REL" } ],
+      { "call": { "method": "PUT", "path": "/api/waste-types/order", "as": "admin", "body": { "codes": ["COMPACTOR", "EROSE", "OTC", "RECYCLING", "REL"] } },
+        "expect": { "status": 200, "data_subset": [ { "code": "COMPACTOR" }, { "code": "EROSE" }, { "code": "OTC" }, { "code": "RECYCLING" }, { "code": "REL" } ],
           "docs_subset": { "plan": { "customers": { "$contains": [ { "id": 12, "waste_types": ["OTC", "REL"] }, { "id": 40, "waste_types": ["COMPACTOR", "REL"] } ] } } } } },
       { "call": { "method": "PUT", "path": "/api/waste-types/order", "as": "admin", "body": { "codes": ["REL", "OTC"] } }, "expect": { "status": 422, "code": "VALIDATION" } },
-      { "call": { "method": "PUT", "path": "/api/waste-types/order", "as": "admin", "body": { "codes": ["REL", "OTC", "OTC"] } }, "expect": { "status": 422, "code": "VALIDATION" } }
+      { "call": { "method": "PUT", "path": "/api/waste-types/order", "as": "admin", "body": { "codes": ["REL", "RECYCLING", "OTC", "COMPACTOR", "COMPACTOR"] } }, "expect": { "status": 422, "code": "VALIDATION" } }
     ]
   }
 ]

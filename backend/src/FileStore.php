@@ -161,7 +161,7 @@ final class FileStore implements Store, Tx
 
     public static function emptyDay(string $date): array
     {
-        return ['date' => $date, 'plan' => null, 'runs' => [], 'dropped_runs' => []];
+        return ['date' => $date, 'plan' => null, 'runs' => [], 'dropped_runs' => [], 'submissions' => []];
     }
 
     // ---- internals ----------------------------------------------------------------------------

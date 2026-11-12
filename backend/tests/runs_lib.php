@@ -4,7 +4,7 @@
 //   r5  N1  regular Mon/Wed/Fri, stops 12 (ABC Restaurant, REL+OTC), 40 (Golden Bakery, REL+COMPACTOR)
 //   r50 A2  adhoc, stops 21 (Sunday Market Stall, REL)
 //   r51 A3  adhoc, no stops (never runnable)
-//   t6  OTC task for 12 (fixture), t11 OTC task for 50 (Only OTC Co), t12 COMPACTOR task for 40
+//   plus tasks 6 (fixture), 11 and 12 of the old task feature: legacy data that nothing reads any more
 // and users admin(1) mei(2, office) ali(3) bala(4) chong(5) drivers, dan(6) an inactive driver.
 // Unless 'runs' / 'days' are given, today's day file is EMPTY (the fixture's runs are not used).
 
@@ -96,6 +96,19 @@ final class RunsFx
         return $e->call('PUT', "$prefix/$date/$job/stops/$cid", $body, $as);
     }
 
+    /** A free-submission body (Submissions::driverWrite): OTC 50 kg for customer 12 with plate SBA1234X. */
+    public static function subBody(int $op, array $extra = []): array
+    {
+        return array_replace(['op_id' => self::op($op), 'base_rev' => 0, 'waste_type' => 'OTC', 'customer_id' => 12, 'vehicle_no' => 'SBA1234X',
+            'outcome' => 'collected', 'weights' => ['OTC' => 50.0], 'tickets' => (object) [], 'photos' => [], 'signature' => null, 'note' => ''], $extra);
+    }
+
+    /** PUT /api/driver/submissions/{date}/{id}; the id is op($n). */
+    public static function sub(TestEnv $e, int $n, array $body, string $as = 'ali', string $date = self::WED): array
+    {
+        return $e->call('PUT', "/api/driver/submissions/$date/" . self::op($n), $body, $as);
+    }
+
     /** Today's run of a job from disk (null when absent). */
     public static function diskRun(TestEnv $e, string $job, string $date = self::WED): ?array
     {
@@ -107,7 +120,7 @@ final class RunsFx
     {
         [$job, $date] = explode('@', $key);
         $cal = T::ok($e->call('GET', '/api/calendar?view=week&anchor=' . $date, null, 'mei'));
-        foreach (array_merge($cal['routes'], $cal['tasks']) as $o) {
+        foreach ($cal['routes'] as $o) {
             if ($o['key'] === $key) {
                 return $o;
             }

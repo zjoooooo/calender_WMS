@@ -84,7 +84,7 @@ return (static function (): array {
             T::subset(['status' => 'scheduled', 'edited' => false, 'note' => ''], Schedule::routeOccurrence($p, $n1, '2026-11-16'));
             T::eq(null, Schedule::routeOccurrence($p, $n1, '2026-11-19'), 'an override on a date the route does not generate is ignored');
         },
-        'R8 effective stops drop inactive and non-routable customers' => function () use ($plan, $route) {
+        'R8 effective stops drop inactive customers and customers without the route\'s waste type' => function () use ($plan, $route) {
             $p = $plan();
             foreach ($p['routes'] as $k => $r) {
                 if ($r['id'] === 5) {
@@ -93,34 +93,20 @@ return (static function (): array {
                 }
             }
             T::eq([['customer_id' => 12, 'note' => 'a'], ['customer_id' => 40, 'note' => 'b']], Schedule::effectiveStops($p, $route($p, 5), '2026-11-16'));
-            // deactivating the only routable type makes every customer non-routable
-            foreach ($p['waste_types'] as $k => $t) {
-                if ($t['code'] === 'REL') {
-                    $p['waste_types'][$k]['active'] = false;
+            // a customer that lost the route's type (12 is OTC only now) is dropped
+            foreach ($p['customers'] as $k => $cu) {
+                if ($cu['id'] === 12) {
+                    $p['customers'][$k]['waste_types'] = ['OTC', 'RECYCLING'];
                 }
             }
-            T::eq([], Schedule::effectiveStops($p, $route($p, 5), '2026-11-16'));
+            T::eq([['customer_id' => 40, 'note' => 'b']], Schedule::effectiveStops($p, $route($p, 5), '2026-11-16'));
+            // the same list on a RECYCLING route keeps only the customer registered with RECYCLING
+            $rcy = ['waste_type' => 'RECYCLING'] + $route($p, 5);
+            T::eq([['customer_id' => 12, 'note' => 'a']], Schedule::effectiveStops($p, $rcy, '2026-11-16'));
+            T::eq('RECYCLING', Schedule::routeOccurrence($p, $rcy, '2026-11-16')['waste_type']);
+            T::eq('REL', Schedule::routeOccurrence($p, $route($p, 5), '2026-11-16')['waste_type'], 'a route stored without a type is a REL route');
         },
-        'R18 tasks: a one-off OTC task on any day, Sunday and PH included' => function () use ($plan, $keys) {
-            $p = $plan(['tasks' => [
-                ['id' => 1, 'waste_type' => 'OTC', 'customer_id' => 12, 'note' => '', 'rev' => 1, 'date' => '2026-11-15', 'copied_from' => null],
-                ['id' => 2, 'waste_type' => 'OTC', 'customer_id' => 12, 'note' => '', 'rev' => 1, 'date' => '2026-12-25', 'copied_from' => null],
-            ], 'task_overrides' => []]);
-            T::eq(['t1@2026-11-15'], $keys(Schedule::tasksOn($p, '2026-11-15')), 'Sunday');
-            T::eq(['t2@2026-12-25'], $keys(Schedule::tasksOn($p, '2026-12-25')), 'PH');
-            T::eq([], Schedule::tasksOn($p, '2026-11-16'));
-        },
-        'R18 recurring COMPACTOR tasks run on public holidays and on chosen Sundays' => function () use ($plan, $keys) {
-            $p = $plan(['tasks' => [
-                ['id' => 3, 'waste_type' => 'COMPACTOR', 'customer_id' => 40, 'note' => 'bay', 'rev' => 2, 'start' => '2026-11-03', 'end' => null, 'days' => [2, 5]],
-                ['id' => 4, 'waste_type' => 'COMPACTOR', 'customer_id' => 40, 'note' => '', 'rev' => 1, 'start' => '2026-11-12', 'end' => '2026-11-30', 'days' => [7]],
-            ], 'task_overrides' => [['task_id' => 3, 'date' => '2026-11-20', 'cancelled' => true, 'note' => 'closed']]]);
-            T::subset([['key' => 't3@2026-12-25', 'status' => 'scheduled', 'recurring' => true, 'days' => [2, 5]]], Schedule::tasksOn($p, '2026-12-25'));
-            T::eq(['t4@2026-11-29'], $keys(Schedule::tasksOn($p, '2026-11-29')), 'Sunday PH');
-            T::eq([], Schedule::tasksOn($p, '2026-12-06'), 'after end');
-            T::subset([['status' => 'cancelled', 'edited' => true, 'note' => 'closed', 'task_note' => 'bay']], Schedule::tasksOn($p, '2026-11-20'));
-        },
-        '§5.8 order: adhoc first, codes in natural order, paused last; tasks by type order then customer' => function () use ($plan, $keys) {
+        '§5.8 order: adhoc first, codes in natural order, paused last' => function () use ($plan, $keys) {
             $mk = static fn (int $id, string $code, string $type, array $x) => $x + ['id' => $id, 'code' => $code, 'color' => 1, 'type' => $type,
                 'name' => $code, 'note' => '', 'rev' => 1, 'stops' => []];
             $p = $plan(['routes' => [
@@ -138,20 +124,16 @@ return (static function (): array {
                 'the PH one-off, then the paused regulars');
             $p['routes'][] = $mk(5, 'Z9', 'adhoc', ['date' => '2026-11-13', 'copied_from' => null]);
             T::eq('r5@2026-11-13', $keys(Schedule::routesOn($p, '2026-11-13'))[0], 'adhoc first');
-            T::eq(['t3@2026-11-13', 't2@2026-11-13', 't1@2026-11-13'], $keys(Schedule::tasksOn($p, '2026-11-13')),
-                'OTC (ABC Restaurant, Only OTC Co) before COMPACTOR');
         },
-        'R13 snapshot: routes and tasks of a date with identity, statuses and plain stops' => function () use ($plan) {
+        'R13 snapshot: the routes of a date with identity, waste type, statuses and plain stops; no tasks' => function () use ($plan) {
             $p = $plan(['route_overrides' => [['route_id' => 5, 'date' => '2026-11-13', 'cancelled' => true, 'stops' => null, 'note' => 'skip']]]);
             $snap = Schedule::snapshot($p, '2026-11-13');
             T::subset([
-                ['key' => 'r5@2026-11-13', 'kind' => 'route', 'route_id' => 5, 'code' => 'N1', 'color' => 1, 'type' => 'regular', 'name' => 'North 1',
+                ['key' => 'r5@2026-11-13', 'kind' => 'route', 'route_id' => 5, 'code' => 'N1', 'color' => 1, 'type' => 'regular', 'waste_type' => 'REL', 'name' => 'North 1',
                     'status' => 'cancelled', 'edited' => true, 'recurring' => true, 'days' => [1, 3, 5], 'sun' => null, 'ph' => null,
                     'copied_from' => null, 'stops' => [['customer_id' => 12, 'note' => '3 bins'], ['customer_id' => 40, 'note' => '']],
                     'rev' => ['$absent' => true], 'date' => ['$absent' => true]],
-                ['key' => 't3@2026-11-13', 'kind' => 'task', 'task_id' => 3, 'waste_type' => 'COMPACTOR', 'customer_id' => 40,
-                    'recurring' => true, 'status' => 'scheduled'],
-            ], $snap);
+            ], $snap); // exactly one entry: task 3 (Tue/Fri) of the old task feature is not frozen
             T::eq(['customer_id' => 12, 'note' => '3 bins'], $snap[0]['stops'][0], 'no seq in the snapshot');
             T::subset([['key' => 'r5@2026-12-25', 'status' => 'holiday_skipped']], array_values(array_filter(Schedule::snapshot($p, '2026-12-25'),
                 static fn ($e) => $e['key'] === 'r5@2026-12-25')));
@@ -165,8 +147,11 @@ return (static function (): array {
             T::eq([], Schedule::jobStopIds($p, null, '2026-11-09', 'r5', '2026-11-11'), 'past with no frozen plan');
             T::eq([12, 40], Schedule::jobStopIds($p, null, '2026-11-11', 'r5', '2026-11-11'));
             T::eq([12], Schedule::jobStopIds($p, null, '2026-11-18', 'r5', '2026-11-11'), 'override list');
-            T::eq([12], Schedule::jobStopIds($p, null, '2026-11-11', 't6', '2026-11-11'));
-            T::eq('cancelled', Schedule::jobOccurrence($p, null, '2026-11-23', 't10', '2026-11-11')['status']);
+            T::eq([], Schedule::jobStopIds($p, null, '2026-11-11', 't6', '2026-11-11'), 'an old task job has no stops');
+            T::eq(null, Schedule::jobOccurrence($p, null, '2026-11-23', 't10', '2026-11-11'));
+            $withTask = ['plan' => array_merge($frozenDay['plan'], [['key' => 't6@2026-11-09', 'kind' => 'task', 'task_id' => 6, 'customer_id' => 12]])] + $frozenDay;
+            T::eq(null, Schedule::jobOccurrence($p, $withTask, '2026-11-09', 't6', '2026-11-11'), 'a frozen task entry is not a job');
+            T::eq('REL', Schedule::jobOccurrence($p, $frozenDay, '2026-11-09', 'r5', '2026-11-11')['waste_type'], 'a frozen entry without a type is REL');
             T::eq(null, Schedule::jobOccurrence($p, null, '2026-11-12', 'r5', '2026-11-11'), 'not a run date');
             T::eq(null, Schedule::jobOccurrence($p, null, '2026-11-11', 'x5', '2026-11-11'));
         },

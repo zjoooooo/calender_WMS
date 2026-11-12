@@ -3,7 +3,7 @@
 // (cache.ts); with no signal the last cached copy is shown at once with its data time (§7.7).
 // Also: merging the server's stop state with this phone's unsent outbox entries.
 import { useQuery, type QueryClient } from '@tanstack/react-query';
-import { ApiError, driverJob, driverToday, type DriverToday, type JobDetail, type JobStop, type MissReason, type Outcome, type WasteType } from '../api';
+import { ApiError, driverCustomers, driverJob, driverSubmissions, driverToday, type DriverSubmissions, type DriverToday, type SubmitCustomer, type JobDetail, type JobStop, type MissReason, type Outcome, type WasteType } from '../api';
 import { cacheKeys, readCache, writeCache, type Cached } from './cache';
 import { useDriver } from './driverContext';
 import type { OutboxEntry } from './outbox';
@@ -64,6 +64,18 @@ export function useToday() {
 export function useJob(date: string, job: string, enabled = true) {
   const { me } = useDriver();
   return useCachedQuery<JobDetail>(jobKey(date, job), cacheKeys.job(me.id, date, job), (signal) => driverJob(date, job, { signal, timeoutMs: 15_000 }), enabled);
+}
+
+/** The customers a submission can be made for (cached: the picker works with no signal). */
+export function useSubmitCustomers() {
+  const { me } = useDriver();
+  return useCachedQuery<SubmitCustomer[]>(['driver', 'customers'], cacheKeys.customers(me.id), (signal) => driverCustomers({ signal, timeoutMs: 15_000 }));
+}
+
+/** My submissions of one operational date (cached). */
+export function useMySubmissions(date: string, enabled = true) {
+  const { me } = useDriver();
+  return useCachedQuery<DriverSubmissions>(['driver', 'submissions', date], cacheKeys.submissions(me.id, date), (signal) => driverSubmissions(date, { signal, timeoutMs: 15_000 }), enabled && !!date);
 }
 
 /** After a claim: the returned JobDetail becomes the job's data at once (and its cached copy). */

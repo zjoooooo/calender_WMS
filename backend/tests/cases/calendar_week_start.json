@@ -12,7 +12,7 @@
             { "date": "2026-11-08", "dow": 7, "class": "rest", "past": true },
             { "date": "2026-11-09", "dow": 1, "class": "rest", "holiday": "Deepavali (observed)" },
             { "date": "2026-11-10", "dow": 2 },
-            { "date": "2026-11-11", "dow": 3, "past": false, "can_create": ["regular", "adhoc", "task"] },
+            { "date": "2026-11-11", "dow": 3, "past": false, "can_create": ["regular", "adhoc"] },
             { "date": "2026-11-12", "dow": 4 },
             { "date": "2026-11-13", "dow": 5 },
             { "date": "2026-11-14", "dow": 6, "class": "work" }

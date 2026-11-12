@@ -96,8 +96,7 @@ export default function UsersPage() {
                       {u.role === 'driver' && d ? (
                         <>
                           {d.route_job && <div>{t('users.routeJob', { code: d.route_job.code, pending: d.route_job.pending })}</div>}
-                          {d.task_jobs.length > 0 && <div title={d.task_jobs.map((j) => j.customer).join(', ')}>{t('users.taskJobs', { n: d.task_jobs.length })}</div>}
-                          {!d.route_job && d.task_jobs.length === 0 && '–'}
+                          {!d.route_job && '–'}
                         </>
                       ) : (
                         '–'

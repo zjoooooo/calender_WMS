@@ -26,9 +26,9 @@ function fakeServer(url: string): Response {
     const anchor = u.searchParams.get('anchor')!;
     const from = anchor === '2026-11-16' ? '2026-11-16' : '2026-11-09';
     const to = anchor === '2026-11-16' ? '2026-11-22' : '2026-11-15';
-    return envelope({ from, to, today: serverToday, days: [], routes: [], tasks: [], customers: {} });
+    return envelope({ from, to, today: serverToday, days: [], routes: [], customers: {} });
   }
-  if (u.pathname === '/api/driver/today') return envelope({ today: serverToday, routes: [], tasks: [] });
+  if (u.pathname === '/api/driver/today') return envelope({ today: serverToday, routes: [] });
   return new Response('{}', { status: 404 });
 }
 

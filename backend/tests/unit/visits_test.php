@@ -1,6 +1,7 @@
 <?php
 // Result writes R27-R31 (§10.8, §10.9): content, weighable types, tickets, files, the R30 revision matrix,
-// the edit window, LATE, NOT_ON_JOB / OFF_PLAN, office why / back-fill, undo, same customer on two jobs.
+// the edit window, LATE, NOT_ON_JOB / OFF_PLAN, office why / back-fill, undo, same customer on two routes and
+// in a free submission.
 // Setup: tests/runs_lib.php (today Wed 2026-11-11).
 require_once __DIR__ . '/../runs_lib.php';
 
@@ -29,26 +30,26 @@ return (static function (): array {
             T::subset(['rev' => 1, 'ops' => [['op_id' => RunsFx::op(1), 'result' => 'applied']], 'history' => []], RunsFx::diskRun($e, 'r5')['visits']['40']);
             T::subset(['run_status' => 'done', 'run' => ['totals' => ['REL' => 201.0], 'flagged' => 0]], RunsFx::occ($e, 'r5@2026-11-11'));
             // an integer weight and the max value are fine
-            T::ok($put($e, 't6', 12, $b(2, 0, 'collected', ['weights' => ['OTC' => 99999.9]]), 'ali'));
-            T::eq(99999.9, RunsFx::diskRun($e, 't6')['visits']['12']['weights']['OTC']);
+            T::ok(RunsFx::claim($e, 'r50', 'bala'), 201);
+            T::ok($put($e, 'r50', 21, $b(2, 0, 'collected', ['weights' => ['REL' => 99999.9]]), 'bala'));
+            T::eq(99999.9, RunsFx::diskRun($e, 'r50')['visits']['21']['weights']['REL']);
         },
 
-        'weighable types: OTC/COMPACTOR refused on a route, REL refused on a task (TYPE_NOT_ALLOWED)' => function () use ($held, $put, $b) {
+        'weighable types: only the route\'s one waste type (TYPE_NOT_ALLOWED otherwise); the old task jobs take no results' => function () use ($held, $put, $b) {
             $e = RunsFx::env(['runs' => $held()]);
             T::subset(['field' => 'weights.COMPACTOR', 'details' => ['allowed' => ['REL']]],
                 T::err($put($e, 'r5', 40, $b(1, 0, 'collected', ['weights' => ['REL' => 5, 'COMPACTOR' => 5]]), 'ali'), 422, 'TYPE_NOT_ALLOWED'));
             T::err($put($e, 'r5', 12, $b(2, 0, 'collected', ['weights' => ['OTC' => 5]]), 'ali'), 422, 'TYPE_NOT_ALLOWED');
             T::err($put($e, 'r5', 12, $b(3, 0, 'collected', ['weights' => ['GLS' => 5]]), 'ali'), 422, 'TYPE_NOT_ALLOWED');
-            T::subset(['field' => 'weights.REL', 'details' => ['allowed' => ['OTC']]],
-                T::err($put($e, 't6', 12, $b(4, 0, 'collected', ['weights' => ['REL' => 5]]), 'ali'), 422, 'TYPE_NOT_ALLOWED'));
-            T::err($put($e, 't6', 12, $b(5, 0, 'collected', ['weights' => ['OTC' => 5], 'tickets' => ['REL' => 'X']]), 'ali'), 422, 'TYPE_NOT_ALLOWED');
-            T::ok($put($e, 't6', 12, $b(6, 0, 'collected', ['weights' => ['OTC' => 5]]), 'ali'));
-            T::err($put($e, 't6', 40, $b(7, 0, 'collected', ['weights' => ['OTC' => 5]]), 'ali'), 422, 'NOT_ON_JOB'); // a task has one customer
-            T::err($put($e, 't6', 40, $b(8, 0, 'collected', ['weights' => ['OTC' => 5]]), 'mei', RunsFx::WED, true), 422, 'NOT_ON_JOB'); // office too
-            // the stop's weigh_types in JobDetail match: REL only on the route, OTC only on the task
+            T::subset(['field' => 'weights.RECYCLING', 'details' => ['allowed' => ['REL']]],
+                T::err($put($e, 'r5', 12, $b(4, 0, 'collected', ['weights' => ['RECYCLING' => 5]]), 'ali'), 422, 'TYPE_NOT_ALLOWED'));
+            T::err($put($e, 'r5', 12, $b(5, 0, 'collected', ['weights' => ['REL' => 5], 'tickets' => ['OTC' => 'X']]), 'ali'), 422, 'TYPE_NOT_ALLOWED');
+            T::err($put($e, 't6', 12, $b(6, 0, 'collected', ['weights' => ['OTC' => 5]]), 'ali'), 404, 'NOT_FOUND'); // Ali "holds" the old t6 run
+            T::err($put($e, 't6', 12, $b(7, 0, 'collected', ['weights' => ['OTC' => 5]]), 'mei', RunsFx::WED, true), 404, 'NOT_FOUND'); // office too
+            T::eq([], (array) RunsFx::diskRun($e, 't6')['visits']);
+            // the stop's weigh_types in JobDetail match: REL only
             $j = T::ok($e->call('GET', '/api/driver/runs/2026-11-11/r5', null, 'ali'));
             T::eq([['REL'], ['REL']], array_column($j['stops'], 'weigh_types'));
-            T::eq([['OTC']], array_column(T::ok($e->call('GET', '/api/driver/runs/2026-11-11/t6', null, 'ali'))['stops'], 'weigh_types'));
         },
 
         'weights and reasons: WEIGHT_INVALID, WEIGHT_REQUIRED, missed needs a reason, "other" needs a note' => function () use ($held, $put, $b) {
@@ -87,10 +88,11 @@ return (static function (): array {
             T::eq(['REL' => 'WB-881'], (array) $d['visit']['tickets']);
             $j = T::ok($e->call('GET', '/api/driver/runs/2026-11-11/r5', null, 'ali'));
             T::eq(['REL'], $j['stops'][0]['ticket_types']);
-            // OTC is on-site: a ticket sent anyway is dropped, none is required
-            $d = T::ok($put($e, 't6', 12, $b(5, 0, 'collected', ['weights' => ['OTC' => 10], 'tickets' => ['OTC' => 'T1']]), 'ali'));
+            // an on-site type: a ticket sent anyway is dropped, none is required
+            $o = RunsFx::env(['runs' => $held()]);
+            $d = T::ok($put($o, 'r5', 12, $b(5, 0, 'collected', ['weights' => ['REL' => 10], 'tickets' => ['REL' => 'T1']]), 'ali'));
             T::eq([], (array) $d['visit']['tickets']);
-            T::eq([], T::ok($e->call('GET', '/api/driver/runs/2026-11-11/t6', null, 'ali'))['stops'][0]['ticket_types']);
+            T::eq([], T::ok($o->call('GET', '/api/driver/runs/2026-11-11/r5', null, 'ali'))['stops'][0]['ticket_types']);
         },
 
         'files: FILE_MISSING for a reference that was not uploaded; at most 5 photos; bad names' => function () use ($held, $put, $b) {
@@ -216,14 +218,14 @@ return (static function (): array {
             $r = $put($e, 'r5', 21, $b(6, 0), 'ali');
             T::subset(['visit' => ['flags' => ['OFF_PLAN']], 'progress' => ['collected' => 1, 'pending' => 2, 'total' => 3]], T::ok($r));
             T::eq('OFF_PLAN', $r['json']['warnings'][0]['code']);
-            // an OFF_PLAN customer with no routable type left may be weighed in any active routable type
+            // an OFF_PLAN customer that lost the type is still weighed in the route's one type, so an offline collection is never lost
             T::ok($put($e, 'r5', 50, $b(7, 0, 'collected', ['weights' => ['REL' => 3]]), 'ali'));
             $o = RunsFx::occ($e, 'r5@2026-11-11');
             T::eq([21, 50], array_column($o['off_plan'], 'customer_id'));
             $j = T::ok($e->call('GET', '/api/driver/runs/2026-11-11/r5', null, 'ali'));
             T::subset([['customer' => ['id' => 21], 'on_plan' => false, 'seq' => 3, 'weigh_types' => ['REL']], ['customer' => ['id' => 50], 'on_plan' => false, 'weigh_types' => ['REL']]],
                 array_slice($j['stops'], 2));
-            // the office may record any routable customer as OFF_PLAN, never a non-routable one
+            // the office may record any customer registered with the route's type as OFF_PLAN, never another one
             T::subset(['visit' => ['flags' => ['OFF_PLAN'], 'driver_id' => 3]], T::ok($put($e, 'r5', 70, $b(8, 0), 'mei', RunsFx::WED, true)));
             $only = RunsFx::env(['runs' => ['r5' => RunsFx::run('r5', 3)]]);
             T::err($put($only, 'r5', 50, $b(9, 0, 'collected', ['weights' => ['REL' => 3]]), 'mei', RunsFx::WED, true), 422, 'NOT_ON_JOB');
@@ -267,25 +269,22 @@ return (static function (): array {
             T::eq(null, $d['visit']);
         },
 
-        'R31 + R32: the same customer on a route and a task; day totals count both, night-shift visits count for the job date' => function () use ($held, $put, $b) {
-            $e = RunsFx::env(['runs' => $held()]);
+        'R31 + R32: the same customer on two routes and in a free submission; day totals count all, night-shift visits count for the job date' => function () use ($held, $put, $b) {
+            // today N1 also visits customer 21, who is on A2 (r50) too
+            $e = RunsFx::env(['runs' => $held() + ['r50' => RunsFx::run('r50', 4)], 'plan' => ['route_overrides' => [['route_id' => 5, 'date' => '2026-11-11',
+                'cancelled' => false, 'stops' => [['customer_id' => 12, 'note' => ''], ['customer_id' => 40, 'note' => ''], ['customer_id' => 21, 'note' => '']], 'note' => '']]]]);
             $j = T::ok($e->call('GET', '/api/driver/runs/2026-11-11/r5', null, 'ali'));
-            T::eq([['job' => 't6', 'kind' => 'task', 'label' => 'OTC task', 'outcome' => null]], $j['stops'][0]['also_on']);
-            T::eq([['job' => 't12', 'kind' => 'task', 'label' => 'COMPACTOR task', 'outcome' => null]], $j['stops'][1]['also_on']);
-            // DRV-9: the task label follows the reader's language (no English in the Chinese UI)
-            T::ok($e->call('PATCH', '/api/me', ['lang' => 'zh'], 'ali'));
-            $z = T::ok($e->call('GET', '/api/driver/runs/2026-11-11/r5', null, 'ali'));
-            T::eq([['job' => 't6', 'kind' => 'task', 'label' => 'OTC 任务', 'outcome' => null]], $z['stops'][0]['also_on']);
+            T::eq([], $j['stops'][0]['also_on'], 'the old tasks t6 / t12 for customers 12 and 40 are not jobs');
+            T::eq([], $j['stops'][1]['also_on']);
+            T::eq([['job' => 'r50', 'kind' => 'route', 'label' => 'A2', 'outcome' => null]], $j['stops'][2]['also_on']);
             T::eq([['job' => 'r5', 'kind' => 'route', 'label' => 'N1', 'outcome' => null]],
-                T::ok($e->call('GET', '/api/driver/runs/2026-11-11/t6', null, 'ali'))['stops'][0]['also_on']);
-            T::ok($e->call('PATCH', '/api/me', ['lang' => 'en'], 'ali'));
-            $t = T::ok($e->call('GET', '/api/driver/today', null, 'ali'));
-            T::eq([['job' => 'r5', 'code' => 'N1']], array_values(array_filter($t['tasks'], static fn ($x) => $x['job'] === 't6'))[0]['also_on']);
-            T::ok($put($e, 't6', 12, $b(1, 0, 'collected', ['weights' => ['OTC' => '30,2']]), 'ali'));
+                T::ok($e->call('GET', '/api/driver/runs/2026-11-11/r50', null, 'bala'))['stops'][0]['also_on']);
+            // a free OTC submission for customer 12, who is also on N1: each is its own record
+            T::ok(RunsFx::sub($e, 801, RunsFx::subBody(1, ['weights' => ['OTC' => '30,2']])), 201);
             T::ok($put($e, 'r5', 12, $b(2, 0, 'collected', ['weights' => ['REL' => 120.5]]), 'ali'));
-            $j = T::ok($e->call('GET', '/api/driver/runs/2026-11-11/r5', null, 'ali'));
-            T::eq('collected', $j['stops'][0]['also_on'][0]['outcome']);
-            T::eq([['job' => 'r5', 'kind' => 'route', 'label' => 'N1', 'outcome' => 'collected']], T::ok($e->call('GET', '/api/driver/runs/2026-11-11/t6', null, 'ali'))['stops'][0]['also_on']);
+            T::ok($put($e, 'r5', 21, $b(4, 0, 'missed'), 'ali'));
+            T::eq([['job' => 'r5', 'kind' => 'route', 'label' => 'N1', 'outcome' => 'missed']],
+                T::ok($e->call('GET', '/api/driver/runs/2026-11-11/r50', null, 'bala'))['stops'][0]['also_on']);
             $day = static function (TestEnv $e, string $date): array {
                 foreach (T::ok($e->call('GET', '/api/calendar?view=week&anchor=' . $date, null, 'mei'))['days'] as $d) {
                     if ($d['date'] === $date) {
@@ -299,12 +298,13 @@ return (static function (): array {
             $e->setNow('2026-11-12T02:30:00+08:00');
             $r = T::ok($put($e, 'r5', 40, $b(3, 0, 'collected', ['weights' => ['REL' => 80], 'captured_at' => '2026-11-12T02:29:00+08:00']), 'ali'));
             T::eq([], $r['visit']['flags']);
-            T::subset(['totals' => ['REL' => 200.5, 'OTC' => 30.2], 'ops' => ['done' => 2, 'active' => 0]], $day($e, '2026-11-11'));
+            T::subset(['totals' => ['REL' => 200.5, 'OTC' => 30.2], 'ops' => ['done' => 1, 'active' => 1]], $day($e, '2026-11-11'));
             T::subset(['totals' => []], $day($e, '2026-11-12'));
-            // the day stays provisional while a job is active or open: t12 is still not started, r50 too
-            T::eq(false, $day($e, '2026-11-11')['provisional']);
-            T::ok(RunsFx::claim($e, 't12', 'ali'), 201);
+            // the day stays provisional while a job is active or open (Bala still holds A2), not after
             T::eq(true, $day($e, '2026-11-11')['provisional']);
+            T::ok($put($e, 'r50', 21, $b(5, 0, 'collected', ['weights' => ['REL' => 1]]), 'bala'));
+            T::eq(false, $day($e, '2026-11-11')['provisional']);
+            T::subset(['totals' => ['REL' => 201.5, 'OTC' => 30.2]], $day($e, '2026-11-11'));
         },
     ];
 })();

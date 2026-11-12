@@ -1,6 +1,5 @@
 // Office calendar (§9.2, M3–M7 office side): top bar (big month title · ‹ Today › · Week | Month · ⚡ Urgent
-// pickup · + Task), filter bar (search, R / S / ⚡A chips, one chip per task type, Clear highlight, Expand /
-// Collapse all), legend, month (default) or week view, Sunday first, and every drawer and dialog, opened
+// pickup), filter bar (search, R / S / ⚡A chips, Clear highlight, Expand / Collapse all), legend, month (default) or week view, Sunday first, and every drawer and dialog, opened
 // through one `open()` (calendarContext).
 // - view and anchor live in the URL (?view=week&anchor=2026-12-25), so Holidays-page links work; no view = month.
 // - One query per view and anchor (week_start=sun); it polls every 30 s while the range contains today and on
@@ -9,9 +8,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
-import { getCalendar, type CalendarView, type RouteOccurrence, type RouteType, type TaskOccurrence } from '../api';
+import { getCalendar, type CalendarView, type RouteOccurrence, type RouteType } from '../api';
 import { fmtDay, monthName, useI18n } from '../i18n';
-import { useSession } from '../session';
 import { Drawer } from '../ui/Drawer';
 import { ErrorBanner, Loading } from '../ui/Feedback';
 import { anyLayerOpen } from '../ui/layer';
@@ -22,17 +20,14 @@ import { DayColumn, MonthView, WeekView } from './CalendarViews';
 import { CopyDialog } from './CopyDialog';
 import { RouteDrawer } from './RouteDrawer';
 import { RouteForm } from './RouteForm';
-import { TaskDialog } from './TaskDialog';
-import { TaskDrawer } from './TaskDrawer';
 import { UrgentDialog } from './UrgentDialog';
 import './office.css';
 
-type DrawerOverlay = Extract<Overlay, { kind: 'route' | 'task' }>;
-type DialogOverlay = Exclude<Overlay, { kind: 'route' | 'task' | 'day' }>;
+type DrawerOverlay = Extract<Overlay, { kind: 'route' }>;
+type DialogOverlay = Exclude<Overlay, { kind: 'route' | 'day' }>;
 
 export default function CalendarPage() {
   const { t, lang } = useI18n();
-  const { meta } = useSession();
   const [params, setParams] = useSearchParams();
   const view: CalendarView = params.get('view') === 'week' ? 'week' : 'month';
   const anchor = params.get('anchor') ?? '';
@@ -49,8 +44,7 @@ export default function CalendarPage() {
   const [hl, setHl] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [types, setTypes] = useState<Record<RouteType, boolean>>({ regular: true, special: true, adhoc: true });
-  const [hiddenTaskTypes, setHiddenTaskTypes] = useState<string[]>([]);
-  const filters: Filters = useMemo(() => ({ types, hiddenTaskTypes }), [types, hiddenTaskTypes]);
+  const filters: Filters = useMemo(() => ({ types }), [types]);
 
   const [drawer, setDrawer] = useState<DrawerOverlay | null>(null);
   const [dayDrawer, setDayDrawer] = useState<string | null>(null);
@@ -94,10 +88,9 @@ export default function CalendarPage() {
     [view, groups],
   );
   const allOpen = collapsible.length > 0 && collapsible.every((d) => expanded[d]);
-  const taskTypes = (meta?.waste_types ?? []).filter((w) => !w.routable && w.active);
 
   const open = useCallback((o: Overlay) => {
-    if (o.kind === 'route' || o.kind === 'task') setDrawer(o);
+    if (o.kind === 'route') setDrawer(o);
     else if (o.kind === 'day') setDayDrawer(o.date);
     else setDialog(o);
   }, []);
@@ -105,15 +98,14 @@ export default function CalendarPage() {
   const ctx: CalendarCtx | null = data ? { data, matcher, hl, toggleHighlight, open } : null;
 
   // The occurrence behind the open drawer, from the loaded range (it follows every refetch).
-  const findOcc = (key: string): RouteOccurrence | TaskOccurrence | undefined =>
-    data?.routes.find((o) => o.key === key) ?? data?.tasks.find((o) => o.key === key);
+  const findOcc = (key: string): RouteOccurrence | undefined => data?.routes.find((o) => o.key === key);
   const drawerOcc = drawer ? findOcc(drawer.key) : undefined;
   // Close a drawer whose occurrence is gone after a refetch (deleted, split or moved). A drawer opened for a
   // route that was just created waits for the first refetch after it was opened.
   useEffect(() => {
     if (!drawer || !data) return;
     if (findOcc(drawer.key)) {
-      if (drawer.since) setDrawer({ kind: drawer.kind, key: drawer.key } as DrawerOverlay);
+      if (drawer.since) setDrawer({ kind: 'route', key: drawer.key });
     } else if (!q.isPlaceholderData && !q.isFetching && (!drawer.since || q.dataUpdatedAt > drawer.since)) {
       setDrawer(null);
     }
@@ -172,9 +164,6 @@ export default function CalendarPage() {
         <button type="button" className="btn urgent" onClick={() => open({ kind: 'urgent' })}>
           ⚡ {t('urgent.title')}
         </button>
-        <button type="button" className="btn" onClick={() => open({ kind: 'taskCreate' })}>
-          {t('cal.addTask')}
-        </button>
       </div>
 
       {data && data.missing_holiday_years.length > 0 && (
@@ -202,22 +191,6 @@ export default function CalendarPage() {
             {t(`type.${ty}`)}
           </button>
         ))}
-        {taskTypes.map((w) => {
-          const on = !hiddenTaskTypes.includes(w.code);
-          return (
-            <button
-              key={w.code}
-              type="button"
-              className="tchip"
-              aria-pressed={on}
-              title={t('cal.taskChip', { type: w.name })}
-              onClick={() => setHiddenTaskTypes((s) => (on ? [...s, w.code] : s.filter((c) => c !== w.code)))}
-            >
-              <span className="wtag">{w.abbr || w.code}</span>
-              {t('cal.tasks')}
-            </button>
-          );
-        })}
         {(hl || search) && (
           <button
             type="button"
@@ -280,19 +253,26 @@ export default function CalendarPage() {
             label={dayGroup ? fmtDay(dayGroup.day.date, lang) : ''}
             title={<h2>{dayGroup ? fmtDay(dayGroup.day.date, lang, { year: true }) : ''}</h2>}
             header={
-              dayGroup &&
-              view === 'month' && (
+              dayGroup && (
                 <div className="row">
-                  <button
-                    type="button"
-                    className="btn small"
-                    onClick={() => {
-                      setDayDrawer(null);
-                      setNav('week', dayGroup.day.date);
-                    }}
-                  >
-                    {t('cal.openWeek')}
-                  </button>
+                  {view === 'month' && (
+                    <button
+                      type="button"
+                      className="btn small"
+                      onClick={() => {
+                        setDayDrawer(null);
+                        setNav('week', dayGroup.day.date);
+                      }}
+                    >
+                      {t('cal.openWeek')}
+                    </button>
+                  )}
+                  {/* the day's totals also count the drivers' free submissions, which have no line here */}
+                  {(dayGroup.day.past || dayGroup.day.date === data?.today) && (
+                    <Link className="btn small" to={`/submissions?date=${dayGroup.day.date}`}>
+                      {t('nav.submissions')}
+                    </Link>
+                  )}
                 </div>
               )
             }
@@ -304,8 +284,7 @@ export default function CalendarPage() {
             )}
           </Drawer>
 
-          {drawerOcc?.kind === 'route' && <RouteDrawer key={drawerOcc.key} occ={drawerOcc} onClose={() => setDrawer(null)} />}
-          {drawerOcc?.kind === 'task' && <TaskDrawer key={drawerOcc.key} occ={drawerOcc} onClose={() => setDrawer(null)} />}
+          {drawerOcc && <RouteDrawer key={drawerOcc.key} occ={drawerOcc} onClose={() => setDrawer(null)} />}
 
           {dialog?.kind === 'copy' && <CopyDialog occ={dialog.occ} mode={dialog.mode} onClose={() => setDialog(null)} />}
           {dialog?.kind === 'routeCreate' && (
@@ -322,14 +301,8 @@ export default function CalendarPage() {
             />
           )}
           {dialog?.kind === 'urgent' && (
-            <UrgentDialog
-              initialDate={dialog.date}
-              initialCustomers={dialog.customers}
-              onClose={() => setDialog(null)}
-              onTaskInstead={() => setDialog({ kind: 'taskCreate', date: undefined })}
-            />
+            <UrgentDialog initialDate={dialog.date} initialCustomers={dialog.customers} onClose={() => setDialog(null)} />
           )}
-          {dialog?.kind === 'taskCreate' && <TaskDialog mode="create" date={dialog.date} onClose={() => setDialog(null)} />}
         </CalendarContext.Provider>
       )}
     </>

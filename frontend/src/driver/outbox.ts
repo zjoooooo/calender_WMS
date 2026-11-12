@@ -3,6 +3,9 @@
 // Stores (each a KV, see cache.ts):
 //   files    '<uuid>.<ext>' -> {blob, ext, uploaded}     photos and signatures taken on this phone
 //   outbox   '<seq>'        -> OutboxEntry                one unsent result write per stop, in insertion order
+// A free submission (no plan, no claim) is an entry too: its job is 'sub:<uuid>' (the id made on the phone,
+// see submission.ts) and its body also carries waste_type, customer_id and vehicle_no; the OutboxApi the
+// app passes in sends such an entry to PUT /driver/submissions/{date}/{id}. Everything else is the same.
 //   notsent  '<seq>'        -> NotSentEntry               entries the server refused (S7)
 // An entry's `key` is '<date>/<job>/<customer_id>'; entries also carry the user id, so a second driver
 // signing in on the same phone never sends the first driver's entries.
@@ -35,9 +38,9 @@ export interface FileRec {
 /** What the screens need to show an entry without the job (Not sent, a form opened offline). */
 export interface StopLabel {
   customer: string;
-  /** Route code, or the task's waste type. */
+  /** Route code, or the submission's waste type. */
   job_label: string;
-  kind: 'route' | 'task';
+  kind: 'route' | 'submission';
   weigh_types: string[];
   ticket_types: string[];
 }

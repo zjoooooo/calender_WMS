@@ -1,12 +1,14 @@
-// S1 Today (§7.3, §9.3): the op_date's jobs. Top bar with the date (and the night-shift line between
-// midnight and the rollover), the driver's name and the sync pill; "My work" (held route and tasks,
-// "Assigned by office"); tabs Routes / Tasks, each with the sections Needs driver, Available, Taken
-// and Done. Taken jobs are grey and cannot be tapped. Banners: "New today" (only jobs still open to this
-// driver: not done, not taken by someone else), "Not sent", switch mode.
+// S1 Today (§7.3, §9.3): the op_date's routes. Top bar with the date (and the night-shift line between
+// midnight and the rollover), the driver's name and the sync pill; "My work" (the held route, "Assigned by
+// office"); the routes in the sections Needs driver, Available, Taken and Done (each card carries the
+// route's waste-type tag); then the free submissions: a [Submit OTC / COMPACTOR / EROSE] button (no plan,
+// no claim) and "My submissions today" (the server's list with this phone's unsent ones; tap to change or
+// delete). Taken routes are grey and cannot be tapped. Banners: "New today" (only routes still open to
+// this driver: not done, not taken by someone else), "Not sent", switch mode.
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { prefs, type DriverRouteCard, type DriverTaskCard, type DriverToday } from '../api';
-import { fmtTime, useI18n } from '../i18n';
+import { prefs, type DriverRouteCard, type DriverToday, type WasteType } from '../api';
+import { fmtTime, fmtWeight, useI18n } from '../i18n';
 import { useSession } from '../session';
 import { TypeTag, WasteTag } from '../ui/Chip';
 import { ErrorBanner, Loading } from '../ui/Feedback';
@@ -15,10 +17,10 @@ import { rcStyle } from '../ui/palette';
 import { useToast } from '../ui/Toast';
 import { pruneCache } from './cache';
 import { useDriver } from './driverContext';
-import { typeMap, useToday } from './data';
+import { typeMap, useMySubmissions, useToday } from './data';
 import { Sheet, statusText, stopsText, TopBar } from './parts';
+import { mergeSubmissions } from './submission';
 
-type Tab = 'routes' | 'tasks';
 const SECTIONS = ['open', 'not_started', 'active', 'done'] as const;
 
 const driverName = (d: DriverRouteCard['driver']): string | null => (d == null ? null : typeof d === 'string' ? d : d.name);
@@ -36,11 +38,6 @@ export default function Today() {
   const q = useToday();
   const [params, setParams] = useSearchParams();
   const switching = params.get('switch') === '1';
-  const [tab, setTabState] = useState<Tab>(() => (switching ? 'routes' : prefs.get('driver.tab') === 'tasks' ? 'tasks' : 'routes'));
-  const setTab = (x: Tab) => {
-    setTabState(x);
-    prefs.set('driver.tab', x);
-  };
   const [menu, setMenu] = useState(false);
   const [logoutRefused, setLogoutRefused] = useState(false);
   const data = q.data?.data;
@@ -63,7 +60,7 @@ export default function Today() {
 
   // "New today" (§8.4): job keys not in the last copy this phone has seen.
   const seenKey = data ? `driver.seen.${me.id}.${data.today}` : '';
-  const jobKeys = useMemo(() => (data ? [...data.routes.map((r) => r.job), ...data.tasks.map((x) => x.job)] : []), [data]);
+  const jobKeys = useMemo(() => (data ? data.routes.map((r) => r.job) : []), [data]);
   const [seen, setSeen] = useState<string[] | null>(null);
   useEffect(() => {
     if (!seenKey) return;
@@ -82,10 +79,7 @@ export default function Today() {
   // Only jobs this driver can still act on: not done, and not taken by someone else (DRV: no stale news).
   const actionable = useMemo(() => {
     const ok = (status: string, holder: number | null) => status === 'planned' || status === 'not_started' || status === 'open' || (status === 'active' && holder === me.id);
-    return new Set([
-      ...(data?.routes ?? []).filter((r) => ok(r.status, driverId(r.driver))).map((r) => r.job),
-      ...(data?.tasks ?? []).filter((x) => ok(x.status, x.driver?.id ?? null)).map((x) => x.job),
-    ]);
+    return new Set((data?.routes ?? []).filter((r) => ok(r.status, driverId(r.driver))).map((r) => r.job));
   }, [data, me.id]);
   const fresh = seen ? jobKeys.filter((k) => !seen.includes(k) && actionable.has(k)) : [];
   const ackNew = () => {
@@ -116,7 +110,6 @@ export default function Today() {
   const nightShift = data.now && data.now.slice(0, 10) !== data.today && s.meta?.day_ends_at;
   const myRouteJob = data.my_route?.job ?? null;
   const routes = data.routes;
-  const tasks = data.tasks;
 
   return (
     <>
@@ -150,9 +143,7 @@ export default function Today() {
           <div className="dban info" data-testid="new-today">
             <span className="grow">
               {t('driver.newToday', {
-                list: fresh
-                  .map((k) => routes.find((r) => r.job === k)?.code ?? tasks.find((x) => x.job === k)?.customer.name ?? k)
-                  .join(', '),
+                list: fresh.map((k) => routes.find((r) => r.job === k)?.code ?? k).join(', '),
               })}
             </span>
             <button type="button" className="link" onClick={ackNew}>
@@ -171,50 +162,28 @@ export default function Today() {
 
         <MyWork data={data} />
 
-        <div className="dtabs" role="tablist">
-          <button type="button" role="tab" aria-selected={tab === 'routes'} onClick={() => setTab('routes')}>
-            {t('driver.tab.routes', { n: routes.length })}
-          </button>
-          <button type="button" role="tab" aria-selected={tab === 'tasks'} onClick={() => setTab('tasks')}>
-            {t('driver.tab.tasks', { n: tasks.length })}
-          </button>
+        {/* above the routes, so the button is always one tap away */}
+        {!switching && <Submissions today={data.today} types={types} free={data.waste_types.filter((w) => !w.routable)} />}
+
+        <div className="sec" data-testid="routes-head">
+          {t('driver.tab.routes', { n: routes.length })}
         </div>
-
-        {tab === 'routes' &&
-          (routes.length === 0 ? (
-            <div className="empty">{t('driver.noRoutes')}</div>
-          ) : (
-            SECTIONS.map((sec) => {
-              const list = routes.filter((r) => r.status === sec);
-              if (!list.length) return null;
-              return (
-                <section key={sec} className="stack" data-section={sec}>
-                  <div className={sec === 'open' ? 'sec open' : 'sec'}>{t('driver.sec.' + sec)}</div>
-                  {list.map((r) => (
-                    <RouteCard key={r.job} card={r} myId={me.id} isNew={fresh.includes(r.job)} switching={switching && r.job !== myRouteJob} />
-                  ))}
-                </section>
-              );
-            })
-          ))}
-
-        {tab === 'tasks' &&
-          (tasks.length === 0 ? (
-            <div className="empty">{t('driver.noTasks')}</div>
-          ) : (
-            SECTIONS.map((sec) => {
-              const list = tasks.filter((x) => x.status === sec);
-              if (!list.length) return null;
-              return (
-                <section key={sec} className="stack" data-section={sec}>
-                  <div className={sec === 'open' ? 'sec open' : 'sec'}>{t('driver.sec.' + sec)}</div>
-                  {list.map((x) => (
-                    <TaskCard key={x.job} card={x} myId={me.id} myRoute={myRouteJob} abbr={types[x.waste_type]?.abbr} isNew={fresh.includes(x.job)} />
-                  ))}
-                </section>
-              );
-            })
-          ))}
+        {routes.length === 0 ? (
+          <div className="empty">{t('driver.noRoutes')}</div>
+        ) : (
+          SECTIONS.map((sec) => {
+            const list = routes.filter((r) => r.status === sec);
+            if (!list.length) return null;
+            return (
+              <section key={sec} className="stack" data-section={sec}>
+                <div className={sec === 'open' ? 'sec open' : 'sec'}>{t('driver.sec.' + sec)}</div>
+                {list.map((r) => (
+                  <RouteCard key={r.job} card={r} myId={me.id} isNew={fresh.includes(r.job)} switching={switching && r.job !== myRouteJob} abbr={types[r.waste_type]?.abbr} />
+                ))}
+              </section>
+            );
+          })
+        )}
       </main>
 
       <Sheet open={menu} title={t('driver.menu')} onClose={() => setMenu(false)}>
@@ -246,7 +215,7 @@ export default function Today() {
 
 function MyWork({ data }: { data: DriverToday }) {
   const { t } = useI18n();
-  if (!data.my_route && !data.my_tasks.length) return null;
+  if (!data.my_route) return null;
   const r = data.my_route;
   const routeCard = r ? data.routes.find((x) => x.job === r.job) : undefined;
   return (
@@ -274,23 +243,11 @@ function MyWork({ data }: { data: DriverToday }) {
           </span>
         </Link>
       )}
-      {data.my_tasks.map((x) => (
-        <Link key={x.job} className="jcard mine" to={`/driver/job/${x.date}/${x.job}`}>
-          <span className="bar" />
-          <span className="jb">
-            <span className="jl1">
-              <WasteTag code={x.waste_type} abbr={data.waste_types.find((w) => w.code === x.waste_type)?.abbr} />
-              <span className="jname">{x.customer}</span>
-              {x.assigned && <span className="assigned">{t('driver.assigned')}</span>}
-            </span>
-          </span>
-        </Link>
-      ))}
     </section>
   );
 }
 
-function RouteCard({ card, myId, isNew, switching }: { card: DriverRouteCard; myId: number; isNew: boolean; switching: boolean }) {
+function RouteCard({ card, myId, isNew, switching, abbr }: { card: DriverRouteCard; myId: number; isNew: boolean; switching: boolean; abbr?: string }) {
   const { t } = useI18n();
   const nav = useNavigate();
   const mine = card.status === 'active' && driverId(card.driver) === myId;
@@ -315,6 +272,7 @@ function RouteCard({ card, myId, isNew, switching }: { card: DriverRouteCard; my
             {card.code}
           </span>
           <TypeTag type={card.type} />
+          <WasteTag code={card.waste_type} abbr={abbr} />
           <span className="jname">{card.name}</span>
           {isNew && <span className="newtag">{t('driver.new')}</span>}
         </span>
@@ -323,42 +281,44 @@ function RouteCard({ card, myId, isNew, switching }: { card: DriverRouteCard; my
         </span>
         {card.note && <span className="jmeta">{card.note}</span>}
         <span className={`jst ${card.status}`} data-testid="status">
-          {statusText(t, card.status, { mine, driver: (driverName(card.driver) ?? '') || null, resolved, total: resolved + card.pending, leftBy: card.left_by, byOffice: !!card.released_by_office, kind: 'route' })}
+          {statusText(t, card.status, { mine, driver: (driverName(card.driver) ?? '') || null, resolved, total: resolved + card.pending, leftBy: card.left_by, byOffice: !!card.released_by_office })}
         </span>
       </span>
     </button>
   );
 }
 
-function TaskCard({ card, myId, myRoute, abbr, isNew }: { card: DriverTaskCard; myId: number; myRoute: string | null; abbr?: string; isNew: boolean }) {
+/** The free submissions: the [Submit …] button and my submissions of today (unsent ones included). */
+function Submissions({ today, types, free }: { today: string; types: Record<string, WasteType>; free: WasteType[] }) {
   const { t } = useI18n();
-  const nav = useNavigate();
-  const mine = card.status === 'active' && card.driver?.id === myId;
-  const taken = card.status === 'active' && !mine;
-  const also = card.also_on.map((a) => (a.job === myRoute ? t('driver.alsoOnYour', { code: a.code }) : t('driver.alsoOn', { what: a.code })));
+  const { entries } = useDriver();
+  const q = useMySubmissions(today);
+  const list = mergeSubmissions(q.data?.data.submissions ?? [], entries, today);
+  if (free.length === 0 && list.length === 0) return null;
   return (
-    <button
-      type="button"
-      className={['jcard', taken ? 'taken' : '', mine ? 'mine' : ''].filter(Boolean).join(' ')}
-      disabled={taken}
-      data-job={card.job}
-      onClick={() => nav(`/driver/job/${card.date}/${card.job}`)}
-    >
-      <span className="bar" />
-      <span className="jb">
-        <span className="jl1">
-          <WasteTag code={card.waste_type} abbr={abbr} />
-          {card.recurring && <span title={t('driver.recurring')}>↻</span>}
-          <span className="jname">{card.customer.name}</span>
-          {isNew && <span className="newtag">{t('driver.new')}</span>}
-        </span>
-        <span className="jmeta">{card.customer.address}</span>
-        {card.note && <span className="jmeta">{card.note}</span>}
-        {also.length > 0 && <span className="jmeta">{also.join(' · ')}</span>}
-        <span className={`jst ${card.status}`} data-testid="status">
-          {statusText(t, card.status, { mine, driver: card.driver?.name ?? null, kind: 'task' })}
-        </span>
-      </span>
-    </button>
+    <section className="stack" data-testid="submissions">
+      <div className="sec">{t('driver.submit.section')}</div>
+      {free.length > 0 && (
+        <Link className="dbtn primary" to="/driver/submit" data-testid="submit-new">
+          + {t('driver.submit.button', { types: free.map((w) => w.abbr || w.code).join(' / ') })}
+        </Link>
+      )}
+      {list.map((x) => (
+        <Link key={x.id} className="jcard" to={`/driver/submit/${x.date}/${x.id}`} data-submission={x.id}>
+          <span className="bar" />
+          <span className="jb">
+            <span className="jl1">
+              <WasteTag code={x.waste_type} abbr={types[x.waste_type]?.abbr} />
+              <span className="jname">{x.customer}</span>
+            </span>
+            <span className="jmeta">
+              {fmtWeight(Number(String(x.weight).replace(',', '.')))} {types[x.waste_type]?.unit ?? 'kg'}
+              {x.vehicle_no ? ' · ' + x.vehicle_no : ''}
+              {x.unsent ? ' · ' + t('driver.submit.unsent') : ''}
+            </span>
+          </span>
+        </Link>
+      ))}
+    </section>
   );
 }

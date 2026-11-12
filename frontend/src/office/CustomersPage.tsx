@@ -1,5 +1,5 @@
-// Customers page (§9.2, §6.9, R4): searchable table (code, name, address, waste-type tags, routes,
-// tasks), archived filter, create / edit (CustomerFormDialog), Archive with a removal preview and a
+// Customers page (§9.2, §6.9, R4): searchable table (code, name, address, waste-type tags, routes),
+// archived filter, create / edit (CustomerFormDialog), Archive with a removal preview and a
 // result list, Restore.
 import { useState } from 'react';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -21,7 +21,7 @@ import { ConfirmDialog, Dialog } from '../ui/Dialog';
 import { ErrorBanner, Loading, useDebounced, useErrorText } from '../ui/Feedback';
 import { useToast } from '../ui/Toast';
 import { CustomerFormDialog } from './CustomerFormDialog';
-import { removedItemText, taskScheduleText, typeMap } from './labels';
+import { removedItemText, typeMap } from './labels';
 import { RunExistsDialog } from './RunExistsDialog';
 
 type ArchivedFilter = '0' | '1' | 'all';
@@ -114,7 +114,6 @@ export default function CustomersPage() {
                 <th>{t('customers.colPhone')}</th>
                 <th>{t('customers.colTypes')}</th>
                 <th>{t('customers.colRoutes')}</th>
-                <th>{t('customers.colTasks')}</th>
                 <th aria-label={t('common.actions')} />
               </tr>
             </thead>
@@ -146,13 +145,6 @@ export default function CustomersPage() {
                     <span className="chips">
                       {c.routes.map((r) => (
                         <span key={r} className="code">{r}</span>
-                      ))}
-                    </span>
-                  </td>
-                  <td>
-                    <span className="chips">
-                      {c.tasks.map((code) => (
-                        <WasteTag key={code} code={code} abbr={types[code]?.abbr} />
                       ))}
                     </span>
                   </td>
@@ -227,7 +219,7 @@ function ArchiveDialog({ customer, onClose }: { customer: CustomerListItem; onCl
   };
 
   const d = detailQ.data;
-  const nothing = d && d.routes.length === 0 && d.tasks.length === 0;
+  const nothing = d && d.routes.length === 0;
 
   if (removed) {
     return (
@@ -285,11 +277,6 @@ function ArchiveDialog({ customer, onClose }: { customer: CustomerListItem; onCl
             <ul className="list-plain">
               {d.routes.map((r) => (
                 <li key={`r${r.route_id}`}>{t('customers.previewRoute', { code: r.code, name: r.name })}</li>
-              ))}
-              {d.tasks.map((tk) => (
-                <li key={`t${tk.task_id}`}>
-                  {t('customers.previewTask', { type: tk.waste_type, id: tk.task_id, schedule: taskScheduleText(tk.schedule, t, lang) })}
-                </li>
               ))}
             </ul>
           </>

@@ -31,10 +31,10 @@ import { useInvalidatePlan } from './officeShared';
 
 export interface ResultTarget {
   date: string;
-  job: string; // 'r5' | 't6'
+  job: string; // 'r5'
   customerId: number;
   customerName: string;
-  /** Codes the visit may weigh: route = the customer's active routable types; task = the task's type. */
+  /** Codes the visit may weigh: the route's one waste type. */
   weighTypes: string[];
   /** Holder or last driver, the default "driver" of a new visit. */
   defaultDriverId?: number | null;

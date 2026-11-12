@@ -1,10 +1,10 @@
 // Urgent pickup (§6.7): "phone call today, tomorrow go to A and B" in about 4 interactions.
 // - Date chips: [Today] [Next work day] (default, from /api/meta) [Pick…]. Whenever the date changes,
 //   GET /api/routes/suggest-code?type=adhoc&date=… gives the code, the day class and the resulting type.
-// - A multi-add picker of routable customers with quick-create.
+// - The waste type the pickup collects (REL or Recycling: a route collects one type), then a multi-add
+//   picker of the customers registered with it, with quick-create.
 // - Target: (•) New one-off (on a rest date the label visibly switches to "Special, only this date" with the
-//   reason; never silently) or ( ) Add to an existing route on that date (an "only this date" edit).
-// - Footer link: "Is this OTC or COMPACTOR? Create a task instead".
+//   reason; never silently) or ( ) Add to an existing route of that type on that date (an "only this date" edit).
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { createRoute, getCalendar, putRouteDate, suggestRouteCode, type RouteOccurrence } from '../api';
@@ -21,7 +21,7 @@ import { useGuardedWrite } from './officeShared';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-export function UrgentDialog(props: { initialDate?: string; initialCustomers?: number[]; onClose: () => void; onTaskInstead: () => void }) {
+export function UrgentDialog(props: { initialDate?: string; initialCustomers?: number[]; onClose: () => void }) {
   const { t, lang } = useI18n();
   const { meta } = useSession();
   const { data } = useCalendar();
@@ -40,6 +40,10 @@ export function UrgentDialog(props: { initialDate?: string; initialCustomers?: n
       return c ?? { id, code: '', name: `#${id}`, address: '', waste_types: [], active: true };
     }),
   );
+  // One route collects one waste type: picked first, it limits the customers and the existing routes offered.
+  const routable = (meta?.waste_types ?? []).filter((x) => x.routable && x.active);
+  const [wasteTypeSel, setWasteType] = useState('');
+  const wasteType = wasteTypeSel || routable[0]?.code || 'REL';
   const [target, setTarget] = useState<'new' | 'existing'>('new');
   const [routeKey, setRouteKey] = useState('');
   const [code, setCode] = useState('');
@@ -63,8 +67,8 @@ export function UrgentDialog(props: { initialDate?: string; initialCustomers?: n
   // Routes running on that date (for "add to an existing route" and the picker's "also on").
   const dayQ = useQuery({ queryKey: ['calendar', 'week', date], queryFn: () => getCalendar('week', date), enabled: valid });
   const dayRoutes: RouteOccurrence[] = useMemo(
-    () => (dayQ.data?.routes ?? []).filter((o) => o.date === date && o.status === 'scheduled' && !o.frozen),
-    [dayQ.data, date],
+    () => (dayQ.data?.routes ?? []).filter((o) => o.date === date && o.status === 'scheduled' && !o.frozen && o.waste_type === wasteType),
+    [dayQ.data, date, wasteType],
   );
   const alsoOn = useMemo(() => routesByCustomer(dayRoutes), [dayRoutes]);
   useEffect(() => {
@@ -80,7 +84,7 @@ export function UrgentDialog(props: { initialDate?: string; initialCustomers?: n
     if (target === 'new') {
       if (!sug) return;
       await w.run(
-        () => createRoute({ type: sug.type === 'special' ? 'special' : 'adhoc', code: code.trim().toUpperCase(), name: name.trim(), note: note.trim(), date, stops }),
+        () => createRoute({ type: sug.type === 'special' ? 'special' : 'adhoc', waste_type: wasteType, code: code.trim().toUpperCase(), name: name.trim(), note: note.trim(), date, stops }),
         (r) => {
           toast(t('urgent.created', { code: r.data.code, date: fmtDay(date, lang) }));
           props.onClose();
@@ -111,9 +115,6 @@ export function UrgentDialog(props: { initialDate?: string; initialCustomers?: n
         onClose={props.onClose}
         footer={
           <>
-            <button type="button" className="linkbtn small" style={{ marginRight: 'auto' }} onClick={props.onTaskInstead}>
-              {t('urgent.taskInstead')}
-            </button>
             <button type="button" className="btn" onClick={props.onClose}>
               {t('common.cancel')}
             </button>
@@ -144,6 +145,26 @@ export function UrgentDialog(props: { initialDate?: string; initialCustomers?: n
             </div>
           </div>
 
+          <label className="field">
+            <span>{t('rf.wasteType')}</span>
+            <select
+              className="input"
+              style={{ width: 'auto' }}
+              value={wasteType}
+              data-testid="urgent-waste-type"
+              onChange={(e) => {
+                setWasteType(e.target.value);
+                setCustomers([]); // the picked customers were registered with the other type
+              }}
+            >
+              {routable.map((x) => (
+                <option key={x.code} value={x.code}>
+                  {x.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
           <div className="field">
             <span>{t('urgent.customers')}</span>
             {customers.length > 0 && (
@@ -160,6 +181,7 @@ export function UrgentDialog(props: { initialDate?: string; initialCustomers?: n
             )}
             <CustomerPicker
               autoFocus
+              wasteType={wasteType}
               excludeIds={customers.map((c) => c.id)}
               alsoOn={alsoOn}
               onPick={(c) => setCustomers((s) => (s.some((x) => x.id === c.id) ? s : [...s, c]))}

@@ -5,7 +5,7 @@
 // - Work done: "Refused: Ali has done 3 on N1 …" and only Close. When nobody holds the job any more (the
 //   office released it after work was done), "Refused: 3 stops of E1 are already done today (no driver
 //   holds it now) …" under the title "Work is already done on this job today" (SPLIT-UI-10).
-// Reusable by every office write that can hit R26 (customers, holidays, routes, tasks).
+// Reusable by every office write that can hit R26 (customers, holidays, routes).
 import type { ApiError } from '../api';
 import { useI18n } from '../i18n';
 import { Dialog } from '../ui/Dialog';

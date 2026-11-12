@@ -79,6 +79,16 @@ async function api(method, p, body) {
   if (!j.ok) throw new Error(`${method} ${p}: ${j.error?.code}`);
   return j.data;
 }
+/** The error code of a call that must be refused (null when it went through). */
+async function apiCode(method, p, body, tok = token) {
+  const r = await fetch(API + '/api' + p, {
+    method,
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const j = r.status === 204 ? { ok: true } : await r.json();
+  return j.ok ? null : j.error?.code;
+}
 const addDays = (d, n) => {
   const [y, m, dd] = d.split('-').map(Number);
   return new Date(Date.UTC(y, m - 1, dd + n)).toISOString().slice(0, 10);
@@ -109,7 +119,7 @@ const RED = 'rgb(220, 38, 38)'; // --cal-ph (light theme)
 const noOverflow = (page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 
 /** Month view checks (§9.2, Round 5). Leaves tomorrow's first regular route edited (only that date) and an
- *  extra OTC task on tomorrow, plus one adhoc route on workDay. */
+ *  extra adhoc route on tomorrow, plus one adhoc route on workDay. */
 async function monthChecks(page, { today, tomorrow, workDay, ph }) {
   console.log('month view (default)');
   check(!new URL(page.url()).searchParams.get('view') && (await page.locator('.month').count()) === 1 && (await page.locator('.week').count()) === 0, 'the calendar opens in the month view');
@@ -129,6 +139,17 @@ async function monthChecks(page, { today, tomorrow, workDay, ph }) {
   // Daily totals per waste type are visible in the month view too (DRV-3).
   const tTot = page.locator(`.month .mcell[data-date="${today}"] [data-testid=month-totals]`);
   check((await tTot.count()) === 1 && /REL [\d,.]+ kg/.test(await tTot.innerText()), "today's cell shows the day's totals (REL … kg)", (await tTot.count()) && (await tTot.innerText()));
+  // Round 7: every route line carries its waste-type tag; the day's totals count the drivers' free
+  // submissions (the seed made an OTC and a COMPACTOR one), which have no line on the calendar.
+  await page.getByRole('button', { name: /^Expand all/ }).click();
+  const tagOf = async (code) => (await page.locator(`.month .mcell[data-date="${today}"] .mline[data-code="${code}"] .wtag`).allInnerTexts()).join();
+  check((await tagOf('N1')) === 'REL' && (await tagOf('R1')) === 'RCY', 'route lines show the waste-type tag: N1 REL, R1 RCY', [await tagOf('N1'), await tagOf('R1')]);
+  const todayCal = mcal.days.find((d) => d.date === today);
+  check(todayCal.totals.OTC === 300 && todayCal.totals.COMPACTOR === 1250, "API: today's totals count the free submissions (OTC 300, COMPACTOR 1250)", todayCal.totals);
+  check(/OTC 300 kg/.test(await tTot.innerText()) && /COMPACTOR 1,250 kg/.test(await tTot.innerText()), "today's cell totals show OTC and COMPACTOR too", await tTot.innerText());
+  check(mcal.tasks === undefined && (await page.locator('.month .mline.task, .trow, .tgroup').count()) === 0, 'the calendar has no tasks and no task lines');
+  check((await page.getByRole('link', { name: 'Tasks' }).count()) === 0 && (await page.getByRole('link', { name: 'Submissions' }).count()) === 1, 'the menu has Submissions and no Tasks page');
+  await page.getByRole('button', { name: /^Collapse all/ }).click();
   await shot(page, '00-month');
 
   // A day with more than 4 lines: 4 + "N more"; expand / collapse in place; a refetch keeps it open.
@@ -138,7 +159,7 @@ async function monthChecks(page, { today, tomorrow, workDay, ph }) {
   const lines = cell.locator('.mline');
   const occ = async () => {
     const c = await api('GET', `/calendar?view=week&anchor=${tomorrow}&week_start=sun`);
-    return [...c.routes.filter((o) => o.date === tomorrow && o.status !== 'holiday_skipped'), ...c.tasks.filter((o) => o.date === tomorrow)];
+    return c.routes.filter((o) => o.date === tomorrow && o.status !== 'holiday_skipped');
   };
   const items = await occ();
   const n = items.length;
@@ -159,13 +180,17 @@ async function monthChecks(page, { today, tomorrow, workDay, ph }) {
   check((await lines.count()) === n && /Show less ▴/.test(await cell.locator('.mmore').innerText()), `"${n - 4} more" expands the cell in place (${n} lines, Show less)`);
   await shot(page, '00-month-expanded');
   // a refetch (new data from the server) must not collapse it
-  const otcCust = (await api('GET', '/customers')).find((c) => c.waste_types.includes('OTC') && c.active !== false);
-  await api('POST', '/tasks', { waste_type: 'OTC', customer_id: otcCust.id, date: tomorrow, note: 'e2e month refetch' });
+  const relCust = (await api('GET', '/customers?type=REL'))[0];
+  const refCode = (await api('GET', `/routes/suggest-code?type=adhoc&date=${tomorrow}`)).code;
+  await api('POST', '/routes', { type: 'adhoc', waste_type: 'REL', code: refCode, name: 'e2e month refetch', note: '', date: tomorrow, stops: [{ customer_id: relCust.id, note: '' }] });
   const resp = page.waitForResponse((r) => r.url().includes('/api/calendar') && r.status() === 200, { timeout: 40000 });
   await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
   await resp;
+  // The response caught above can be a poll that left before the new route was saved: wait for the line
+  // itself (the next refetch at the latest), then check that the cell is still expanded.
+  await lines.nth(n).waitFor({ timeout: 45000 }).catch(() => {});
   await page.waitForTimeout(400);
-  check((await lines.count()) === n + 1 && (await cell.locator('.mmore', { hasText: 'Show less' }).count()) === 1, 'after a refetch the cell stays expanded and shows the new task', await lines.count());
+  check((await lines.count()) === n + 1 && (await cell.locator('.mmore', { hasText: 'Show less' }).count()) === 1, 'after a refetch the cell stays expanded and shows the new route', await lines.count());
   await cell.locator('.mmore').click();
   check((await lines.count()) === 4 && /more ▾/.test(await cell.locator('.mmore').innerText()), '"Show less" collapses it again');
   // Expand all / Collapse all
@@ -175,7 +200,7 @@ async function monthChecks(page, { today, tomorrow, workDay, ph }) {
   check((await page.locator('.month .mmore[aria-expanded="true"]').count()) === 0 && (await lines.count()) === 4, 'Collapse all closes them');
 
   // Clicking a route line opens its drawer; the stop list is editable (↓, save only this date).
-  const line = cell.locator('.mline:not(.adhoc):not(.task)').first();
+  const line = cell.locator('.mline:not(.adhoc)').first();
   const code = await line.getAttribute('data-code');
   const key = await line.getAttribute('data-key');
   await line.click();
@@ -200,7 +225,7 @@ async function monthChecks(page, { today, tomorrow, workDay, ph }) {
   await wcell.hover();
   await wcell.locator('button.madd').click();
   const menu = await page.locator('.menu').innerText();
-  check(/Regular · repeats weekly/.test(menu) && /Adhoc · this date only/.test(menu) && /\+ Task/.test(menu) && !/Special/.test(menu), '"+" offers the day\'s route kinds and + Task', menu);
+  check(/Regular · repeats weekly/.test(menu) && /Adhoc · this date only/.test(menu) && !/Task/.test(menu) && !/Special/.test(menu), '"+" offers the day\'s route kinds only (nothing is planned for OTC / COMPACTOR / EROSE)', menu);
   await page.getByRole('menuitem', { name: '⚡ Adhoc · this date only' }).click();
   const rf = page.locator('.dialog');
   await rf.getByRole('button', { name: 'Create', exact: true }).click();
@@ -502,7 +527,7 @@ async function keptPlanChecks(page, { today }) {
   // KP1 runs Mon Wed Fri from today; from D1 it is a part with its own list; from D2 it runs Tue Thu (planned).
   const D1 = nextDow(addDays(today, 14), [1, 3, 5]);
   const D2 = nextDow(addDays(D1, 14), [1, 3, 5]);
-  const kp1 = await api('POST', '/routes', { type: 'regular', code: 'KP1', name: 'Kept plan 1', start: today, days: [1, 3, 5], stops: S(A, B) });
+  const kp1 = await api('POST', '/routes', { waste_type: 'REL', type: 'regular', code: 'KP1', name: 'Kept plan 1', start: today, days: [1, 3, 5], stops: S(A, B) });
   const p2 = (await api('PUT', `/routes/${kp1.id}/dates/${D1}`, { rev: kp1.rev, scope: 'following', stops: S(A, B, C) })).route;
   const p3 = (await api('POST', `/routes/${p2.id}/change-schedule`, { rev: p2.rev, from: D2, days: [2, 4] })).created;
 
@@ -552,7 +577,7 @@ async function keptPlanChecks(page, { today }) {
   );
 
   // 3. The drawer: B removed "and all following" on a date of the first part; the part from D1 keeps C.
-  const kp2 = await api('POST', '/routes', { type: 'regular', code: 'KP2', name: 'Kept plan 2', start: today, days: [1, 3, 5], stops: S(A, B) });
+  const kp2 = await api('POST', '/routes', { waste_type: 'REL', type: 'regular', code: 'KP2', name: 'Kept plan 2', start: today, days: [1, 3, 5], stops: S(A, B) });
   const q2 = (await api('PUT', `/routes/${kp2.id}/dates/${D1}`, { rev: kp2.rev, scope: 'following', stops: S(A, B, C) })).route;
   dr = await openDrawer('KP2', await scheduledOn('KP2', addDays(today, 1), D1));
   await dr.locator(`.stop[data-cid="${B.id}"]`).getByRole('button', { name: /^Remove from route/ }).click();
@@ -667,7 +692,7 @@ async function keptPlanChecks(page, { today }) {
   // ticked. Its notice names that change; it does not say that its plan is kept.
   const G1 = nextDow(addDays(today, 21), [1]);
   const G2 = addDays(G1, 15);
-  const kp3 = await api('POST', '/routes', { type: 'regular', code: 'KP3', name: 'Kept plan 3', start: today, days: [1, 3, 5], stops: S(A, B) });
+  const kp3 = await api('POST', '/routes', { waste_type: 'REL', type: 'regular', code: 'KP3', name: 'Kept plan 3', start: today, days: [1, 3, 5], stops: S(A, B) });
   const g1 = (await api('POST', `/routes/${kp3.id}/change-schedule`, { rev: kp3.rev, from: G1, days: [2, 4] })).created;
   const g2 = (await api('POST', `/routes/${g1.id}/change-schedule`, { rev: g1.rev, from: G2, days: [2, 4, 6] })).created;
   ({ dr, rf } = await openEdit('KP3', await scheduledOn('KP3', addDays(today, 1), G1)));
@@ -694,7 +719,7 @@ async function keptPlanChecks(page, { today }) {
   // refused (STALE_REVISION), the notice is computed again on the parts loaded after that answer, and the second
   // save stores what it then says: the template editor, the scope dialog and Edit route / schedule.
   const H1 = nextDow(addDays(today, 21), [1]);
-  const kp4 = await api('POST', '/routes', { type: 'regular', code: 'KP4', name: 'Kept plan 4', start: today, days: [1, 3, 5], stops: S(A, B) });
+  const kp4 = await api('POST', '/routes', { waste_type: 'REL', type: 'regular', code: 'KP4', name: 'Kept plan 4', start: today, days: [1, 3, 5], stops: S(A, B) });
   const h1 = (await api('POST', `/routes/${kp4.id}/change-schedule`, { rev: kp4.rev, from: H1, days: [2, 4], stops: S(A, B, C) })).created;
   const otherClerk = async (body) => {
     const cur = await api('GET', `/routes/${h1.id}`);
@@ -778,7 +803,7 @@ async function keptPlanChecks(page, { today }) {
   // 9. The template editor at 1280x800 with five later parts that have lists of their own: the notices scroll in
   // a capped area above Save, so the stop list and Save stay on screen.
   const L1 = nextDow(addDays(today, 7), [1]);
-  let kp5 = await api('POST', '/routes', { type: 'regular', code: 'KP5', name: 'Kept plan 5', start: today, days: [1, 3, 5], stops: S(...custs.slice(0, 6)) });
+  let kp5 = await api('POST', '/routes', { waste_type: 'REL', type: 'regular', code: 'KP5', name: 'Kept plan 5', start: today, days: [1, 3, 5], stops: S(...custs.slice(0, 6)) });
   for (let k = 0, cur = kp5; k < 5; k++) {
     cur = (await api('POST', `/routes/${cur.id}/change-schedule`, { rev: cur.rev, from: addDays(L1, 7 * k), stops: S(...custs.slice(0, 4), custs[10 + 2 * k], custs[11 + 2 * k]) })).created;
   }
@@ -1128,8 +1153,8 @@ async function main() {
     const adhocShown = await page.locator(`.week .day[data-date="${tomorrow}"] .occ.adhoc[data-code="${ucode}"]`).waitFor({ timeout: 10000 }).then(() => true, () => false);
     check(adhocShown, 'it shows in the week view (dashed ⚡A)');
 
-    // 6. OTC task on a Sunday.
-    console.log('OTC task on Sunday');
+    // 6. A Sunday: Special routes only, and nothing to plan for the other waste types.
+    console.log('Sunday');
     await page.goto(`${BASE}/?view=week&anchor=${sunday}`);
     const sun = page.locator(`.week .day[data-date="${sunday}"]`);
     await sun.waitFor();
@@ -1138,57 +1163,95 @@ async function main() {
     const menu = await page.locator('.menu').innerText();
     check(/Special · every Sunday/.test(menu) && /Special · this date only/.test(menu) && !/Adhoc/.test(menu), 'Sunday "+ Route" offers only Special', menu);
     await page.keyboard.press('Escape');
-    await sun.getByRole('button', { name: '+ Task' }).click();
-    const td = page.locator('.dialog', { hasText: 'New task' });
-    await td.waitFor();
-    check(await td.getByRole('button', { name: 'OTC', exact: true }).getAttribute('aria-pressed') === 'true', 'type OTC pre-selected');
-    await td.locator('.picker input[type=search]').fill('Event Hall');
-    await td.locator('.picker-item').first().waitFor();
-    await td.locator('.picker-item').first().getByRole('button', { name: 'Select' }).click();
-    check((await td.locator('input[type=date]').inputValue()) === sunday, 'the date is the clicked Sunday');
-    await td.getByRole('button', { name: 'Create', exact: true }).click();
-    await td.waitFor({ state: 'detached' });
-    const sunCal = await api('GET', `/calendar?view=week&anchor=${sunday}`);
-    const otc = sunCal.tasks.filter((o) => o.date === sunday && o.waste_type === 'OTC' && sunCal.customers[o.customer_id].name.startsWith('Event Hall'));
-    check(otc.length === 1, `OTC task created on Sunday ${sunday}`);
-    await page.waitForTimeout(300);
-    check((await sun.locator('.trow', { hasText: 'Event Hall' }).count()) === 1, 'the task row shows in the Sunday column (grey pill, no colour bar)');
-    // Customer without OTC: [Add OTC to this customer]
-    await sun.getByRole('button', { name: '+ Task' }).click();
-    await td.waitFor();
-    await td.locator('.picker input[type=search]').fill('Tuas Compactor');
-    await td.locator('.picker-item').first().waitFor();
-    await td.locator('.picker-item').first().getByRole('button', { name: /Add OTC to this customer/ }).click();
-    await td.locator('text=Change').waitFor();
-    await td.getByRole('button', { name: 'Create', exact: true }).click();
-    await td.waitFor({ state: 'detached' });
-    const custs = await api('GET', '/customers?q=Tuas%20Compactor');
-    check(custs[0] && custs[0].waste_types.includes('OTC') && custs[0].tasks.includes('OTC'), '"Add OTC to this customer" registered the type and created the task');
+    check((await sun.getByRole('button', { name: '+ Task' }).count()) === 0, 'no "+ Task": OTC / COMPACTOR / EROSE are not planned');
+
+    // 6b. Round 7: a route collects ONE waste type, picked when it is made. A Recycling route on that Sunday.
+    console.log('Recycling route (one waste type per route)');
+    await sun.getByRole('button', { name: '+ Route' }).click();
+    await page.getByRole('menuitem', { name: /Special · this date only/ }).click();
+    const rcf = page.locator('.dialog', { hasText: 'Waste type' });
+    await rcf.waitFor();
+    const wtSel = rcf.locator('[data-testid=route-waste-type]');
+    check((await wtSel.locator('option').allInnerTexts()).join() === 'REL,Recycling' && (await wtSel.inputValue()) === 'REL', 'the route form asks for the waste type: REL (default) or Recycling; OTC / COMPACTOR / EROSE are not offered', await wtSel.locator('option').allInnerTexts());
+    await wtSel.selectOption('RECYCLING');
+    await rcf.locator('input.code').fill('RS1');
+    await rcf.locator('label.field', { hasText: 'Name' }).locator('input').fill('Recycling Sunday');
+    await rcf.getByRole('button', { name: 'Create', exact: true }).click();
+    await rcf.waitFor({ state: 'detached' });
+    const rcd = page.locator('.drawer', { hasText: 'Recycling Sunday' });
+    await rcd.waitFor({ timeout: 10000 });
+    check((await rcd.locator('.rd-title .wtag').innerText()) === 'RCY', 'the new route drawer shows the RCY tag');
+    await rcd.getByRole('button', { name: /Add customer/ }).click();
+    // Woodlands customers are on N1 (REL / OTC only): none is offered. Admiralty customers have Recycling.
+    await rcd.locator('.picker input[type=search]').fill('Woodlands');
+    await rcd.locator('.picker', { hasText: 'No customers match' }).waitFor({ timeout: 10000 }).catch(() => {});
+    check((await rcd.locator('.picker-item').count()) === 0, 'the picker of a Recycling route lists no customer without Recycling');
+    await rcd.locator('.picker input[type=search]').fill('Admiralty');
+    await rcd.locator('.picker-item').first().waitFor();
+    const offered = await rcd.locator('.picker-item').evaluateAll((els) => els.map((e) => [...e.querySelectorAll('.wtag')].map((x) => x.textContent).join()));
+    check(offered.length >= 6 && offered.every((x) => x.split(',').includes('RCY')), 'every customer it offers is registered with Recycling', offered);
+    await rcd.locator('.picker-item').first().click();
+    await rcd.getByRole('button', { name: 'Save', exact: true }).click();
+    await rcd.waitFor({ state: 'detached' });
+    const rs1 = (await occOn(sunday, 'RS1')).occ[0];
+    check(rs1 && rs1.waste_type === 'RECYCLING' && rs1.type === 'special' && rs1.stops.length === 1, `Recycling route RS1 created on ${sunday} with 1 stop`, rs1 && [rs1.waste_type, rs1.stops.length]);
+    await sun.locator('.occ[data-code="RS1"] .wtag').waitFor({ timeout: 10000 }).catch(() => {});
+    check((await sun.locator('.occ[data-code="RS1"] .wtag').innerText()) === 'RCY' && (await sun.locator('.occ[data-code="S1"] .wtag').innerText()) === 'REL', 'week rows show RCY on RS1 and REL on S1');
+    // The rules behind the form (server): the type never changes, and only customers with it go on the route.
+    const rs1Route = await api('GET', `/routes/${rs1.route_id}`);
+    const relOnly = (await api('GET', '/customers?q=Woodlands')).find((c) => !c.waste_types.includes('RECYCLING'));
+    check((await apiCode('PATCH', `/routes/${rs1.route_id}`, { rev: rs1Route.rev, waste_type: 'REL' })) === 'TYPE_IMMUTABLE', 'the waste type of a route cannot change (TYPE_IMMUTABLE)');
+    check((await apiCode('PATCH', `/routes/${rs1.route_id}`, { rev: rs1Route.rev, stops: [...rs1Route.stops, { customer_id: relOnly.id, note: '' }] })) === 'CUSTOMER_NOT_ROUTABLE', 'a customer without Recycling is refused on a Recycling route (CUSTOMER_NOT_ROUTABLE)');
+    check((await apiCode('POST', '/routes', { type: 'special', waste_type: 'OTC', code: 'RS2', name: 'x', date: sunday, stops: [] })) === 'TYPE_NOT_ROUTABLE', 'OTC cannot be the waste type of a route (TYPE_NOT_ROUTABLE)');
+    check((await apiCode('GET', '/tasks')) === 'NOT_FOUND', 'the task API is gone (404)');
     await shot(page, '07-sunday');
 
-    // 7. Task drawer: skip and restore a recurring COMPACTOR date.
-    console.log('task drawer');
-    // 4 tasks on that Sunday now: the group is collapsed to one line (> 3) and expands in place.
-    const group = sun.locator('button.tgroup');
-    // The calendar refetches after the create; wait for the collapsed group (slow under parallel load).
-    await sun.locator('button.tgroup', { hasText: 'Tasks 4' }).waitFor({ timeout: 15000 }).catch(() => {});
-    check((await group.count()) === 1 && /Tasks 4/.test(await group.innerText()), 'more than 3 tasks collapse into one line', (await group.count()) && (await group.innerText()));
-    if (await group.count()) await group.click();
-    const comp = sun.locator('.trow', { hasText: 'Jurong' });
-    if (await comp.count()) {
-      await comp.first().click();
-      const tdw = page.locator('.drawer');
-      await tdw.getByRole('button', { name: /Menu/ }).click();
-      await page.getByRole('menuitem', { name: 'Skip this date' }).click();
-      await page.waitForTimeout(600);
-      check(/skipped|Skipped/.test(await tdw.innerText()), 'Skip this date: the task drawer shows skipped');
-      await tdw.getByRole('button', { name: /Menu/ }).click();
-      await page.getByRole('menuitem', { name: 'Restore this date' }).click();
-      await page.waitForTimeout(600);
-      await page.keyboard.press('Escape');
-    } else {
-      check(false, 'recurring COMPACTOR task on Sunday found');
-    }
+    // 7. Round 7: the Submissions page (read only): what drivers submitted for the types that are not on routes.
+    console.log('submissions page');
+    // A third submission with a photo and a signature (as Ali, through the driver API).
+    const aliTok = (await api('POST', '/login', { username: 'ali', password: 'driver-pass-2026!' })).token;
+    const put = (name, type, bytes) => fetch(`${API}/api/files/${name}`, { method: 'PUT', headers: { 'Content-Type': type, Authorization: 'Bearer ' + aliTok }, body: Buffer.from(bytes) });
+    const photo = 'e2e00000-0000-4000-8000-0000000000a1.jpg';
+    const sig = 'e2e00000-0000-4000-8000-0000000000a2.png';
+    await put(photo, 'image/jpeg', [0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 0xff, 0xd9]);
+    await put(sig, 'image/png', [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const erose = (await api('GET', '/customers?type=EROSE'))[0];
+    const subId = 'e2e00000-0000-4000-8000-0000000000b1';
+    const subBody = { op_id: 'e2e00000-0000-4000-8000-0000000000c1', base_rev: 0, waste_type: 'EROSE', customer_id: erose.id, vehicle_no: 'GBA1234X', outcome: 'collected',
+      weights: { EROSE: 42.5 }, tickets: {}, photos: [photo], signature: sig, note: 'two pallets', captured_at: new Date().toISOString() };
+    check((await apiCode('PUT', `/driver/submissions/${today}/${subId}`, subBody, aliTok)) === null, 'a driver submits EROSE with a photo and a signature (no task, no claim)');
+    check((await apiCode('PUT', `/driver/submissions/${today}/${subId}`, subBody, aliTok)) === null, 'sending it again is a replay');
+    check((await apiCode('PUT', `/driver/submissions/${today}/${subId}`, subBody)) === 'FORBIDDEN', 'the office cannot write a submission');
+    await page.goto(BASE + '/submissions');
+    const st = page.locator('[data-testid=subs-table]');
+    await st.locator('tbody tr[data-id]').first().waitFor();
+    const subRows = st.locator('tbody tr[data-id]');
+    check((await subRows.count()) === 3, 'the Submissions page lists the 3 submissions of today (the resend made no second record)', await subRows.count());
+    check(/3 submissions/.test(await page.locator('[data-testid=subs-count]').innerText()) && /OTC 300 kg/.test(await page.locator('[data-testid=subs-count]').innerText()), 'with the count and the totals per type', await page.locator('[data-testid=subs-count]').innerText());
+    const rowText = await st.locator(`tr[data-id="${subId}"]`).innerText();
+    check(/EROSE/.test(rowText) && rowText.includes(erose.name) && /42\.5 kg/.test(rowText) && /GBA1234X/.test(rowText) && /Ali/.test(rowText) && /📷1/.test(rowText) && /✍/.test(rowText), 'a row shows type, customer, weight, truck, driver, photo count and signature', rowText);
+    await page.getByLabel('Type', { exact: true }).selectOption('OTC');
+    check((await subRows.count()) === 1 && /ABC Restaurant/.test(await subRows.first().innerText()), 'filter by type: OTC');
+    await page.getByLabel('Type', { exact: true }).selectOption('');
+    await page.getByLabel('Driver', { exact: true }).selectOption('Bala');
+    check((await subRows.count()) === 1 && /COMPACTOR/.test(await subRows.first().innerText()) && /1,250 kg/.test(await subRows.first().innerText()), 'filter by driver: Bala');
+    await page.getByLabel('Driver', { exact: true }).selectOption('');
+    await page.getByLabel('Customer', { exact: true }).fill('erose site');
+    check((await subRows.count()) === 1 && (await subRows.first().getAttribute('data-id')) === subId, 'filter by customer name');
+    await subRows.first().getByRole('button', { name: 'Details' }).click();
+    const det = page.locator('[data-testid=subs-details]');
+    await det.locator('.thumb img').nth(1).waitFor({ timeout: 10000 }).catch(() => {});
+    check((await det.locator('.thumb img').count()) === 2 && /two pallets/.test(await det.innerText()), 'Details show the photo, the signature and the note', await det.innerText());
+    check((await page.getByRole('button', { name: /^(Edit|Delete|New|Add)/ }).count()) === 0, 'the page is read only: no create, edit or delete');
+    await page.getByLabel('Customer', { exact: true }).fill('no such customer');
+    check((await subRows.count()) === 0 && /No submission matches/.test(await st.innerText()), 'no match: the empty row');
+    // Another day: nothing; and the day drawer of today links here.
+    await page.goto(`${BASE}/submissions?date=${addDays(today, -1)}`);
+    await page.locator('text=No submissions on this day').waitFor();
+    check((await subRows.count()) === 0, 'yesterday has no submissions');
+    const totalsNow = (await api('GET', `/calendar?view=week&anchor=${today}`)).days.find((d) => d.date === today).totals;
+    check(totalsNow.EROSE === 42.5 && totalsNow.OTC === 300, 'the calendar totals of today count the new submission (EROSE 42.5)', totalsNow);
+    await shot(page, '07-submissions');
 
     // 8. Month view: status on the lines and the day drawer.
     console.log('month view: statuses and the day drawer');
@@ -1331,7 +1394,7 @@ async function main() {
     check(!w2Earlier || w2Earlier.stops.some((x) => x.customer_id === lastCid), 'dates before the split keep the old list');
 
     // 9d. "+ Route" -> Regular form (clicked weekday pre-ticked); the new route's drawer opens.
-    console.log('route create and task move');
+    console.log('route create');
     await page.goto(`${BASE}/?view=week&anchor=${workDay}`);
     const wcol = page.locator(`.week .day[data-date="${workDay}"]`);
     await wcol.locator('.occ').first().waitFor();
@@ -1341,6 +1404,7 @@ async function main() {
     await page.getByRole('menuitem', { name: 'Regular · repeats weekly' }).click();
     const rf = page.locator('.dialog', { hasText: 'New Regular route' });
     await rf.waitFor();
+    await rf.locator('.chip').first().waitFor();
     check((await rf.locator('.chip[aria-pressed="true"]').count()) === 1, 'the clicked weekday is pre-ticked');
     check(/First run:/.test(await rf.innerText()), '"First run" hint');
     await rf.locator('input.code').fill('z9');
@@ -1364,32 +1428,14 @@ async function main() {
     await nd.waitFor({ state: 'detached' });
     const z9next = (await occOn(addDays(workDay, 7), 'Z9')).occ[0];
     check(z9next && z9next.stops.length === 1 && !z9next.edited, `Z9 one week later (${addDays(workDay, 7)}) has the customer too`, z9next && z9next.stops.length);
-    // Move one date of a recurring COMPACTOR task (Tuas, Tue + Fri).
-    const tue = (await api('GET', `/calendar?view=week&anchor=${workDay}`)).tasks.find((o) => o.recurring && o.waste_type === 'COMPACTOR' && o.date >= workDay && o.status === 'scheduled');
-    if (tue) {
-      await page.goto(`${BASE}/?view=week&anchor=${tue.date}`);
-      const tc = page.locator(`.week .day[data-date="${tue.date}"]`);
-      await tc.locator('.occ').first().waitFor();
-      if (await tc.locator('button.tgroup').count()) await tc.locator('button.tgroup').click();
-      await tc.locator(`.trow[data-key="${tue.key}"]`).click();
-      await page.locator('.drawer').getByRole('button', { name: /Menu/ }).click();
-      await page.getByRole('menuitem', { name: 'Move this date…' }).click();
-      const mv = page.locator('.dialog', { hasText: 'Move this date' });
-      await mv.locator('input[type=date]').fill(addDays(tue.date, 1));
-      check(await mv.locator('input[type=checkbox]').isChecked(), '"Skip the original" is ticked for a runnable recurring date');
-      await mv.getByRole('button', { name: 'Copy', exact: true }).click();
-      await mv.waitFor({ state: 'detached' });
-      const cal2 = await api('GET', `/calendar?view=week&anchor=${tue.date}`);
-      const src = cal2.tasks.find((o) => o.key === tue.key);
-      const moved = cal2.tasks.find((o) => o.date === addDays(tue.date, 1) && o.customer_id === tue.customer_id && !o.recurring);
-      check(src && src.status === 'cancelled' && src.covered_by.length === 1 && moved, 'Move this date: source skipped ("→ date") and a one-off on the new date');
-      await page.keyboard.press('Escape');
-    } else {
-      check(false, 'a recurring COMPACTOR date found');
-    }
+    // Round 7: a copy to another date keeps the route's waste type (R1 collects Recycling).
+    const r1 = (await api('GET', '/routes')).find((r) => r.code === 'R1');
+    const r1Date = (await api('GET', `/routes/${r1.id}`)).next_date;
+    const copy = (await api('POST', `/routes/${r1.id}/dates/${r1Date}/copy`, { rev: r1.rev, to: sunday, code: 'R1-S' })).created;
+    check(copy.waste_type === 'RECYCLING' && copy.stops.length === r1.stop_count, 'Copy to date keeps the waste type and the stops of a Recycling route', [copy.waste_type, copy.stops.length]);
 
-    // 10. Routes and Tasks pages.
-    console.log('routes and tasks pages');
+    // 10. Routes page.
+    console.log('routes page');
     await page.goto(BASE + '/routes');
     await page.locator('table tbody tr').first().waitFor();
     check((await page.locator('table tbody tr').count()) >= 19, 'Routes page lists the routes');
@@ -1397,9 +1443,8 @@ async function main() {
     await page.locator('.drawer .stoplist .stop').first().waitFor();
     check((await page.locator('.drawer .stoplist .stop').count()) >= 6, 'template editor shows the stop list');
     await page.keyboard.press('Escape');
-    await page.goto(BASE + '/tasks');
-    await page.locator('table tbody tr').first().waitFor();
-    check((await page.locator('table tbody tr').count()) >= 8, 'Tasks page lists the tasks');
+    check((await page.locator('table tbody tr', { hasText: 'Recycling · North' }).first().locator('.wtag').innerText()) === 'RCY', 'Routes page: a Recycling route shows the RCY tag');
+    check((await page.locator('table tbody tr', { hasText: 'North 2' }).first().locator('.wtag').innerText()) === 'REL', 'Routes page: a REL route shows the REL tag');
 
     // 11. Split routes (R12 / R14) in the office's forms and dialogs; the office takes a job back.
     await splitRouteChecks(page, { today, consoleErrors });

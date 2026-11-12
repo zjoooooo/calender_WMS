@@ -115,17 +115,13 @@ final class Users
     }
 
     /**
-     * GET /api/drivers (office) -> [{id, name, active, route_job, task_jobs}]
-     * route_job/task_jobs follow R25: jobs held today only (driver_id = X, date = today, pending > 0).
+     * GET /api/drivers (office) -> [{id, name, active, route_job}]
+     * route_job follows R25: the route job held today only (driver_id = X, date = today, pending > 0).
      */
     public static function drivers(Ctx $c): array
     {
         $plan = $c->plan();
         $day = $c->tx->get('day:' . $c->today);
-        $names = [];
-        foreach ($plan['customers'] ?? [] as $cu) {
-            $names[$cu['id']] = $cu['name'];
-        }
         $out = [];
         foreach ($c->users()['users'] ?? [] as $u) {
             if ($u['role'] !== 'driver') {
@@ -133,22 +129,18 @@ final class Users
             }
             $held = self::heldJobs($plan, $day, $u['id']);
             $route = null;
-            $tasks = [];
             foreach ($held as $h) {
-                if ($h['kind'] === 'route') {
-                    $route ??= ['date' => $day['date'], 'job' => $h['job'], 'code' => $h['code'], 'pending' => $h['pending']];
-                } else {
-                    $tasks[] = ['job' => $h['job'], 'customer' => $names[$h['customer_id']] ?? ''];
-                }
+                $route ??= ['date' => $day['date'], 'job' => $h['job'], 'code' => $h['code'], 'pending' => $h['pending']];
             }
-            $out[] = ['id' => $u['id'], 'name' => $u['name'], 'active' => (bool) $u['active'], 'route_job' => $route, 'task_jobs' => $tasks];
+            $out[] = ['id' => $u['id'], 'name' => $u['name'], 'active' => (bool) $u['active'], 'route_job' => $route];
         }
         return $out;
     }
 
     /**
-     * Jobs a driver holds in a day file (R25: run.driver_id = X and pending > 0).
-     * @return list<array{job:string,kind:string,code:?string,customer_id:?int,pending:int}>
+     * Route jobs a driver holds in a day file (R25: run.driver_id = X and pending > 0). Runs of the old
+     * task feature are not jobs any more and are left alone.
+     * @return list<array{job:string,kind:string,code:?string,pending:int}>
      */
     public static function heldJobs(array $plan, array $day, int $driverId): array
     {
@@ -156,24 +148,17 @@ final class Users
         foreach ($plan['routes'] ?? [] as $r) {
             $codes[$r['id']] = $r['code'];
         }
-        $taskCustomer = [];
-        foreach ($plan['tasks'] ?? [] as $t) {
-            $taskCustomer[$t['id']] = (int) $t['customer_id'];
-        }
         $out = [];
         foreach ($day['runs'] ?? [] as $job => $run) {
             $job = (string) $job;
-            if (($run['driver_id'] ?? null) !== $driverId) {
+            if (!str_starts_with($job, 'r') || ($run['driver_id'] ?? null) !== $driverId) {
                 continue;
             }
             $pending = Usage::pendingCount($plan, (string) $day['date'], $job, $run);
             if ($pending <= 0) {
                 continue;
             }
-            $id = (int) substr($job, 1);
-            $isRoute = str_starts_with($job, 'r');
-            $out[] = ['job' => $job, 'kind' => $isRoute ? 'route' : 'task', 'code' => $isRoute ? ($codes[$id] ?? null) : null,
-                'customer_id' => $isRoute ? null : ($taskCustomer[$id] ?? null), 'pending' => $pending];
+            $out[] = ['job' => $job, 'kind' => 'route', 'code' => $codes[(int) substr($job, 1)] ?? null, 'pending' => $pending];
         }
         return $out;
     }

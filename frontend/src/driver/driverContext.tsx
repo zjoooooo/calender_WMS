@@ -3,11 +3,12 @@
 // and every 15 s (backing off to 60 s while sending fails). Results of a flush refresh the driver queries.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { ApiError, putDriverStop, uploadFile } from '../api';
+import { ApiError, type DriverSubmissions, type Submission } from '../api';
 import { useI18n } from '../i18n';
 import { useErrorText } from '../ui/Feedback';
 import { useToast } from '../ui/Toast';
 import { draftFileNames } from './cache';
+import { isSubJob, outboxApi, subId } from './submission';
 import { createIdbOutbox, nextFlushDelay, type FlushResult, type NotSentEntry, type Outbox, type OutboxEntry, type OutboxEvent, type SaveInput } from './outbox';
 
 export interface DriverMe {
@@ -73,6 +74,15 @@ export function DriverProvider({ me, children }: { me: DriverMe; children: React
   // Event texts use the latest t/toast without rebuilding the outbox.
   const onEventRef = useRef<(e: OutboxEvent) => void>(() => {});
   onEventRef.current = (e: OutboxEvent) => {
+    // A submission the server just took: put its answer into the loaded list at once. Otherwise the row
+    // would show the old server copy between the moment the entry leaves the outbox and the refetch.
+    if (e.type === 'sent' && isSubJob(e.entry.job)) {
+      const id = subId(e.entry.job);
+      const rec = e.result.data.visit as unknown as Submission | null;
+      qc.setQueryData<{ data: DriverSubmissions; at: number; cached: boolean }>(['driver', 'submissions', e.entry.date], (old) =>
+        old && { ...old, data: { ...old.data, submissions: [...old.data.submissions.filter((x) => x.id !== id), ...(rec?.outcome === 'collected' ? [rec] : [])] } },
+      );
+    }
     if (e.type === 'conflict') toast(t('driver.toast.conflict', { customer: e.entry.label.customer }), 'warn', 5000);
     if (e.type === 'refused') {
       const err = new ApiError(e.entry.error.code, e.entry.error.http, e.entry.error.message, e.entry.error.field, e.entry.error.details);
@@ -84,7 +94,7 @@ export function DriverProvider({ me, children }: { me: DriverMe; children: React
     () =>
       createIdbOutbox(
         me.id,
-        { uploadFile, putStop: putDriverStop },
+        outboxApi(),
         {
           extraRefs: draftFileNames,
           isOnline: () => typeof navigator === 'undefined' || navigator.onLine !== false,
