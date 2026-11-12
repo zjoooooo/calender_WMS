@@ -73,3 +73,18 @@
   - The office sees them on a records page (by date) and they COUNT in the calendar's daily totals per waste type. They are not shown one by one on the calendar.
 - One route collects ONE waste type (the user chose this over "both on one route"): REL or RECYCLING is picked when the route is made; only customers registered with that type can be added; on that route the driver enters only that type's weight.
 - The old task feature's CODE is removed (the user chose this). Stored task data in existing data files is left as it is, only no longer shown.
+- Decisions taken while building (2026-11-12; the user set these defaults and confirmed the design):
+  - The waste type of a route cannot change after the route is made; to change it, make a new route. A split ("this date and following"), a schedule change, a copy, a PH move and an urgent route keep or ask for the type.
+  - A route in old data that has no waste type counts as REL. It is read that way; the data files are not rewritten.
+  - An existing data folder does not get RECYCLING and EROSE by itself; the admin adds them in Settings. New installs and the demo have them. Seed order: REL, RECYCLING (name Recycling, abbreviation RCY), OTC, COMPACTOR, EROSE.
+  - Submissions are stored by operational date (before the rollover hour it is still the previous day). A driver may change or delete their own submission inside the same edit window as a route stop result. The office can only read them in this round: no create, change or delete.
+  - The waste-type setting `recurring_tasks` is removed (a stored value is ignored).
+  - Deactivating a type that is not on routes is always allowed (it leaves the driver's pick list). Deactivating a type that is on routes is refused while routes still use it (409 WASTE_TYPE_IN_USE).
+  - A waste type cannot be removed from a customer while that customer is on a route of that type.
+  - A submission keeps a snapshot of the customer's code and name.
+  - Weights of old tasks no longer count in the calendar's daily totals: the user's wording "不再显示、不再计算" (no longer shown, no longer counted) was followed literally. The old task data stays on disk untouched.
+  - The waste type and the customer of a submission cannot change; a wrong one is deleted and submitted again.
+  - A submission has no "not collected": nothing was planned for it.
+  - A submission made offline that is more than 7 days old when it reaches the server is refused (the limit is a config value).
+  - Every submission needs a truck plate (no claim picks one); the form pre-fills the last plate used.
+  - "就用26.5.0" (use Node 26.5.0): the local run on the user's Mac used Node 26 by the user's choice; the project and GitHub Actions stay on Node 22.

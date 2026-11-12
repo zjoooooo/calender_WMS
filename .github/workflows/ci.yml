@@ -1,4 +1,4 @@
-# WMS route & task calendar: tests, and the calendar demo on GitHub Pages, with GitHub Actions
+# WMS route calendar: tests, and the calendar demo on GitHub Pages, with GitHub Actions
 # (docs/Project.md section 11.5; README.md "Tests on GitHub Actions" and "Calendar demo on GitHub Pages").
 # - Every push (any branch), every pull request and a manual run ("Run workflow") test the commit: the backend
 #   (PHP 8.3), the frontend (types, unit tests, build), the three browser suites (Playwright) and the calendar

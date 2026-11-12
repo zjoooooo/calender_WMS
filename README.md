@@ -1,16 +1,19 @@
-# calender_WMS: WMS route & task calendar
+# calender_WMS: WMS route calendar
 
 A web system for a waste-collection company in Singapore. It has two apps that share one server:
 
-- **Office app** (`/`, desktop first): a week and month **calendar** of collection **routes** and **tasks**.
-  - **Routes** collect REL waste. Each route has an ordered list of customers. A route is regular (Mon–Sat),
+- **Office app** (`/`, desktop first): a week and month **calendar** of collection **routes**.
+  - Each route collects **one waste type**: REL (general waste) or Recycling. It has an ordered list of
+    customers, and only customers registered with that type can be on it. A route is regular (Mon–Sat),
     special (Sundays and public holidays) or adhoc (urgent one-offs).
-  - **Tasks** are OTC one-offs and COMPACTOR collections, either one-off or recurring.
+  - OTC, COMPACTOR and EROSE are **not planned** (there are no tasks). Drivers submit them freely, and the
+    office reads them on the **Submissions** page. They count in the calendar's daily totals.
   - The office also manages customers, public holidays, waste types, trucks and users, follows the drivers'
-    progress live, and corrects results.
-- **Driver app** (`/driver`, phone first): drivers claim a route or tasks for today, then record weights,
-  photos, a signature, a ticket number or a reason for each stop. Results are queued on the phone and sent
-  when there is signal.
+    progress live, and corrects route results.
+- **Driver app** (`/driver`, phone first): drivers claim a route for today, then record the weight, photos,
+  a signature, a ticket number or a reason for each stop. At any time they can also submit an OTC, COMPACTOR
+  or EROSE collection: pick the type, pick the customer, enter the weight. Results and submissions are
+  queued on the phone and sent once when there is signal.
 - **Server**: PHP 8.3 with no framework and no database. The data is JSON files in `backend/data`.
   - The day rolls over at 04:00 by default, because night shifts exist.
   - Every request runs under one file lock.
@@ -128,9 +131,11 @@ Run `build.bat` again after every frontend change.
   `backend/public/app`, which `start-backend.bat` then serves on port 8080.
 - **Demo data:** with the backend running, run
   `node frontend/scripts/seed-demo.mjs --api http://127.0.0.1:8080 --data-dir backend/data [--with-runs]`.
-  - It creates about 12 routes a day, customers, trucks, drivers and tasks, like the approved mockup.
+  - It creates about 12 REL routes a day and two Recycling routes, customers (REL, Recycling, OTC,
+    COMPACTOR, EROSE), trucks and drivers, like the approved mockup.
   - It is idempotent. It changes the first-start admin password to `demo-pass-2026` and prints it.
-  - `--with-runs` also lets drivers claim a few of today's jobs.
+  - `--with-runs` also lets drivers claim a few of today's routes and submit an OTC and a COMPACTOR
+    collection.
   - Use it on a demo copy, not on live data.
 - **Texts:** `frontend/src/i18n/{common,office,driver}.{zh,en}.ts`. Add every key to both languages;
   `npm run i18n:check` and `tsc` fail when they differ.
@@ -146,7 +151,8 @@ Run `build.bat` again after every frontend change.
 php backend/tests/run.php                              # rule tests; optional filter, e.g. "customers:" or "runs_"
 php backend/tests/api_smoke.php 8180 /tmp/wms-test-smoke   # real HTTP through php -S on port 8180
 php backend/tests/backup_test.php                      # tools/backup.php: dated folders, hard links, --keep
-php backend/tests/race.php 8182 /tmp/wms-test-race     # 10 simultaneous claims on one job: exactly one wins
+php backend/tests/race.php 8182 /tmp/wms-test-race     # 10 simultaneous claims on one job: exactly one wins;
+                                                       # one submission sent many times at once: one record
 ```
 - `api_smoke.php` and `race.php` start and stop their own `php -S`. They **wipe the data folder** you
   give them, so never point them at real data.
@@ -159,9 +165,11 @@ npm test               # vitest: i18n key parity, API client, helpers, stop reor
 npm run typecheck      # tsc --noEmit
 npm run build          # type check + production build into ../backend/public/app
 npm run e2e            # Playwright: login, password change, zh/en, customers, holidays, settings, users
-npm run e2e:office     # Playwright at 1440x1000: calendar, drawer edits, drag and drop, tasks, runs
+npm run e2e:office     # Playwright at 1440x1000: calendar, drawer edits, drag and drop, a Recycling route,
+                       # the Submissions page, runs
 npm run e2e:driver     # Playwright as two phones (Pixel 7): claim race, results with photo + signature,
-                       # switch route, offline outbox (exactly once), task, leave, finish, office release
+                       # switch route, offline outbox (exactly once), free submissions (also offline),
+                       # leave, finish, office release
 npm run e2e:demo       # the calendar demo build (section 4) in Chromium, from a plain static server
 ```
 - The `e2e*` scripts need PHP 8.3 and `playwright` with Chromium. To install them:
@@ -176,6 +184,10 @@ npm run e2e:demo       # the calendar demo build (section 4) in Chromium, from a
   GitHub Actions; without it the suites run on the real date.
 - `e2e:demo` needs `npm run build:demo` first. It serves `dist-demo` on ports 5826 and 5827 (`DEMO_PORT`,
   `DEMO_PORT2`) and needs no backend.
+- The browser tests are written for Linux and run there on GitHub Actions on every push. They need
+  **PHP 8.3** (`php` on the PATH, also for `npm run demo:data`) and **Node.js 22** (`frontend/.nvmrc`;
+  `frontend/.npmrc` sets `engine-strict`, so `npm ci` refuses another major version). On Windows, set the
+  variables in PowerShell with `$env:NAME = "value"`.
 
 **Deployment scripts:** `bash -n deploy/install.sh deploy/update.sh` and
 `shellcheck deploy/install.sh deploy/update.sh`.
@@ -202,8 +214,8 @@ manual run (**Actions > CI > Run workflow**) and every Monday (§11.5):
 
 ## 4. Calendar demo on GitHub Pages (§11.5)
 
-A demo of the office calendar that anyone can open: no sign-in, sample routes, customers, tasks and today's
-driver runs. It is **editable**. The real backend (the same PHP files as on a server) runs inside the
+A demo of the office calendar that anyone can open: no sign-in, sample routes (REL and Recycling), customers,
+today's driver runs and two driver submissions. It is **editable**. The real backend (the same PHP files as on a server) runs inside the
 visitor's browser, compiled to WebAssembly (WordPress Playground's php-wasm), so every rule behaves exactly as
 in the real system. Nothing is sent to a server.
 
@@ -225,8 +237,8 @@ in the real system. Nothing is sent to a server.
 
 **What a visitor gets:**
 - The office app, signed in as the demo admin, on the month view of the visitor's own date.
-- Everything on the calendar can be changed: routes, tasks, the customers of a route (add, remove, drag),
-  "only this date" or "and all following", change schedule, copy, holidays. Routes, Tasks, Customers, Holidays
+- Everything on the calendar can be changed: routes, the customers of a route (add, remove, drag),
+  "only this date" or "and all following", change schedule, copy, holidays. Routes, Submissions, Customers, Holidays
   and Settings work too. Users, sign-out and the driver app are left out.
 - The first visit downloads the PHP runtime: 18 MB, about 7 MB when the host compresses it. A loading screen
   shows the progress. Later visits use the browser's cache.
