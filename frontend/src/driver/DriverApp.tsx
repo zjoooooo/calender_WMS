@@ -64,6 +64,14 @@ function Authed() {
     if (s.me && s.token && s.me.role === 'driver' && !s.me.must_change_password) prefs.set(ME_PREF, JSON.stringify({ token: s.token, me: s.me }));
   }, [s.me, s.token]);
 
+  if (!s.token && __WMS_DEMO__) {
+    // The driver demo has no sign-in page: its banner signs in again (src/demo/DemoBar.tsx).
+    return (
+      <main className="drv-main">
+        <Loading />
+      </main>
+    );
+  }
   if (!s.token) return <Navigate to="/driver/login" replace state={{ from: loc.pathname }} />;
   const remembered = cachedMe();
   const me = s.me ?? remembered ?? undefined;

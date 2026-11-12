@@ -1,4 +1,5 @@
-// The calendar demo build (§11.5): starts the real backend in this tab (runtime.ts), restores the visitor's
+// The demo build (§11.5): the office calendar at ./ and the driver app at ./driver/ (mode.ts), signed in as
+// the demo admin or the demo driver. It starts the real backend in this tab (runtime.ts), restores the visitor's
 // saved copy of the data or the bundled demo data, signs in as the demo admin and opens the office app on
 // the calendar, with the demo banner. A loading screen shows the download; an error screen says what failed.
 //
@@ -19,6 +20,7 @@ import * as api from '../api';
 import type { Lang, LoginResult } from '../api';
 import App from '../App';
 import { DemoBar, type DemoControl } from './DemoBar';
+import { DEMO_DRIVER } from './mode';
 import { clearSnapshot, loadSnapshot, Saver, type DemoFiles, type SaveState, type Snapshot } from './storage';
 import { demoText, type DemoKey } from './texts';
 import './demo.css';
@@ -29,6 +31,7 @@ interface Bundle {
   built_at: string;
   today: string;
   login: { username: string; password: string };
+  driver?: { username: string; password: string } | null;
   backend: Record<string, FileText>;
   data: Record<string, FileText>;
 }
@@ -55,6 +58,21 @@ function visitorLang(): Lang {
   return /^zh\b/i.test(typeof navigator === 'undefined' ? '' : navigator.language || '') ? 'zh' : 'en';
 }
 
+/** What the driver app keeps on the device (outbox, photos, drafts, cached lists) belongs to one copy of the data. */
+async function clearDriverDevice(): Promise<void> {
+  if (typeof indexedDB === 'undefined') return;
+  for (const name of ['wms-outbox', 'wms-files', 'wms-notsent', 'wms-driver-cache', 'wms-driver-drafts']) {
+    await new Promise<void>((resolve) => {
+      try {
+        const r = indexedDB.deleteDatabase(name);
+        r.onsuccess = r.onerror = r.onblocked = () => resolve();
+      } catch {
+        resolve();
+      }
+    });
+  }
+}
+
 async function boot(show: (b: Boot) => void): Promise<DemoControl> {
   show({ phase: 'runtime', loaded: 0, total: 0 });
   const runtimeP = import('./runtime');
@@ -78,6 +96,7 @@ async function boot(show: (b: Boot) => void): Promise<DemoControl> {
   if (saved.snapshot && !restored) {
     notices.push('notice.updated');
     await clearSnapshot().catch(() => undefined);
+    await clearDriverDevice();
   }
 
   show({ phase: 'start' });
@@ -97,7 +116,8 @@ async function boot(show: (b: Boot) => void): Promise<DemoControl> {
   api.setInBrowserBackend(backend.handle);
 
   show({ phase: 'signin' });
-  const signIn = (): Promise<LoginResult> => api.login(bundle.login.username, bundle.login.password);
+  const who = (DEMO_DRIVER && bundle.driver) || bundle.login;
+  const signIn = (): Promise<LoginResult> => api.login(who.username, who.password);
   const firstSignIn = (): Promise<LoginResult> =>
     signIn().catch((e) => {
       if (!api.isApiError(e, 'CLOCK_BEHIND_FREEZE')) throw e;
@@ -135,6 +155,7 @@ async function boot(show: (b: Boot) => void): Promise<DemoControl> {
     signIn,
     reset: async () => {
       await saver.reset();
+      await clearDriverDevice();
       location.reload();
     },
   };

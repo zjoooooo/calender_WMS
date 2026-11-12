@@ -8,6 +8,8 @@
 // - php-wasm's PHP binary (`import url from './8_3_33/php_8_3.wasm'`) is emitted as a file and imported as its
 //   URL; its optional intl extension (13 MB, never loaded here) is not emitted.
 // - index.html gets a plain "loading" line, shown until the app's script runs.
+// - driver/index.html: the same page one folder down, marked as the driver demo (src/demo/mode.ts). The host
+//   is static and knows no routes, so the second address is a real file.
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -72,6 +74,7 @@ export function makeDemoBundle(dataRootArg: string) {
     built_at: info.built_at as string,
     today: info.today as string,
     login: info.login as { username: string; password: string },
+    driver: (info.driver ?? null) as { username: string; password: string } | null,
     backend,
     data,
   };
@@ -79,11 +82,13 @@ export function makeDemoBundle(dataRootArg: string) {
 
 export function wmsDemo(dataRoot: string): Plugin {
   let isBuild = false;
+  let outDir = '';
   return {
     name: 'wms-demo',
     enforce: 'pre',
     configResolved(c) {
       isBuild = c.command === 'build';
+      outDir = path.resolve(c.root, c.build.outDir);
     },
     resolveId(id, importer) {
       if (id === VIRTUAL) return '\0' + VIRTUAL;
@@ -107,6 +112,14 @@ export function wmsDemo(dataRoot: string): Plugin {
         res.setHeader('Content-Type', 'application/json');
         res.end(JSON.stringify(makeDemoBundle(dataRoot)));
       });
+    },
+    closeBundle() {
+      // The driver demo: index.html again in driver/, its relative URLs one level up, with the page marker.
+      const index = path.join(outDir, 'index.html');
+      if (!isBuild || !fs.existsSync(index)) return;
+      const html = fs.readFileSync(index, 'utf8').replace(/(src|href)="\.\//g, '$1="../').replace('<head>', '<head>\n    <meta name="wms-page" content="driver" />');
+      fs.mkdirSync(path.join(outDir, 'driver'), { recursive: true });
+      fs.writeFileSync(path.join(outDir, 'driver', 'index.html'), html);
     },
     transformIndexHtml(html) {
       return html.replace(

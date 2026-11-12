@@ -1972,7 +1972,8 @@ Round 6: GitHub Actions tests every commit and publishes a demo of the office ca
 - **What visitors get.** The office app at `https://<owner>.github.io/<repository>/` (here `https://zjoooooo.github.io/calender_WMS/`).
   - It signs in by itself as the demo admin and opens on the month view of the visitor's date.
   - Everything on the calendar works and writes for real: routes, customers in a route (add, remove, drag, reorder), "this date" or "and all following", change schedule, copy, holidays and so on. Routes, Submissions, Customers, Holidays and Settings work too.
-  - Not in the demo: Users, change password, sign out and the driver app.
+  - Not in the demo: Users, change password and sign out.
+  - **The driver app demo** is a second page of the same build, one folder down: `…/driver/` (here `https://zjoooooo.github.io/calender_WMS/driver/`). The build writes `driver/index.html` (the same page with its relative URLs one level up and the marker `<meta name="wms-page" content="driver">`, `vite.demo.ts`); `src/demo/mode.ts` reads the marker. That page signs in as the demo driver (`demo.json` `driver`: Bala, who has a route in progress in the demo data) and shows only the driver app. Both pages run the same backend in the tab and share the visitor's saved copy of the data; each banner links to the other page. A reset, or a new deploy, also clears what the driver app keeps on the device (outbox, photos, drafts, cached lists).
   - A plain banner (zh/en) says it is a demo with sample data and that changes stay only in this browser. It holds the action **重置演示数据 / Reset demo data**.
 - **The real backend runs in the browser.** `vite build --mode demo` (`npm run build:demo`) writes `frontend/dist-demo/`:
   - `__WMS_DEMO__` is true. `base` is `'./'`, and the routes are in the URL's `#hash` (HashRouter), so the demo runs from any sub-path on a host that knows nothing of the app's routes. There is no PWA plugin and no service worker.

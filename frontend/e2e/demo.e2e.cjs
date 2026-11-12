@@ -11,7 +11,9 @@
 //   without JSPI (php-wasm's Asyncify build);
 // - only the visitor's changes are saved (opening the demo saves nothing); two tabs never overwrite each
 //   other's saved changes silently; a browser that reports an older zone name (Pacific/Truk); the error screen
-//   when the demo's own code does not load.
+//   when the demo's own code does not load;
+// - the driver app demo one folder down (./driver/): no sign-in, signed in as the demo driver, a free
+//   submission end to end, shared saved data with the office demo, the links between the two, Reset.
 //
 //   cd frontend && npm run demo:data && npm run build:demo && node e2e/demo.e2e.cjs     (or: npm run e2e:demo)
 //
@@ -464,6 +466,62 @@ async function main() {
     await p7.locator('.month .mline').first().waitFor({ timeout: 120000 });
     check((await p7.locator('.demo-bar').count()) === 1, '"Try again" then opens the demo');
     await ctx7.close();
+
+    // ---- H: the driver demo, the same host one folder down (./driver/) --------------------------------
+    console.log('H. the driver app demo at ./driver/');
+    const { devices } = require('playwright');
+    const ctx8 = await browser.newContext({ ...devices['Pixel 7'], timezoneId: 'Asia/Singapore', locale: 'en-SG' });
+    watch(ctx8, log);
+    const p8 = await ctx8.newPage();
+    await p8.goto(BASE + 'driver/');
+    await p8.locator('[data-testid=routes-head]').waitFor({ timeout: 120000 });
+    check(new URL(p8.url()).pathname === PAGES_PREFIX + 'driver/' && /#\/driver$/.test(p8.url()), 'the driver demo opens at ./driver/ with no sign-in', p8.url());
+    const me = await api(p8, 'GET', '/me');
+    check(me.role === 'driver' && me.username === 'bala', 'signed in as the demo driver (Bala)', me);
+    check(/Driver app demo/.test(await p8.locator('.demo-bar').innerText()) && (await p8.locator('.month, .week').count()) === 0, 'it shows the driver app with its own demo banner, not the calendar');
+    check((await p8.locator('button.jcard[data-code]').count()) >= 1 && (await p8.locator('button.jcard[data-code] .wtag').first().innerText()).length > 0, 'Today lists the routes with their waste-type tag');
+    check(await noOverflow(p8), 'no horizontal overflow at phone width');
+    await shot(p8, '30-driver-today');
+    // A free submission, end to end, with the backend in this tab.
+    const today8 = (await api(p8, 'GET', '/driver/today')).today;
+    const before8 = (await api(p8, 'GET', `/driver/submissions?date=${today8}`)).submissions.length;
+    await p8.click('[data-testid=submit-new]');
+    await p8.waitForSelector('[data-testid=submit-page]');
+    await p8.click('button[data-type="EROSE"]');
+    await p8.locator('[data-testid=submit-customers] button[data-customer]').first().click();
+    await p8.waitForSelector('[data-testid=result-form]');
+    await p8.fill('input[name="weight-EROSE"]', '64.5');
+    await p8.selectOption('select[name=plate]', 'SBA1234X');
+    await p8.click('[data-testid=save-collected]');
+    await p8.waitForURL(/#\/driver$/);
+    const mine8 = await poll(async () => {
+      const l = (await api(p8, 'GET', `/driver/submissions?date=${today8}`)).submissions;
+      return l.length === before8 + 1 ? l : null;
+    }, 20000);
+    const new8 = mine8 && mine8.find((x) => x.waste_type === 'EROSE');
+    check(new8 && new8.weights.EROSE === 64.5 && new8.vehicle_no === 'SBA1234X', 'a submission made in the driver demo is stored by the backend in the tab', new8 && new8.weights);
+    check((await p8.locator(`[data-submission="${new8 && new8.id}"]`).count()) === 1, 'and Today lists it');
+    check(await saved(p8), 'the change is saved in this browser');
+    // The office demo (same browser, same saved data) shows it; each banner links to the other page.
+    check((await p8.locator('[data-testid=demo-other]').getAttribute('href')) === '../', 'the driver banner links to the office demo');
+    await Promise.all([p8.waitForEvent('load'), p8.click('[data-testid=demo-other]')]);
+    await p8.locator('.month .mcell').first().waitFor({ timeout: 120000 });
+    check(new URL(p8.url()).pathname === PAGES_PREFIX && (await api(p8, 'GET', '/me')).role === 'admin', 'that link opens the office calendar demo, as the demo admin');
+    const office8 = (await api(p8, 'GET', `/submissions?date=${today8}`)).submissions;
+    check(office8.some((x) => x.id === new8.id && x.driver === 'Bala'), "the office demo's Submissions list has the driver's submission (shared saved data)");
+    check((await p8.locator('[data-testid=demo-other]').getAttribute('href')) === './driver/', 'the office banner links to the driver demo');
+    // Reset restores the original data for both pages.
+    // (a saved copy keeps the admin's own language, so the button is matched in both)
+    const RESET = /Reset demo data|重置演示数据/;
+    await p8.locator('.demo-bar').getByRole('button', { name: RESET }).click();
+    await Promise.all([p8.waitForEvent('load'), p8.getByRole('dialog').getByRole('button', { name: RESET }).click()]);
+    await p8.locator('.month .mcell').first().waitFor({ timeout: 120000 });
+    check(!(await api(p8, 'GET', `/submissions?date=${today8}`)).submissions.some((x) => x.id === new8.id), 'Reset demo data removes it again');
+    // The other sub-path works too.
+    await p8.goto(BASE2 + 'driver/');
+    await p8.locator('[data-testid=routes-head]').waitFor({ timeout: 120000 });
+    check((await api(p8, 'GET', '/me')).role === 'driver', 'the driver demo runs from any sub-path');
+    await ctx8.close();
 
     // ---- Over all pages -----------------------------------------------------------------------
     const apiCalls = log.requests.filter((u) => /\/api(\/|$|\?)/.test(new URL(u).pathname));

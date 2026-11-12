@@ -29,6 +29,9 @@ const DATA = path.join(OUT, 'data');
 const PHP = process.env.PHP_BINARY || 'php';
 // The demo signs in by itself with this account (src/demo/DemoApp.tsx reads it from the build).
 const LOGIN = { username: 'admin', password: 'demo-pass-2026' };
+// The driver demo (./driver/) signs in as this driver: seed-demo.mjs --with-runs gave Bala a route in progress
+// and this password.
+const DRIVER_LOGIN = { username: 'bala', password: 'driver-pass-2026!' };
 
 if (args.includes('--if-missing') && fs.existsSync(path.join(OUT, 'demo.json'))) {
   console.log(`demo data: ${path.relative(FRONT, OUT)}/ already exists (run npm run demo:data to make it again)`);
@@ -86,7 +89,7 @@ async function main() {
     const meta = await (await fetch(`${api}/api/meta`, {
       headers: { Authorization: 'Bearer ' + (await (await fetch(`${api}/api/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(LOGIN) })).json()).data.token },
     })).json();
-    const info = { built_at: new Date().toISOString(), today: meta.data.today, login: LOGIN };
+    const info = { built_at: new Date().toISOString(), today: meta.data.today, login: LOGIN, driver: DRIVER_LOGIN };
     fs.writeFileSync(path.join(OUT, 'demo.json'), JSON.stringify(info, null, 2) + '\n');
     console.log(`demo data: ${path.relative(FRONT, OUT)}/ (today ${info.today})`);
   } finally {

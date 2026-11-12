@@ -226,7 +226,9 @@ in the real system. Nothing is sent to a server.
 3. Push to `main`, or open **Actions > CI > Run workflow** on `main`. When every test passes, the job
    "Publish the calendar demo to GitHub Pages" publishes it.
 
-**URL:** <https://zjoooooo.github.io/calender_WMS/> (in general `https://<owner>.github.io/<repository>/`).
+**URLs** (in general `https://<owner>.github.io/<repository>/`):
+- Office calendar: <https://zjoooooo.github.io/calender_WMS/>
+- Driver app: <https://zjoooooo.github.io/calender_WMS/driver/>
 
 **How it updates:**
 - It is rebuilt and published by every push to `main`, every manual run on `main`, and every Monday morning
@@ -239,7 +241,11 @@ in the real system. Nothing is sent to a server.
 - The office app, signed in as the demo admin, on the month view of the visitor's own date.
 - Everything on the calendar can be changed: routes, the customers of a route (add, remove, drag),
   "only this date" or "and all following", change schedule, copy, holidays. Routes, Submissions, Customers, Holidays
-  and Settings work too. Users, sign-out and the driver app are left out.
+  and Settings work too. Users and sign-out are left out.
+- The driver app demo (`driver/`), signed in as the driver Bala, who has a route in progress: Today, the
+  route run, results, and free submissions of OTC / COMPACTOR / EROSE. Open it on a phone, or in a narrow
+  window. Both demos use the same saved data in the visitor's browser, so a submission made as the driver
+  shows on the office Submissions page after a reload; each banner links to the other demo.
 - The first visit downloads the PHP runtime: 18 MB, about 7 MB when the host compresses it. A loading screen
   shows the progress. Later visits use the browser's cache.
 - Tested in Chromium (Chrome, Edge), with both PHP runtimes the demo carries. Firefox and Safari should load
