@@ -7,6 +7,7 @@ import type { LoginResult } from '../api';
 import { useI18n } from '../i18n';
 import { useSession } from '../session';
 import { ConfirmDialog } from '../ui/Dialog';
+import { DEMO_DRIVER } from './mode';
 import type { SaveState } from './storage';
 import { demoText, type DemoKey } from './texts';
 
@@ -46,7 +47,11 @@ export function DemoBar({ control }: { control: DemoControl }) {
     : control.notices;
   return (
     <div className="demo-bar" role="region" aria-label={t('title')}>
-      <span>{t('bar.text')}</span>
+      <span>{t(DEMO_DRIVER ? 'bar.textDriver' : 'bar.text')}</span>
+      {/* the other demo page: the same data, saved in this browser */}
+      <a className="btn small" href={DEMO_DRIVER ? '../' : './driver/'} data-testid="demo-other">
+        {t(DEMO_DRIVER ? 'bar.toOffice' : 'bar.toDriver')}
+      </a>
       {notices.map((k) => (
         <strong key={k} className="demo-notice">
           {t(k)}

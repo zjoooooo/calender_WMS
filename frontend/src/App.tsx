@@ -2,7 +2,8 @@
 // (a lazy chunk). Drivers who open / are sent to /driver (§11.3).
 // The calendar demo build (__WMS_DEMO__, §11.5) signs in by itself and has only the office pages, without
 // Users: no /login, /password, /users or /driver. Its routes live in the URL's #hash (HashRouter), so it
-// runs from any sub-path of a static host that knows nothing of them.
+// runs from any sub-path of a static host that knows nothing of them. Its second page, ./driver/
+// (src/demo/mode.ts), is the driver app only, signed in as the demo driver.
 import { lazy, Suspense, type ReactNode } from 'react';
 import { BrowserRouter, HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -21,8 +22,9 @@ import CustomersPage from './office/CustomersPage';
 import HolidaysPage from './office/HolidaysPage';
 import SettingsPage from './office/SettingsPage';
 import UsersPage from './office/UsersPage';
+import { DEMO_DRIVER } from './demo/mode';
 
-const DriverApp = __WMS_DEMO__ ? null : lazy(() => import('./driver/DriverApp'));
+const DriverApp = __WMS_DEMO__ && !DEMO_DRIVER ? null : lazy(() => import('./driver/DriverApp'));
 const Router = __WMS_DEMO__ ? HashRouter : BrowserRouter;
 
 export function makeQueryClient(): QueryClient {
@@ -69,6 +71,17 @@ function RequireAdmin({ children }: { children: ReactNode }) {
 }
 
 export function AppRoutes() {
+  if (DEMO_DRIVER && DriverApp) {
+    // The driver demo page: the driver app and nothing else.
+    return (
+      <Suspense fallback={<div className="center-screen"><Loading /></div>}>
+        <Routes>
+          <Route path="/driver/*" element={<DriverApp />} />
+          <Route path="*" element={<Navigate to="/driver" replace />} />
+        </Routes>
+      </Suspense>
+    );
+  }
   return (
     <Routes>
       {!__WMS_DEMO__ && <Route path="/login" element={<LoginPage />} />}
