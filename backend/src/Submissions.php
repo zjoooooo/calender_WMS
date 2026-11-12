@@ -5,7 +5,8 @@
 //   GET /api/driver/customers                  (driver) the customers a submission can be made for
 //   GET /api/driver/submissions[?date=]        (driver) my submissions of a day (default today)
 //   PUT /api/driver/submissions/{date}/{id}    (driver) create, change or delete (outcome = null) my submission
-//   GET /api/submissions?date=                 (office) every submission of a day, with history
+//   GET /api/submissions?date=                 (office) every submission of a day, with history, and the
+//                                              results recorded on that day's routes
 //
 // A submission lives in days/<date>.json under submissions[id]. {date} is the operational date the phone
 // made it on and {id} a UUID the phone generated, so a resend can never make a second record; op_id makes a
@@ -67,18 +68,40 @@ final class Submissions
             'submissions' => array_map(static fn ($s) => Visits::publicVisit($s, false), self::sorted($mine))];
     }
 
-    /** GET /api/submissions?date= -> {today, date, totals, submissions (with history and the driver's name)}. */
+    /**
+     * GET /api/submissions?date= -> {today, date, totals, submissions, visits}: what the drivers recorded that
+     * day. `submissions` are the free ones (with history and the driver's name; `totals` are theirs).
+     * `visits` are the results recorded on the routes of that day (collected and not collected), each with
+     * its route {code, type, name}, the route's waste type, the truck of the driver's hold, the driver's
+     * name and the history. Both lists are sorted by the time the server received them.
+     */
     public static function officeList(Ctx $c): array
     {
         $date = $c->query('date', '') ?: $c->today;
         V::date($date, 'date');
         $subs = self::of($c->tx->get('day:' . $date));
         $users = Runs::usersById($c);
+        $name = static fn ($id) => $id === null ? null : ($users[(int) $id]['name'] ?? ('#' . $id));
+        $visits = [];
+        $x = Calendar::forCtx($c)->day($date);
+        foreach ($x['routes'] as $o) {
+            $job = 'r' . $o['route_id'];
+            $run = $x['runs'][$job] ?? null;
+            foreach (Runs::visits($run) as $cid => $v) {
+                if (($v['outcome'] ?? null) === null) {
+                    continue; // undone: the stop is pending again
+                }
+                $driver = $v['driver_id'] ?? null;
+                $visits[] = ['id' => $job . '/' . $cid, 'date' => $date, 'job' => $job,
+                    'route' => ['code' => $o['code'], 'type' => $o['type'], 'name' => $o['name']],
+                    'waste_type' => $o['waste_type'],
+                    'vehicle_no' => $driver === null ? null : (Runs::lastHoldOf($run, (int) $driver)['vehicle_no'] ?? null),
+                    'driver' => $name($driver)] + Visits::publicVisit($v, true);
+            }
+        }
         return ['today' => $c->today, 'date' => $date, 'totals' => (object) Calendar::totals($subs),
-            'submissions' => array_map(static function (array $s) use ($users): array {
-                $id = $s['driver_id'] ?? null;
-                return Visits::publicVisit($s, true) + ['driver' => $id === null ? null : ($users[(int) $id]['name'] ?? ('#' . $id))];
-            }, self::sorted($subs))];
+            'submissions' => array_map(static fn (array $s): array => Visits::publicVisit($s, true) + ['driver' => $name($s['driver_id'] ?? null)], self::sorted($subs)),
+            'visits' => self::sorted($visits)];
     }
 
     /**

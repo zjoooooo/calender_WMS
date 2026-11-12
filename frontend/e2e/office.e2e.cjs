@@ -1226,7 +1226,18 @@ async function main() {
     const st = page.locator('[data-testid=subs-table]');
     await st.locator('tbody tr[data-id]').first().waitFor();
     const subRows = st.locator('tbody tr[data-id]');
-    check((await subRows.count()) === 3, 'the Submissions page lists the 3 submissions of today (the resend made no second record)', await subRows.count());
+    // The page lists the route records too (REL and Recycling stops of today's routes), with their route.
+    const recs = await api('GET', `/submissions?date=${today}`);
+    check(recs.visits.length >= 14 && (await subRows.count()) === recs.visits.length + 3, 'the page lists every route stop result of today and the 3 free submissions', [await subRows.count(), recs.visits.length]);
+    const n1Row = st.locator('tr[data-source="route"]', { hasText: 'N1' }).first();
+    check(/N1\s*R/.test(await n1Row.locator('td').nth(1).innerText()) && (await n1Row.locator('td').nth(2).innerText()) === 'REL' && /Ali/.test(await n1Row.innerText()) && /GBA1234X/.test(await n1Row.innerText()),
+      'a regular route record shows its route (N1 R), REL, the driver and the truck', await n1Row.innerText());
+    const rcyRows = st.locator('tr[data-source="route"][data-type="RECYCLING"]');
+    check((await rcyRows.count()) === 2 && /R1/.test(await rcyRows.first().innerText()) && /RCY/.test(await rcyRows.first().innerText()) && /Faye/.test(await rcyRows.first().innerText()), 'the Recycling route R1 has its 2 records (RCY, Faye)', await rcyRows.count());
+    await page.getByLabel('Route', { exact: true }).selectOption('route');
+    check((await subRows.count()) === recs.visits.length && (await st.locator('tr[data-source="free"]').count()) === 0, 'filter "Routes only"');
+    await page.getByLabel('Route', { exact: true }).selectOption('free');
+    check((await subRows.count()) === 3, 'filter "No route only": the 3 free submissions of today (the resend made no second record)', await subRows.count());
     check(/3 submissions/.test(await page.locator('[data-testid=subs-count]').innerText()) && /OTC 300 kg/.test(await page.locator('[data-testid=subs-count]').innerText()), 'with the count and the totals per type', await page.locator('[data-testid=subs-count]').innerText());
     const rowText = await st.locator(`tr[data-id="${subId}"]`).innerText();
     check(/EROSE/.test(rowText) && rowText.includes(erose.name) && /42\.5 kg/.test(rowText) && /GBA1234X/.test(rowText) && /Ali/.test(rowText) && /📷1/.test(rowText) && /✍/.test(rowText), 'a row shows type, customer, weight, truck, driver, photo count and signature', rowText);
@@ -1238,10 +1249,27 @@ async function main() {
     await page.getByLabel('Driver', { exact: true }).selectOption('');
     await page.getByLabel('Customer', { exact: true }).fill('erose site');
     check((await subRows.count()) === 1 && (await subRows.first().getAttribute('data-id')) === subId, 'filter by customer name');
+    // Details: a small document over the dimmed page, with Print and Save; only Close closes it.
     await subRows.first().getByRole('button', { name: 'Details' }).click();
-    const det = page.locator('[data-testid=subs-details]');
+    const rec = page.locator('.dialog.print-doc');
+    const det = rec.locator('[data-testid=subs-details]');
     await det.locator('.thumb img').nth(1).waitFor({ timeout: 10000 }).catch(() => {});
     check((await det.locator('.thumb img').count()) === 2 && /two pallets/.test(await det.innerText()), 'Details show the photo, the signature and the note', await det.innerText());
+    check((await page.locator('.scrim').count()) === 1 && (await rec.getAttribute('aria-modal')) === 'true', 'the record opens as a dialog over the dimmed page');
+    const detText = await det.innerText();
+    check(detText.includes(erose.name) && /42\.5 kg/.test(detText) && /GBA1234X/.test(detText) && /Ali/.test(detText) && /No route/.test(detText), 'with customer, weight, truck, driver and "No route"', detText);
+    await page.keyboard.press('Escape');
+    await page.locator('.scrim').click({ position: { x: 5, y: 5 } });
+    check((await rec.count()) === 1 && (await rec.locator('.x-btn').count()) === 0, 'Esc and a click outside do not close it; there is no ✕');
+    await page.evaluate(() => { window.__printed = 0; window.print = () => { window.__printed++; }; });
+    await rec.locator('[data-testid=subs-print]').click();
+    check((await page.evaluate(() => window.__printed)) === 1, '[Print] prints the record');
+    const [dl] = await Promise.all([page.waitForEvent('download'), rec.locator('[data-testid=subs-save]').click()]);
+    const savedHtml = fs.readFileSync(await dl.path(), 'utf8');
+    check(/^record-.*-EROSE\.html$/.test(dl.suggestedFilename()) && savedHtml.includes(erose.name) && /42\.5 kg/.test(savedHtml) && (savedHtml.match(/src="data:image\//g) || []).length === 2,
+      '[Save] downloads the record as one file with the photo and the signature inside', dl.suggestedFilename());
+    await rec.locator('[data-testid=subs-close]').click();
+    check((await rec.count()) === 0 && (await page.locator('.scrim').count()) === 0, '[Close] closes it');
     check((await page.getByRole('button', { name: /^(Edit|Delete|New|Add)/ }).count()) === 0, 'the page is read only: no create, edit or delete');
     await page.getByLabel('Customer', { exact: true }).fill('no such customer');
     check((await subRows.count()) === 0 && /No submission matches/.test(await st.innerText()), 'no match: the empty row');

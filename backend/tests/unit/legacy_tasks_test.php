@@ -112,8 +112,10 @@ return (static function (): array {
             $ali = array_values(array_filter(T::ok($e->call('GET', '/api/drivers', null, 'mei')), static fn ($d) => $d['id'] === 3))[0];
             T::eq(['id', 'name', 'active', 'route_job'], array_keys($ali));
             T::eq(false, array_key_exists('tasks', T::ok($e->call('GET', '/api/customers/40', null, 'mei'))));
-            T::eq(['today' => '2026-11-11', 'date' => '2026-11-11', 'totals' => [], 'submissions' => []], T::ok($e->call('GET', '/api/submissions', null, 'mei')),
+            $recs = T::ok($e->call('GET', '/api/submissions', null, 'mei'));
+            T::eq(['today' => '2026-11-11', 'date' => '2026-11-11', 'totals' => [], 'submissions' => []], array_diff_key($recs, ['visits' => 1]),
                 'a task visit is not a submission');
+            T::eq(['r5/12'], array_column($recs['visits'], 'id'), 'and the day\'s records list the route result only, nothing of the task run');
             // the types of the old tasks have no usage guard any more
             T::ok($e->call('PATCH', '/api/waste-types/OTC', ['active' => false], 'admin'));
         },

@@ -282,7 +282,7 @@ return (static function (): array {
             T::subset(['driver' => 'Bala', 'waste_type' => 'COMPACTOR', 'customer' => ['name' => 'Golden Bakery']], $o['submissions'][0]);
             T::subset(['date' => '2026-11-10', 'totals' => ['OTC' => 50.0], 'submissions' => [['id' => RunsFx::op(4), 'flags' => ['LATE']]]], $office($e, '?date=2026-11-10'));
             $empty = $office($e, '?date=2026-11-09');
-            T::eq(['today' => '2026-11-11', 'date' => '2026-11-09', 'totals' => [], 'submissions' => []], $empty);
+            T::eq(['today' => '2026-11-11', 'date' => '2026-11-09', 'totals' => [], 'submissions' => [], 'visits' => []], $empty);
             T::err($e->call('GET', '/api/submissions?date=2026-02-30', null, 'mei'), 422, 'VALIDATION');
         },
 
@@ -309,5 +309,32 @@ return (static function (): array {
             $m = T::ok($q->call('GET', '/api/calendar?view=month&anchor=2026-11-11', null, 'mei'));
             T::eq(50.0, (float) array_values(array_filter($m['days'], static fn ($x) => $x['date'] === '2026-11-11'))[0]['totals']['OTC']);
         },
-    ];
+        'GET /api/submissions also lists the results recorded on the routes of that day' => function (): void {
+        $e = RunsFx::env();
+        T::ok(RunsFx::claim($e, 'r5', 'ali'), 201);
+        T::ok(RunsFx::put($e, 'r5', 12, RunsFx::body(9, 0, 'collected', ['weights' => ['REL' => 120.5]]), 'ali'));
+        T::ok(RunsFx::claim($e, 'r50', 'bala'), 201);
+        T::ok(RunsFx::put($e, 'r50', 21, RunsFx::body(1, 0, 'collected', ['weights' => ['REL' => 55.5], 'note' => 'gate B']), 'bala'));
+        T::ok(RunsFx::sub($e, 1, RunsFx::subBody(2)), 201);
+        $r = T::ok($e->call('GET', '/api/submissions?date=' . RunsFx::WED, null, 'mei'));
+        T::eq(1, count($r['submissions']), 'the free submission stays in its own list');
+        $byId = array_column($r['visits'], null, 'id');
+        T::eq(['r5/12', 'r50/21'], array_keys($byId), 'one row per recorded stop, by the time received');
+        T::subset(['job' => 'r50', 'date' => RunsFx::WED, 'route' => ['code' => 'A2', 'type' => 'adhoc', 'name' => 'Adhoc today'], 'waste_type' => 'REL',
+            'outcome' => 'collected', 'weights' => ['REL' => 55.5], 'vehicle_no' => 'SBA1234X', 'driver' => 'Bala', 'note' => 'gate B',
+            'customer' => ['name' => 'Sunday Market Stall'], 'history' => []], $byId['r50/21'], 'a route record: route, type, weight, truck, driver, customer');
+        T::subset(['route' => ['code' => 'N1', 'type' => 'regular'], 'waste_type' => 'REL', 'weights' => ['REL' => 120.5], 'driver' => 'Ali', 'vehicle_no' => 'SBA1234X'], $byId['r5/12'], 'a regular route record');
+        // not collected is listed too, an undone stop is not
+        T::ok(RunsFx::put($e, 'r50', 21, RunsFx::body(3, 1, 'missed', ['weights' => [], 'reason' => 'closed']), 'bala'));
+        $r = T::ok($e->call('GET', '/api/submissions?date=' . RunsFx::WED, null, 'mei'));
+        $row = array_column($r['visits'], null, 'id')['r50/21'];
+        T::subset(['outcome' => 'missed', 'reason' => 'closed'], $row, 'a stop marked not collected is listed with its reason');
+        T::eq(1, count($row['history']), 'with its history');
+        T::ok(RunsFx::put($e, 'r50', 21, RunsFx::body(4, 2, null), 'bala'));
+        $r = T::ok($e->call('GET', '/api/submissions?date=' . RunsFx::WED, null, 'mei'));
+        T::eq(['r5/12'], array_column($r['visits'], 'id'), 'an undone stop is pending again: not listed');
+        T::eq([], T::ok($e->call('GET', '/api/submissions?date=2026-11-12', null, 'mei'))['visits'], 'a day with no results');
+        T::err($e->call('GET', '/api/submissions?date=' . RunsFx::WED, null, 'bala'), 403, 'FORBIDDEN');
+    },
+];
 })();

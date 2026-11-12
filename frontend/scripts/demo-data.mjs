@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // Demo data for the calendar demo on GitHub Pages (docs/Project.md §11.5), made by the REAL backend:
 // a fresh data folder, backend/tools/init.php, the native `php -S` server on a free port, then
-// scripts/seed-demo.mjs --with-runs (routes, customers, tasks and today's runs, so statuses and REL totals
-// show). `vite build --mode demo` packs the result with the backend's PHP source (vite.config.ts).
+// scripts/seed-demo.mjs --with-runs (routes, customers and today's runs, so statuses and totals show).
+// Before that, the same server runs once on a clock set to the last Sunday (config.fake_now, allowed by a
+// `.demo` marker that is removed again) with `--specials-only --with-runs`: the Sunday routes S1 and S2 are
+// made and completed there, so the demo also has a past day with special-route records. `vite build --mode demo` packs the result with the backend's PHP source (vite.config.ts).
 //
 //   node scripts/demo-data.mjs [--out demo-data] [--port <n>] [--if-missing]
 //
@@ -70,7 +72,30 @@ async function main() {
   const env = { ...process.env, WMS_DATA_DIR: DATA };
   delete env.WMS_FAKE_NOW; // the demo runs on the real clock: "today" is the day of the build
 
-  console.log(execFileSync(PHP, [path.join(ROOT, 'backend/tools/init.php')], { env, encoding: 'utf8' }).trim());
+  // Phase 1: the last Sunday before today (Singapore time), 10:00.
+  const sg = new Date(Date.now() + 8 * 3600_000);
+  const sunday = new Date(Date.UTC(sg.getUTCFullYear(), sg.getUTCMonth(), sg.getUTCDate() - (sg.getUTCDay() || 7)));
+  const envSunday = { ...env, WMS_FAKE_NOW: `${sunday.toISOString().slice(0, 10)}T10:00:00+08:00` };
+  fs.writeFileSync(path.join(DATA, '.demo'), '');
+  console.log(execFileSync(PHP, [path.join(ROOT, 'backend/tools/init.php')], { env: envSunday, encoding: 'utf8' }).trim());
+  {
+    const port1 = await freePort();
+    const api1 = `http://127.0.0.1:${port1}`;
+    const server1 = spawn(PHP, ['-S', `127.0.0.1:${port1}`, path.join(ROOT, 'backend/public/index.php')], { env: envSunday, stdio: ['ignore', 'pipe', 'pipe'] });
+    server1.output = '';
+    server1.stdout.on('data', (d) => (server1.output += d));
+    server1.stderr.on('data', (d) => (server1.output += d));
+    try {
+      await waitForHealth(`${api1}/api/health`, server1);
+      const seed1 = spawn(process.execPath, [path.join(FRONT, 'scripts/seed-demo.mjs'), '--api', api1, '--data-dir', DATA, '--new-password', LOGIN.password, '--specials-only', '--with-runs'], { env: envSunday, stdio: 'inherit' });
+      const code1 = await new Promise((resolve) => seed1.on('exit', resolve));
+      if (code1 !== 0) throw new Error(`seed-demo.mjs --specials-only failed (exit ${code1})`);
+    } finally {
+      server1.kill('SIGTERM');
+      await new Promise((resolve) => server1.once('exit', resolve));
+    }
+  }
+  fs.rmSync(path.join(DATA, '.demo'), { force: true }); // from here on the real clock
 
   const port = Number(opt('port', process.env.DEMO_DATA_PORT || 0)) || (await freePort());
   const api = `http://127.0.0.1:${port}`;
@@ -80,7 +105,7 @@ async function main() {
   server.stderr.on('data', (d) => (server.output += d));
   try {
     await waitForHealth(`${api}/api/health`, server);
-    const seed = spawn(process.execPath, [path.join(FRONT, 'scripts/seed-demo.mjs'), '--api', api, '--data-dir', DATA, '--new-password', LOGIN.password, '--with-runs'], {
+    const seed = spawn(process.execPath, [path.join(FRONT, 'scripts/seed-demo.mjs'), '--api', api, '--data-dir', DATA, '--password', LOGIN.password, '--new-password', LOGIN.password, '--with-runs'], {
       env,
       stdio: 'inherit',
     });

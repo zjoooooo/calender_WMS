@@ -436,7 +436,7 @@ const office = {
   'rf.wasteTypeHint': '一条路线只收一种垃圾类型，建好后不能修改。',
   'rf.wasteTypeFixed': '路线的垃圾类型不能修改，要改请新建一条路线。',
   'subs.title': '提交记录',
-  'subs.hint': '司机在手机上提交的、不走路线的垃圾类型。这些重量计入日历每天的总重量。本页只能查看。',
+  'subs.hint': '司机当天记录的全部内容：路线上每一站的结果（REL、Recycling），以及在手机上提交的、不走路线的垃圾类型。本页只能查看。',
   'subs.count': '{n} 条记录',
   'subs.count_one': '{n} 条记录',
   'subs.colTime': '时间',
@@ -454,6 +454,15 @@ const office = {
   'subs.noneFiltered': '没有符合筛选条件的记录',
   'subs.received': '{time} 收到',
   'subs.deleted': '已删除',
+  'subs.colRoute': '路线',
+  'subs.noRoute': '不走路线',
+  'subs.allSources': '全部来源',
+  'subs.srcRoute': '只看路线',
+  'subs.srcFree': '只看不走路线',
+  'subs.record': '收运记录',
+  'subs.print': '打印',
+  'subs.flags': '标记',
+  'subs.saveFailed': '文件生成失败：有照片没有加载出来',
 };
 
 export default office;

@@ -238,3 +238,13 @@ h3 { font-size: 15px; }
   .search { width: 100%; }
   .brand { font-size: 18px; }
 }
+
+/* A dialog that is a document (class "print-doc"): printing the page prints the dialog alone. */
+@media print {
+  body:has(.dialog.print-doc) > :not(.dialog.print-doc) { display: none !important; }
+  .dialog.print-doc { position: static; transform: none; width: auto; max-width: none; max-height: none; box-shadow: none; border: 0; margin: 0; }
+  .dialog.print-doc .dialog-body { overflow: visible; }
+  .dialog.print-doc .dialog-foot { display: none; }
+  /* black on white also from the dark theme */
+  .dialog.print-doc, .dialog.print-doc * { color: #000 !important; background: transparent !important; border-color: #bbb !important; }
+}
