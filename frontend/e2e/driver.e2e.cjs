@@ -528,8 +528,12 @@ async function main() {
     });
     await ctxB.setOffline(false);
     await until(async () => subOps.length >= 1, 15000);
-    await pageB.evaluate(() => window.dispatchEvent(new Event('focus')));
-    await until(async () => subOps.length >= 2, 20000);
+    // A flush starts on focus. A focus that arrives while the first attempt is still failing joins that
+    // attempt, and the outbox would then wait out its back-off: keep asking until the retry has left.
+    await until(async () => {
+      await pageB.evaluate(() => window.dispatchEvent(new Event('focus')));
+      return subOps.length >= 2;
+    }, 30000, 1000);
     const sent = await until(async () => !/not sent yet/.test(await unsent.innerText()), 20000);
     await pageB.unroute('**/api/driver/submissions/**');
     const all2 = await subsOf();
