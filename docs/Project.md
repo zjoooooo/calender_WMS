@@ -18,7 +18,7 @@
 6. Night shifts are supported: the working day rolls over at a configurable hour (default 04:00), so work done after midnight still belongs to the previous day (R1).
 
 ### In v1
-- Calendar: week view with one-line route rows and month view with route-code chips. Routes are identified by a code, a colour bar and a type tag. Clicking a code highlights that route, and search matches a code or a customer name. Every route line carries a short waste-type tag (REL / RCY).
+- Calendar: week view with one-line route rows and month view with route-code chips. Routes are identified by a code shown on the route's colour; routes whose code starts with the same letter (the area) share a colour. Clicking a code highlights that route, and search matches a code or a customer name. A route line carries a tag only for what is not the usual case: `S` / `⚡A` for a special or adhoc route, `RCY` for a route that is not REL.
 - Route editing: add, edit and delete route containers; add, remove and reorder customers (drag and drop with mouse or touch, plus ↑ ↓ buttons and "move to #"). A change can apply to "only this date" or to "this date and the following ones". Other route actions: skip a date, copy to another date (to run on a PH or move to a work day), change the schedule, and urgent pickup.
 - Free submissions: a driver submits an OTC, COMPACTOR or EROSE collection at any time (type, customer, weight; photos, signature, weighbridge ticket and truck plate as for a route stop), also with no signal. The office sees them by date on the Submissions page (read only).
 - Master data pages: customers (each registers its waste types), waste types (configurable), holidays (Singapore 2026–2027 prefilled, maintained by users), trucks (the vehicle list drivers pick from) and users.
@@ -165,7 +165,7 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
   - Recurring routes get no suggestion; the office types the code.
 - **Colour.**
   - It is an integer from 1 to 10, an index into the fixed palette (§9.1).
-  - On create, the server picks the index used by the fewest routes whose period reaches today or later. Ties go to the lowest index.
+  - On create, the server takes the colour of a live route (period reaches today or later) whose code starts with the same character: `N1`, `N2` and `N3` share one colour, so the colour stands for the area. With no such route it picks the index used by the fewest live routes; ties go to the lowest index.
   - Copies and schedule splits inherit the colour.
   - It is editable, and repeats are allowed. The colour is a secondary cue; the code is the identifier.
 - **Type tag.**
@@ -189,7 +189,7 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
 - A "following" save (R12), a schedule change (R14) and a copy to another date (R15: Run on PH, Move to work day, re-plan) keep the route's waste type. Urgent pickup asks for it.
 - A route record stored before round 7 has no `waste_type`. It reads as `REL` everywhere. The field is never written into such a record, not even when the route is edited, and the records a split makes from it have none either. Nothing in an existing data file is rewritten for this rule.
 - Only customers registered with the route's waste type go on its stop lists (R10), and R8 drops a customer that lost the type. On the route the driver enters only that type's weight (R27).
-- The calendar, the Routes page, the route drawer and the driver's cards show the type's abbreviation as a short tag (`REL`, `RCY`) next to the R / S / ⚡A tag.
+- The calendar, the Routes page, the route drawer and the driver's cards show the type's abbreviation as a short tag (`REL`, `RCY`) next to the R / S / ⚡A tag. The calendar's route lines are the exception: to leave room for the name they show no `R` and no `REL` tag, only `S` / `⚡A` and the tag of another waste type (`RCY`).
 
 **R7 ROUTE GENERATION.** Generation is defined for any date d > `plan.frozen_through` with start ≤ d ≤ (end or open). The calendar uses it live for d ≥ today, and R13 uses it once to snapshot the dates it freezes. Dates ≤ `frozen_through` come only from their frozen plan.
 - **regular**: generates d when weekday(d) is in `days`.
@@ -1247,7 +1247,7 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
   8. `#FF9DA7`
   9. `#9C755F`
   10. `#17BECF`
-- **Office theme**: neutral chrome, so that the colour bars are the only colour signal. Codes are set in a monospace font. Light and dark themes come from CSS tokens.
+- **Office theme**: neutral chrome, so that the route colours are the only colour signal. Codes are set in a monospace font. Light and dark themes come from CSS tokens.
 - **Driver theme**: a high-contrast light theme, readable in sunlight.
 - **Fonts**: system fonts only, no external font CDN.
 
@@ -1281,7 +1281,7 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
     - Rest days get a faint rose tint; a PH also gets a red date and a red "★ PH · name" tag.
     - A summary line: "12 routes · 96 stops · 1 paused".
     - Today's ops line, and the totals for today and past days.
-  - **Route rows (one line each)**: a 5 px colour bar, **CODE** (bold mono), the type tag (`R` / `S` / `⚡A`, with a dashed amber border for adhoc), the route's waste-type tag (`REL` / `RCY`), the name (ellipsis, truncated first but never below about 3 characters), and the status glyph + short word + count at the right (§8.3). In a narrow day column (under about 300 px, e.g. a 1440 px laptop) the status word ("Unclaimed", "Needs driver") moves to the tooltip, like the month lines: "○ 0/10"; a driver's name stays ("◑ Devi 0/8"). Stops are not listed in the week view.
+  - **Route rows (one line each)**: **CODE** (bold mono, dark text on the route's colour), the type tag of a special or adhoc route (`S` / `⚡A`, with a dashed amber border for adhoc; a regular route has none), the waste-type tag when the route is not REL (`RCY`), the name (ellipsis, truncated first but never below about 3 characters), and the status glyph + short word + count at the right (§8.3). In a narrow day column (under about 300 px, e.g. a 1440 px laptop) the status word ("Unclaimed", "Needs driver") moves to the tooltip, like the month lines: "○ 0/10"; a driver's name stays ("◑ Devi 0/8"). Stops are not listed in the week view.
   - **Paused group**: "⏸ 3 regular routes paused (PH) ▸", counting only the routes that still need a decision ("⏸ 11 regular routes paused (PH) · 2 covered"). Expanded rows offer [Run on PH] and [Move to work day…]; a covered row shows "→ N1-25 Fri 25 Dec" once.
   - **Footer** (today and later): [+ Route].
 - **Month view** (the default view; modelled on the Apple Calendar month view the user sent, Round 5):
@@ -1289,7 +1289,7 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
   - Each cell: the day number at the top right (about 19 px; the 1st of a month reads "Nov 1" / "11月1日"; days of other months muted), today in the blue circle and a PH in red (see Date colours). Today and past days show the **day's totals per waste type** left of the number, small and muted ("REL 1,475.5 kg"; tooltip adds "provisional" while the day is open), as in the week header (R32).
   - A PH cell starts with a red-tinted, full-width **holiday bar** "★ Deepavali (observed)". Paused PH routes follow as one line "⏸ 12 paused ▸" ("⏸ 11 paused · 1 covered ▸" once some are covered; not counted in the 4 below), which opens the day drawer ([Run on PH], [Move to work day…]).
   - Then **one line per route** (day order, §5.8), after the type filters.
-    - Route line: colour bar, **CODE** (bold mono), type tag (`R` / `S` / `⚡A`; adhoc gets a dashed amber outline), the waste-type tag (`REL` / `RCY`), the name (ellipsis, truncated first) and a short status at the right (§8.3 month lines). Skipped dates are struck through.
+    - Route line: **CODE** (bold mono, on the route's colour), type tag (`S` / `⚡A` only; adhoc gets a dashed amber outline), the waste-type tag when it is not REL (`RCY`), the name (ellipsis, truncated first) and a short status at the right (§8.3 month lines). Skipped dates are struck through.
     - Highlight and search dim lines the same way as rows.
   - **Collapse rule**: a cell with **more than 4 lines** shows the first 4 and then "N more ▾" (tooltip: the hidden codes). Clicking it expands the cell in place, with "Show less ▴" at the end. Cells with 4 lines or fewer have no control. The expanded state is kept per date by the page, so the 30 s refetch never collapses it; a cell also opens by itself while a search or highlight matches one of its hidden lines.
   - **Clicks**: a route line opens that route's drawer (§6.1: edit stops, reorder, …); the day number opens the **day drawer** (about 460 px), which renders the same column as the week view; on today and past days its header links to that day's Submissions page (§6.8). Today and later cells get a **"+"** at the top left (shown on hover or focus, always on touch screens) with the same create menu as the week view's footer (the route kinds of `can_create`), so routes are added without leaving the month view.

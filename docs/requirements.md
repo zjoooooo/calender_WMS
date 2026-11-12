@@ -88,3 +88,4 @@
   - A submission made offline that is more than 7 days old when it reaches the server is refused (the limit is a config value).
   - Every submission needs a truck plate (no claim picks one); the form pre-fills the last plate used.
   - "就用26.5.0" (use Node 26.5.0): the local run on the user's Mac used Node 26 by the user's choice; the project and GitHub Actions stay on Node 22.
+- Route colour (2026-11-12, user chose "option A"): the route code is shown on the route's colour instead of next to a thin colour bar; a new route takes the colour of a live route whose code starts with the same letter (colour = area), else the least-used colour; the colour stays editable and existing routes are not recoloured. Calendar route lines no longer show the `R` tag (regular) or the `REL` tag; `S`, `⚡A` and `RCY` stay.

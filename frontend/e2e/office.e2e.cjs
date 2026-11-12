@@ -143,7 +143,13 @@ async function monthChecks(page, { today, tomorrow, workDay, ph }) {
   // submissions (the seed made an OTC and a COMPACTOR one), which have no line on the calendar.
   await page.getByRole('button', { name: /^Expand all/ }).click();
   const tagOf = async (code) => (await page.locator(`.month .mcell[data-date="${today}"] .mline[data-code="${code}"] .wtag`).allInnerTexts()).join();
-  check((await tagOf('N1')) === 'REL' && (await tagOf('R1')) === 'RCY', 'route lines show the waste-type tag: N1 REL, R1 RCY', [await tagOf('N1'), await tagOf('R1')]);
+  check((await tagOf('N1')) === '' && (await tagOf('R1')) === 'RCY', 'route lines show the waste-type tag only when it is not REL: N1 none, R1 RCY', [await tagOf('N1'), await tagOf('R1')]);
+  // The code sits on the route's colour; routes whose code starts with the same letter share it (auto colour).
+  const lineOf = (code) => page.locator(`.month .mcell[data-date="${today}"] .mline[data-code="${code}"]`);
+  const chipBg = (code) => lineOf(code).locator('.code').evaluate((e) => getComputedStyle(e).backgroundColor);
+  const [bgN1, bgN2, bgE1] = [await chipBg('N1'), await chipBg('N2'), await chipBg('E1')];
+  check(bgN1 === 'rgb(78, 121, 167)' && bgN2 === bgN1 && bgE1 !== bgN1, 'the code is a colour chip: N1 and N2 share a colour, E1 has another', [bgN1, bgN2, bgE1]);
+  check((await lineOf('N1').locator('.tt').count()) === 0, 'a regular route line has no R tag');
   const todayCal = mcal.days.find((d) => d.date === today);
   check(todayCal.totals.OTC === 300 && todayCal.totals.COMPACTOR === 1250, "API: today's totals count the free submissions (OTC 300, COMPACTOR 1250)", todayCal.totals);
   check(/OTC 300 kg/.test(await tTot.innerText()) && /COMPACTOR 1,250 kg/.test(await tTot.innerText()), "today's cell totals show OTC and COMPACTOR too", await tTot.innerText());
@@ -1196,7 +1202,7 @@ async function main() {
     const rs1 = (await occOn(sunday, 'RS1')).occ[0];
     check(rs1 && rs1.waste_type === 'RECYCLING' && rs1.type === 'special' && rs1.stops.length === 1, `Recycling route RS1 created on ${sunday} with 1 stop`, rs1 && [rs1.waste_type, rs1.stops.length]);
     await sun.locator('.occ[data-code="RS1"] .wtag').waitFor({ timeout: 10000 }).catch(() => {});
-    check((await sun.locator('.occ[data-code="RS1"] .wtag').innerText()) === 'RCY' && (await sun.locator('.occ[data-code="S1"] .wtag').innerText()) === 'REL', 'week rows show RCY on RS1 and REL on S1');
+    check((await sun.locator('.occ[data-code="RS1"] .wtag').innerText()) === 'RCY' && (await sun.locator('.occ[data-code="S1"] .wtag').count()) === 0 && (await sun.locator('.occ[data-code="S1"] .tt').innerText()) === 'S', 'week rows show RCY on RS1, no waste tag on the REL route S1, and the S tag');
     // The rules behind the form (server): the type never changes, and only customers with it go on the route.
     const rs1Route = await api('GET', `/routes/${rs1.route_id}`);
     const relOnly = (await api('GET', '/customers?q=Woodlands')).find((c) => !c.waste_types.includes('RECYCLING'));

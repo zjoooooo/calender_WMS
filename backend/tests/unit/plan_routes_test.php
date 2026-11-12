@@ -98,11 +98,14 @@ return (static function (): array {
             T::ok($post($e, $adhoc + ['code' => 'S1', 'date' => '2026-11-13']), 201);
             T::err($post($e, ['type' => 'special', 'code' => 'S1', 'name' => 'x', 'date' => '2026-11-22', 'stops' => []]), 422, 'CODE_IN_USE');
         },
-        'R5 colour: the least-used colour among live routes, ties to the lowest; editable' => function () use ($env, $post, $stops) {
+        'R5 colour: the colour of a live route with the same first letter, else the least-used, ties to the lowest; editable' => function () use ($env, $post, $stops) {
             $e = $env(); // live colours: N1 1, S1 5, A1 2, N1-25 1, S2 4 (E9's 3 has ended)
             $a = ['type' => 'adhoc', 'name' => 'x', 'date' => '2026-11-13', 'stops' => $stops(12)];
-            T::eq(3, T::ok($post($e, $a + ['code' => 'A7']), 201)['color']);
-            T::eq(6, T::ok($post($e, $a + ['code' => 'A8']), 201)['color']);
+            T::eq(3, T::ok($post($e, $a + ['code' => 'W7']), 201)['color']);
+            T::eq(6, T::ok($post($e, $a + ['code' => 'X8']), 201)['color']);
+            T::eq(2, T::ok($post($e, $a + ['code' => 'A7']), 201)['color'], 'A1 is colour 2');
+            T::eq(3, T::ok($post($e, $a + ['code' => 'W8']), 201)['color'], 'W7 is colour 3');
+            T::eq(7, T::ok($post($e, $a + ['code' => 'E1']), 201)['color'], "E9 has ended: its colour is not E's");
             T::eq(1, T::ok($post($e, $a + ['code' => 'A9', 'color' => 1]), 201)['color'], 'repeats allowed');
             T::err($post($e, $a + ['code' => 'A10', 'color' => 11]), 422, 'VALIDATION');
             T::eq(9, T::ok($e->call('PATCH', '/api/routes/7', ['rev' => 1, 'color' => 9], 'mei'))['color']);

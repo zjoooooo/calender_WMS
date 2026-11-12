@@ -24,8 +24,9 @@
 .tchip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 4px 10px; font-size: 12.5px; display: inline-flex; gap: 6px; align-items: center; }
 .tchip[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px; }
-.lchip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 3px 8px 3px 0; font-size: 12px; overflow: hidden; max-width: 220px; }
-.lchip::before { content: ""; width: 5px; align-self: stretch; background: var(--rc); flex: none; }
+.lchip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 3px 8px 3px 3px; font-size: 12px; overflow: hidden; max-width: 220px; }
+/* the route code sits on the route's colour (dark text reads on all 10 palette colours) */
+.lchip .code, .occ .code, .mline .code { background: var(--rc); color: #0B0B0B; border-radius: 4px; padding: 0 5px; flex: none; }
 .lchip .code { font-size: 12px; }
 .lchip .ln { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 .lchip.on { border-color: var(--fg); box-shadow: 0 0 0 1px var(--fg); }
@@ -59,14 +60,13 @@
 /* one-line route row */
 .occ {
   position: relative; display: flex; align-items: center; gap: 6px; min-width: 0; text-align: left; cursor: pointer;
-  border: 1px solid var(--line); background: var(--surface); border-radius: 7px; padding: 5px 7px 6px 11px; overflow: hidden;
+  border: 1px solid var(--line); background: var(--surface); border-radius: 7px; padding: 5px 7px 6px 6px; overflow: hidden;
   transition: opacity .15s; font-size: 12.5px; line-height: 18px;
 }
-.occ::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--rc); }
 .occ:hover { border-color: var(--muted); }
 .occ:focus-visible { outline: 2px solid var(--today); outline-offset: 1px; }
 .occ.adhoc { border-style: dashed; border-color: var(--warn); }
-.occ .code { font-size: 13px; border: 0; background: none; padding: 0; color: var(--fg); cursor: pointer; }
+.occ .code { font-size: 13px; border: 0; cursor: pointer; }
 .occ .code:hover { text-decoration: underline; }
 /* the name gets the space left over (truncated first) but never less than ~3 characters; the status keeps
    its count (§8.3). In a narrow day column (week view on a laptop) the status word ("Unclaimed", "Needs
@@ -76,8 +76,9 @@
 .occ .st { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .occ .ed { color: var(--warn); font-size: 11px; flex: none; }
 .occ.cancelled .code, .occ.cancelled .nm { text-decoration: line-through; color: var(--muted); }
+.occ.cancelled .code, .mline.cancelled .code { background: none; }
 .occ.cancelled { background: transparent; border-style: dashed; }
-.occ .pg { position: absolute; left: 5px; right: 0; bottom: 0; height: 3px; background: var(--surface-2); }
+.occ .pg { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--surface-2); }
 .occ .pg i { display: block; height: 100%; background: var(--muted); }
 .occ.orphan { border-color: var(--danger); }
 .paused { margin: 0 7px 7px; border: 1px dashed var(--line); border-radius: 7px; font-size: 12px; color: var(--muted); background: transparent; text-align: left; padding: 6px 8px; }
@@ -136,16 +137,15 @@
 }
 .mpaused:hover { background: var(--surface-2); color: var(--fg); }
 .mlines { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-/* one line per route: colour bar, CODE, type tag, name (truncated first), short status at the right */
+/* one line per route: CODE on its colour, tags (S / ⚡A, RCY), name (truncated first), short status at the right */
 .mline {
   display: flex; align-items: center; gap: 5px; width: 100%; min-width: 0; text-align: left; cursor: pointer;
   border: 1px solid transparent; background: transparent; border-radius: 5px; padding: 1px 5px 1px 3px;
   font-size: 12px; line-height: 17px; color: var(--fg); transition: opacity .15s;
 }
-.mline::before { content: ""; width: 4px; height: 14px; border-radius: 2px; background: var(--rc); flex: none; }
 .mline:hover { background: var(--surface-2); }
 .mline:focus-visible { outline: 2px solid var(--cal-today); outline-offset: 0; }
-.mline .code { font-size: 11.5px; flex: none; }
+.mline .code { font-size: 11.5px; line-height: 15px; padding: 0 4px; }
 .mline .tt { font-size: 9px; line-height: 13px; padding: 0 3px; flex: none; }
 .mline .nm { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mline .st { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
