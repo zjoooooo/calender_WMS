@@ -197,7 +197,7 @@ async function main() {
     await page.getByRole('dialog').waitFor({ state: 'detached' });
     // Archive + restore
     await row.getByRole('button', { name: '归档' }).click();
-    await page.getByText('没有路线或任务用到这个客户。').first().waitFor();
+    await page.getByText('没有路线用到这个客户。').first().waitFor();
     await page.getByRole('dialog').getByRole('button', { name: '归档' }).click();
     await page.getByText('已归档 Kopi Tiam 88').waitFor();
     await page.getByRole('dialog').getByRole('button', { name: '关闭' }).last().click();

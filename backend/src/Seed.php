@@ -4,11 +4,15 @@ final class Seed
 {
     public const WASTE_TYPES = [
         ['code' => 'REL', 'name' => 'REL', 'abbr' => 'REL', 'unit' => 'kg', 'weigh_method' => 'on_site',
-            'routable' => true, 'recurring_tasks' => false, 'confirm_over' => 1000, 'active' => true],
+            'routable' => true, 'confirm_over' => 1000, 'active' => true],
+        ['code' => 'RECYCLING', 'name' => 'Recycling', 'abbr' => 'RCY', 'unit' => 'kg', 'weigh_method' => 'on_site',
+            'routable' => true, 'confirm_over' => 1000, 'active' => true],
         ['code' => 'OTC', 'name' => 'OTC', 'abbr' => 'OTC', 'unit' => 'kg', 'weigh_method' => 'on_site',
-            'routable' => false, 'recurring_tasks' => false, 'confirm_over' => 1000, 'active' => true],
+            'routable' => false, 'confirm_over' => 1000, 'active' => true],
         ['code' => 'COMPACTOR', 'name' => 'COMPACTOR', 'abbr' => 'COMPACTOR', 'unit' => 'kg', 'weigh_method' => 'on_site',
-            'routable' => false, 'recurring_tasks' => true, 'confirm_over' => null, 'active' => true],
+            'routable' => false, 'confirm_over' => null, 'active' => true],
+        ['code' => 'EROSE', 'name' => 'EROSE', 'abbr' => 'EROSE', 'unit' => 'kg', 'weigh_method' => 'on_site',
+            'routable' => false, 'confirm_over' => null, 'active' => true],
     ];
 
     public const DEFAULT_ROLLOVER_HOUR = 4;
@@ -54,15 +58,13 @@ final class Seed
             'frozen_through' => Dates::addDays($today, -1),
             'seeded_years' => array_keys($years),
             'settings' => ['rollover_hour' => self::DEFAULT_ROLLOVER_HOUR],
-            'seq' => ['customer' => 0, 'route' => 0, 'task' => 0],
+            'seq' => ['customer' => 0, 'route' => 0],
             'waste_types' => self::WASTE_TYPES,
             'trucks' => [],
             'holidays' => array_values($holidays),
             'customers' => [],
             'routes' => [],
             'route_overrides' => [],
-            'tasks' => [],
-            'task_overrides' => [],
         ];
     }
 

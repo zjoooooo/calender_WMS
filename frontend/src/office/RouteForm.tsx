@@ -5,6 +5,8 @@
 //   - Special · every Sunday / PH: Every Sunday / Every PH, start, end;
 //   - Special · this date only and ⚡ Adhoc · this date only: the date, code from suggest-code (A<n> / S<n>),
 //     name "Adhoc 12 Nov", note (caller and reason).
+// Every create form also asks for the route's waste type (REL or Recycling): a route collects one type and
+// it never changes afterwards (the edit form shows it read-only).
 // Edit: code, colour (10 swatches), name, note, Mon–Sat or Sunday/PH, start and end; one-offs: the date
 // (Change date, re-checked by R6). Schedule changes apply (•) from today (template edit) or ( ) from date D
 // (R14 change-schedule; code, colour, name and note always apply at once).
@@ -73,7 +75,12 @@ export function RouteForm(props: Props) {
   const type = edit ? route?.type : createType === 'adhoc' ? 'adhoc' : createType === 'regular' ? 'regular' : 'special';
   const oneOff = edit ? !!route && !route.recurring && !!route.date : createType === 'adhoc' || createType === 'special_once';
 
-  const today = useSession().meta?.today ?? '';
+  const meta = useSession().meta;
+  const today = meta?.today ?? '';
+  // The one waste type of the route: picked on create (default: the first routable type), fixed afterwards.
+  const routableTypes = (meta?.waste_types ?? []).filter((x) => x.routable && x.active);
+  const [wasteTypeSel, setWasteType] = useState('');
+  const wasteType = edit ? route?.waste_type ?? '' : wasteTypeSel || routableTypes[0]?.code || '';
   const allQ = useAllRoutes(edit);
   // The server's version (the whole route for a split one), once both queries have answered.
   const ready = !!route && (allQ.isSuccess || allQ.isError);
@@ -168,7 +175,7 @@ export function RouteForm(props: Props) {
     if (type === 'regular' && !oneOff && days.length === 0) return w.setError(t('rf.needDays'));
     if (type === 'special' && !oneOff && !sun && !ph) return w.setError(t('rf.needSunPh'));
     if (props.mode === 'create') {
-      const base = { code: code.trim().toUpperCase(), color, name: name.trim(), note: note.trim(), stops: [] };
+      const base = { waste_type: wasteType, code: code.trim().toUpperCase(), color, name: name.trim(), note: note.trim(), stops: [] };
       const body: RouteCreate = oneOff
         ? { ...base, type: createType === 'adhoc' ? 'adhoc' : 'special', date }
         : type === 'regular'
@@ -266,6 +273,18 @@ export function RouteForm(props: Props) {
             <label className="field">
               <span>{t('common.name')}</span>
               <input value={name} maxLength={100} onChange={(e) => set('name', e.target.value)} />
+            </label>
+            <label className="field full">
+              <span>{t('rf.wasteType')}</span>
+              <select className="input" style={{ width: 'auto' }} value={wasteType} disabled={edit} data-testid="route-waste-type" onChange={(e) => setWasteType(e.target.value)}>
+                {edit && !routableTypes.some((x) => x.code === wasteType) && <option value={wasteType}>{wasteType}</option>}
+                {routableTypes.map((x) => (
+                  <option key={x.code} value={x.code}>
+                    {x.name}
+                  </option>
+                ))}
+              </select>
+              <span className="hint">{t(edit ? 'rf.wasteTypeFixed' : 'rf.wasteTypeHint')}</span>
             </label>
             <div className="field full">
               <span>{t('rf.color')}</span>

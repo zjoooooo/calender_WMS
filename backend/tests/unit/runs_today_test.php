@@ -11,15 +11,13 @@ return (static function (): array {
             $e = RunsFx::env(['runs' => [
                 'r5' => RunsFx::run('r5', 3, [RunsFx::visit(12)]),                                   // active (holder, pending 1)
                 'r50' => RunsFx::run('r50', null, [], [$left(4)]),                                    // resolved 0, no holder: not_started
-                't6' => RunsFx::run('t6', null, [RunsFx::visit(12, 'collected', ['OTC' => 3.0])], [$left(4)]), // done
-                't11' => RunsFx::run('t11', 5),                                                       // active (resolved 0, holder, pending 1)
+                't6' => RunsFx::run('t6', null, [RunsFx::visit(12, 'collected', ['OTC' => 3.0])], [$left(4)]), // old task run: not a job
             ]]);
             $o = static fn (string $k) => RunsFx::occ($e, $k)['run_status'];
             T::eq('active', $o('r5@2026-11-11'));
             T::eq('not_started', $o('r50@2026-11-11'));
-            T::eq('done', $o('t6@2026-11-11'));
-            T::eq('active', $o('t11@2026-11-11'));
-            T::eq('not_started', $o('t12@2026-11-11')); // no run
+            T::eq(null, RunsFx::occ($e, 't6@2026-11-11'));
+            T::eq('not_started', $o('r51@2026-11-11')); // no run
             T::eq('planned', $o('r41@2026-11-12'));
             // open: a run with work done and no holder
             T::ok($e->call('POST', '/api/runs/2026-11-11/r5/release', ['mark_missed' => false], 'mei'));
@@ -31,56 +29,55 @@ return (static function (): array {
             // after the rollover: open/active -> incomplete, not_started -> no_record, done stays done
             $e->setNow('2026-11-12T04:00:00+08:00');
             T::eq('incomplete', $o('r5@2026-11-11'));
-            T::eq('incomplete', $o('t11@2026-11-11'), 'a claimed job with nothing done is incomplete (T11 active -> incomplete)');
             T::eq('no_record', $o('r50@2026-11-11'));
-            T::eq('no_record', $o('t12@2026-11-11'));
-            T::eq('done', $o('t6@2026-11-11'));
+            T::eq('no_record', $o('r51@2026-11-11'));
             $cal = T::ok($e->call('GET', '/api/calendar?view=week&anchor=2026-11-11', null, 'mei'));
             $wed = array_values(array_filter($cal['days'], static fn ($d) => $d['date'] === '2026-11-11'))[0];
-            // no_record: r50, t12 and the empty A3 (a scheduled occurrence with no run, R22)
-            T::subset(['ops' => ['incomplete' => 2, 'no_record' => 3, 'done' => 1, 'active' => 0, 'open' => 0, 'not_started' => 0], 'provisional' => false], $wed);
+            // no_record: r50 and the empty A3 (a scheduled occurrence with no run, R22); the old task run counts nowhere
+            T::subset(['ops' => ['incomplete' => 1, 'no_record' => 2, 'done' => 0, 'active' => 0, 'open' => 0, 'not_started' => 0], 'provisional' => false,
+                'totals' => ['REL' => 10.0, 'OTC' => ['$absent' => true]]], $wed);
+            // done, and a claimed job with nothing done is incomplete after the rollover
+            $g = RunsFx::env(['runs' => ['r50' => RunsFx::run('r50', null, [RunsFx::visit(21)], [$left(4)]), 'r5' => RunsFx::run('r5', 5)]]);
+            T::eq('done', RunsFx::occ($g, 'r50@2026-11-11')['run_status']);
+            T::eq('active', RunsFx::occ($g, 'r5@2026-11-11')['run_status']);
+            $g->setNow('2026-11-12T04:00:00+08:00');
+            T::eq('done', RunsFx::occ($g, 'r50@2026-11-11')['run_status']);
+            T::eq('incomplete', RunsFx::occ($g, 'r5@2026-11-11')['run_status'], 'a claimed job with nothing done is incomplete');
         },
 
-        'driver today: route and task cards, sections order, can_take, my work, active types and plates' => function () use ($left) {
+        'driver today: route cards with their waste type, order, can_take, my route, active types and plates; no tasks' => function () use ($left) {
             $e = RunsFx::env(['runs' => [
                 'r5' => RunsFx::run('r5', null, [RunsFx::visit(12, 'collected', ['REL' => 5.0], 'user:4', 1, 4)], [$left(4)]), // open, left by Bala
                 'r50' => RunsFx::run('r50', 3),                                                                             // Ali's route
-                't6' => RunsFx::run('t6', 5, [RunsFx::visit(12, 'collected', ['OTC' => 1.0], 'user:5', 1, 5)]),                // done by Chong
-                't11' => RunsFx::run('t11', 3),                                                                             // Ali's task
+                't11' => RunsFx::run('t11', 3),                                                                             // an old task run
             ]]);
             $d = T::ok($e->call('GET', '/api/driver/today', null, 'ali'));
-            T::subset(['today' => '2026-11-11', 'now' => '2026-11-11T10:00:00+08:00', 'me' => ['id' => 3, 'name' => 'Ali', 'lang' => 'en'],
+            T::subset(['today' => '2026-11-11', 'now' => '2026-11-11T10:00:00+08:00', 'day_ends_at' => '2026-11-12T04:00:00+08:00', 'me' => ['id' => 3, 'name' => 'Ali', 'lang' => 'en'],
                 'my_route' => ['date' => '2026-11-11', 'job' => 'r50', 'code' => 'A2', 'name' => 'Adhoc today', 'pending' => 1, 'total' => 1,
                     'vehicle_no' => 'SBA1234X', 'assigned' => false],
-                'my_tasks' => [['date' => '2026-11-11', 'job' => 't11', 'waste_type' => 'OTC', 'customer' => 'Only OTC Co', 'vehicle_no' => 'SBA1234X', 'assigned' => false]],
+                'my_tasks' => ['$absent' => true], 'tasks' => ['$absent' => true],
                 'trucks' => ['SBA1234X', 'GBA1234X']], $d);
-            T::eq(['REL', 'OTC', 'COMPACTOR'], array_column($d['waste_types'], 'code'));
+            T::eq(['REL', 'RECYCLING', 'OTC', 'COMPACTOR', 'EROSE'], array_column($d['waste_types'], 'code'));
             // routes: open first, then active; A3 (no stops, no run) is not listed; S1/E9 do not run today
             T::eq(['r5', 'r50'], array_column($d['routes'], 'job'));
-            T::subset(['job' => 'r5', 'date' => '2026-11-11', 'code' => 'N1', 'color' => 1, 'type' => 'regular', 'name' => 'North 1', 'note' => '', 'stops' => 2,
+            T::subset(['job' => 'r5', 'date' => '2026-11-11', 'code' => 'N1', 'color' => 1, 'type' => 'regular', 'waste_type' => 'REL', 'name' => 'North 1', 'note' => '', 'stops' => 2,
                 'first_customers' => ['ABC Restaurant', 'Golden Bakery'], 'status' => 'open', 'driver' => null, 'left_by' => 'Bala',
                 'collected' => 1, 'missed' => 0, 'pending' => 1, 'can_take' => true], $d['routes'][0]);
             T::subset(['job' => 'r50', 'status' => 'active', 'driver' => ['id' => 3, 'name' => 'Ali'], 'can_take' => false, 'note' => 'urgent'], $d['routes'][1]);
-            // tasks: not_started, active, done (then by customer)
-            T::eq(['t12', 't11', 't6'], array_column($d['tasks'], 'job'));
-            T::subset(['job' => 't12', 'waste_type' => 'COMPACTOR', 'recurring' => false, 'status' => 'not_started', 'can_take' => true,
-                'customer' => ['id' => 40, 'name' => 'Golden Bakery', 'address' => '5 Tuas South Ave 2'], 'also_on' => [['job' => 'r5', 'code' => 'N1']]], $d['tasks'][0]);
-            T::subset(['job' => 't6', 'status' => 'done', 'driver' => ['id' => 5, 'name' => 'Chong'], 'can_take' => false, 'note' => 'Old furniture'], $d['tasks'][2]);
             // another driver's view: Ali's work is taken
             $b = T::ok($e->call('GET', '/api/driver/today', null, 'bala'));
-            T::subset(['my_route' => null, 'my_tasks' => []], $b);
+            T::subset(['my_route' => null], $b);
             T::eq(false, $b['routes'][1]['can_take']);
-            // a recurring task shows recurring = true (t3 runs Tue/Fri)
-            $fri = RunsFx::env([], '2026-11-13T10:00:00+08:00');
-            $t3 = array_values(array_filter(T::ok($fri->call('GET', '/api/driver/today', null, 'ali'))['tasks'], static fn ($t) => $t['job'] === 't3'));
-            T::subset([['recurring' => true, 'waste_type' => 'COMPACTOR', 'note' => 'Bin at loading bay']], $t3);
+            // an inactive type leaves the driver's list
+            $x = RunsFx::env(['plan' => ['waste_types' => array_map(static fn ($t) => ['active' => $t['code'] !== 'EROSE'] + $t, Seed::WASTE_TYPES)]]);
+            T::eq(['REL', 'RECYCLING', 'OTC', 'COMPACTOR'], array_column(T::ok($x->call('GET', '/api/driver/today', null, 'ali'))['waste_types'], 'code'));
         },
 
         'JobDetail: same shape before and during the run; customer, weigh/ticket types, visit; NOT_TODAY and 404' => function () {
             $e = RunsFx::env(['runs' => ['r5' => RunsFx::run('r5', 3, [RunsFx::visit(12, 'collected', ['REL' => 12.5])])]]);
             $j = T::ok($e->call('GET', '/api/driver/runs/2026-11-11/r50', null, 'bala'));
             T::eq(['date' => '2026-11-11', 'job' => 'r50', 'kind' => 'route', 'code' => 'A2', 'color' => 2, 'type' => 'adhoc', 'name' => 'Adhoc today',
-                'note' => 'urgent', 'waste_type' => null, 'plan_status' => 'scheduled', 'status' => 'not_started', 'holder' => null, 'mine' => false,
+                'note' => 'urgent', 'waste_type' => 'REL', 'plan_status' => 'scheduled', 'status' => 'not_started', 'holder' => null, 'mine' => false,
                 'vehicle_no' => null, 'progress' => ['collected' => 0, 'missed' => 0, 'pending' => 1, 'total' => 1], 'totals' => [],
                 'stops' => [['seq' => 1, 'on_plan' => true, 'stop_note' => 'gate B',
                     'customer' => ['id' => 21, 'code' => 'C0021', 'name' => 'Sunday Market Stall', 'address' => '1 Market St', 'phone' => '', 'note' => ''],
@@ -92,9 +89,8 @@ return (static function (): array {
                     'visit' => ['outcome' => 'collected', 'weights' => ['REL' => 12.5], 'driver_id' => 3, 'rev' => 1, 'flags' => [], 'by' => ['$absent' => true]]],
                     ['visit' => null]]], $j);
             T::eq(false, T::ok($e->call('GET', '/api/driver/runs/2026-11-11/r5', null, 'bala'))['mine']);
-            $t = T::ok($e->call('GET', '/api/driver/runs/2026-11-11/t6', null, 'ali'));
-            T::subset(['kind' => 'task', 'code' => null, 'type' => null, 'waste_type' => 'OTC', 'note' => 'Old furniture',
-                'stops' => [['seq' => 1, 'customer' => ['id' => 12], 'weigh_types' => ['OTC'], 'also_on' => [['job' => 'r5', 'label' => 'N1', 'outcome' => 'collected']]]]], $t);
+            T::err($e->call('GET', '/api/driver/runs/2026-11-11/t6', null, 'ali'), 404, 'NOT_FOUND');
+            T::err($e->call('GET', '/api/runs/2026-11-11/t6', null, 'mei'), 404, 'NOT_FOUND');
             T::err($e->call('GET', '/api/driver/runs/2026-11-12/r41', null, 'ali'), 422, 'NOT_TODAY');
             T::err($e->call('GET', '/api/driver/runs/2026-11-11/r7', null, 'ali'), 404, 'NOT_FOUND');
             T::err($e->call('GET', '/api/driver/runs/2026-11-11/r99', null, 'ali'), 404, 'NOT_FOUND');

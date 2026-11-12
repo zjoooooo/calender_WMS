@@ -7,13 +7,13 @@
 // Every handler runs inside the request's single locked transaction, so "the first confirm wins" (R23)
 // and a switch is atomic: an ApiError rolls back every change made in the request.
 //
-// A run lives in days/<date>.json under runs[job] (job = 'r<route_id>' | 't<task_id>'). It never copies
+// A run lives in days/<date>.json under runs[job] (job = 'r<route_id>'). It never copies
 // the plan: its stop list is the job's occurrence on that date (frozen for past dates, live otherwise;
 // Schedule::jobOccurrence), so office edits reach the driver with no sync code (§8.1).
 final class Runs
 {
     public const REASONS = ['no_waste', 'closed', 'no_access', 'refused', 'other', 'not_visited'];
-    public const JOB_RE = '/^[rt][1-9][0-9]*$/';
+    public const JOB_RE = '/^r[1-9][0-9]*$/';
 
     // ---- small pure helpers ----------------------------------------------------------------------
 
@@ -29,14 +29,11 @@ final class Runs
         return $out;
     }
 
-    /** R21 stop list (customer ids) of an occurrence: a route's effective stops, a task's customer. */
+    /** R21 stop list (customer ids) of an occurrence: the route's effective stops. */
     public static function stopIds(?array $occ): array
     {
         if ($occ === null) {
             return [];
-        }
-        if (($occ['kind'] ?? '') === 'task') {
-            return [(int) $occ['customer_id']];
         }
         return array_map(static fn ($s) => (int) $s['customer_id'], $occ['stops'] ?? []);
     }
@@ -121,11 +118,11 @@ final class Runs
         return $run;
     }
 
-    /** True when route/task <id> of a job key exists in the live plan. */
+    /** True when route <id> of a job key exists in the live plan. */
     public static function jobExists(array $plan, string $job): bool
     {
         $id = (int) substr($job, 1);
-        foreach ($plan[$job[0] === 'r' ? 'routes' : 'tasks'] ?? [] as $item) {
+        foreach ($plan['routes'] ?? [] as $item) {
             if ((int) $item['id'] === $id) {
                 return true;
             }
@@ -174,7 +171,7 @@ final class Runs
 
     /**
      * §5.6 / §4.8: attaches run_status (R22), run (RunSummary|null) and the visit summaries to one
-     * occurrence: stops[].visit + off_plan for a route, visit for a task. $ctx = ['today', 'users'].
+     * occurrence: stops[].visit + off_plan. $ctx = ['today', 'users'].
      */
     public static function overlay(array $occ, ?array $run, array $ctx): array
     {
@@ -184,24 +181,19 @@ final class Runs
         $counts = Calendar::counts($stopIds, $visits);
         $occ['run_status'] = self::status($occ['status'] ?? null, $occ['date'], $ctx['today'], $run, $counts);
         $occ['run'] = $run === null ? null : Calendar::runSummary($run, $visits, $counts, $users);
-        if ($occ['kind'] === 'route') {
-            $on = [];
-            foreach ($occ['stops'] as $k => $s) {
-                $on[$s['customer_id']] = true;
-                $v = $visits[$s['customer_id']] ?? null;
-                $occ['stops'][$k]['visit'] = $v === null ? null : Calendar::visitSummary($v, $users);
-            }
-            $off = [];
-            foreach ($visits as $cid => $v) {
-                if (!isset($on[$cid]) && ($v['outcome'] ?? null) !== null) {
-                    $off[] = ['customer_id' => $cid, 'visit' => Calendar::visitSummary($v, $users)];
-                }
-            }
-            $occ['off_plan'] = $off;
-        } else {
-            $v = $visits[$occ['customer_id']] ?? null;
-            $occ['visit'] = $v === null ? null : Calendar::visitSummary($v, $users);
+        $on = [];
+        foreach ($occ['stops'] as $k => $s) {
+            $on[$s['customer_id']] = true;
+            $v = $visits[$s['customer_id']] ?? null;
+            $occ['stops'][$k]['visit'] = $v === null ? null : Calendar::visitSummary($v, $users);
         }
+        $off = [];
+        foreach ($visits as $cid => $v) {
+            if (!isset($on[$cid]) && ($v['outcome'] ?? null) !== null) {
+                $off[] = ['customer_id' => $cid, 'visit' => Calendar::visitSummary($v, $users)];
+            }
+        }
+        $occ['off_plan'] = $off;
         return $occ;
     }
 
@@ -284,7 +276,7 @@ final class Runs
     }
 
     /** R23 step 5: an active plate from the trucks list, upper case without spaces. */
-    private static function plate(array $plan, mixed $v): string
+    public static function plate(array $plan, mixed $v): string
     {
         if ($v === null || (is_string($v) && trim($v) === '')) {
             throw new ApiError('VEHICLE_REQUIRED', 422, 'vehicle_no');
@@ -353,7 +345,7 @@ final class Runs
         $plate = self::plate($plan, $b['vehicle_no'] ?? null); // 5.
 
         $left = null;
-        if ($job[0] === 'r') { // 6. route jobs: finish idle holds, then one route at a time
+        if ($job[0] === 'r') { // 6. finish idle holds, then one route at a time
             $day = self::finishIdleRouteHolds($c, $plan, $day, $date, $me);
             $other = self::heldRoute($c, $plan, $day, $date, $me, $job);
             if ($other !== null) {
@@ -363,7 +355,7 @@ final class Runs
                 [$day, $result] = self::release($c, $plan, $day, $date, $other['job'], 'switched', null);
                 $left = ['job' => $other['job'], 'result' => $result];
             }
-        } // 7. task jobs never conflict
+        }
 
         $created = $run === null; // 8. create or reuse the run, append the hold
         $run = Calendar::runsOf($day)[$job] ?? self::newRun($job);
@@ -415,7 +407,7 @@ final class Runs
         return self::detail($c, $date, $job, false);
     }
 
-    /** GET /api/driver/today (§10.9): today's (op_date) route and task cards plus the driver's own work. */
+    /** GET /api/driver/today (§10.9): today's (op_date) route cards plus the driver's own route. */
     public static function driverToday(Ctx $c): array
     {
         $me = (int) $c->userId();
@@ -438,7 +430,7 @@ final class Runs
             $pending = $sum['pending'] ?? count($o['stops']);
             $routes[] = [
                 'job' => $job, 'date' => $c->today, 'code' => $o['code'], 'color' => $o['color'], 'type' => $o['type'],
-                'name' => $o['name'], 'note' => $o['note'], 'stops' => count($o['stops']),
+                'waste_type' => $o['waste_type'], 'name' => $o['name'], 'note' => $o['note'], 'stops' => count($o['stops']),
                 'first_customers' => array_map(static fn ($s) => $name($s['customer_id']), array_slice($o['stops'], 0, 3)),
                 'status' => $o['run_status'], 'driver' => $sum['driver'] ?? null, 'left_by' => $sum['left_by'] ?? null,
                 'released_by_office' => $sum['released_by_office'] ?? false,
@@ -455,51 +447,16 @@ final class Runs
         usort($routes, static fn ($a, $b) => ($rank[$a['status']] ?? 9) <=> ($rank[$b['status']] ?? 9)
             ?: strnatcasecmp($a['code'], $b['code']) ?: strcmp($a['job'], $b['job']));
 
-        $tasks = [];
-        $myTasks = [];
-        foreach ($x['tasks'] as $o) {
-            $job = 't' . $o['task_id'];
-            $run = $x['runs'][$job] ?? null;
-            if (!empty($o['orphan']) || $o['status'] !== 'scheduled') {
-                continue;
-            }
-            $sum = $o['run'];
-            $pending = $sum['pending'] ?? 1;
-            $cid = (int) $o['customer_id'];
-            $cu = $ix['customers'][$cid] ?? [];
-            $also = [];
-            foreach ($x['routes'] as $r) {
-                if ($r['status'] === 'scheduled' && empty($r['orphan']) && in_array($cid, self::stopIds($r), true)) {
-                    $also[] = ['job' => 'r' . $r['route_id'], 'code' => $r['code']];
-                }
-            }
-            $tasks[] = [
-                'job' => $job, 'date' => $c->today, 'waste_type' => $o['waste_type'], 'recurring' => $o['recurring'],
-                'note' => $o['note'], 'customer' => ['id' => $cid, 'name' => (string) ($cu['name'] ?? ''), 'address' => (string) ($cu['address'] ?? '')],
-                'status' => $o['run_status'], 'driver' => $sum['driver'] ?? null,
-                'can_take' => in_array($o['run_status'], ['not_started', 'open'], true) && $pending >= 1,
-                'also_on' => $also,
-            ];
-            if ($run !== null && ($run['driver_id'] ?? null) === $me && $pending > 0) {
-                $hold = self::openHold($run);
-                $myTasks[] = ['date' => $c->today, 'job' => $job, 'waste_type' => $o['waste_type'], 'customer' => (string) ($cu['name'] ?? ''),
-                    'vehicle_no' => $hold['vehicle_no'] ?? null, 'assigned' => ($hold['by'] ?? 'self') !== 'self'];
-            }
-        }
-        usort($tasks, static fn ($a, $b) => ($rank[$a['status']] ?? 9) <=> ($rank[$b['status']] ?? 9)
-            ?: strcasecmp($a['customer']['name'], $b['customer']['name']) ?: strcmp($a['job'], $b['job']));
-
         $u = $users[$me] ?? $c->user;
         return [
             'today' => $c->today,
             'now' => $c->nowIso,
+            'day_ends_at' => Clock::iso(Clock::dayEnd($c->today, $c->rollover)),
             'me' => ['id' => $me, 'name' => $u['name'], 'lang' => $u['lang']],
             'my_route' => $myRoute,
-            'my_tasks' => $myTasks,
             'waste_types' => array_values(array_filter($plan['waste_types'] ?? [], static fn ($t) => !empty($t['active']))),
             'trucks' => Settings::activePlates($plan),
             'routes' => $routes,
-            'tasks' => $tasks,
         ];
     }
 
@@ -638,10 +595,9 @@ final class Runs
         $ix = Schedule::index($plan);
         $x = Calendar::forCtx($c)->day($date);
         $id = (int) substr($job, 1);
-        $kind = $job[0] === 'r' ? 'route' : 'task';
         $occ = null;
-        foreach ($x[$kind . 's'] as $o) {
-            if ((int) $o[$kind . '_id'] === $id) {
+        foreach ($x['routes'] as $o) {
+            if ((int) $o['route_id'] === $id) {
                 $occ = $o;
                 break;
             }
@@ -654,30 +610,25 @@ final class Runs
         $users = self::usersById($c);
         $holder = $run['driver_id'] ?? null;
         $hold = self::openHold($run);
-        $lang = (string) ($c->user['lang'] ?? 'zh');
 
         $stops = [];
-        if ($kind === 'route') {
-            foreach ($occ['stops'] as $s) {
-                $stops[] = self::jobStop($ix, $x, $job, $occ, (int) $s['seq'], (int) $s['customer_id'], (string) $s['note'], true, $visits, $lang);
-            }
-            foreach ($occ['off_plan'] ?? [] as $op) {
-                $stops[] = self::jobStop($ix, $x, $job, $occ, count($stops) + 1, (int) $op['customer_id'], '', false, $visits, $lang);
-            }
-        } else {
-            $stops[] = self::jobStop($ix, $x, $job, $occ, 1, (int) $occ['customer_id'], '', true, $visits, $lang);
+        foreach ($occ['stops'] as $s) {
+            $stops[] = self::jobStop($ix, $x, $job, $occ, (int) $s['seq'], (int) $s['customer_id'], (string) $s['note'], true, $visits);
+        }
+        foreach ($occ['off_plan'] ?? [] as $op) {
+            $stops[] = self::jobStop($ix, $x, $job, $occ, count($stops) + 1, (int) $op['customer_id'], '', false, $visits);
         }
         $counts = Calendar::counts(self::stopIds($occ), $visits);
         $out = [
             'date' => $date,
             'job' => $job,
-            'kind' => $kind,
-            'code' => $kind === 'route' ? $occ['code'] : null,
-            'color' => $kind === 'route' ? $occ['color'] : null,
-            'type' => $kind === 'route' ? $occ['type'] : null,
-            'name' => $kind === 'route' ? $occ['name'] : null,
+            'kind' => 'route',
+            'code' => $occ['code'],
+            'color' => $occ['color'],
+            'type' => $occ['type'],
+            'name' => $occ['name'],
             'note' => (string) ($occ['note'] ?? ''),
-            'waste_type' => $kind === 'task' ? $occ['waste_type'] : null,
+            'waste_type' => $occ['waste_type'], // the one type this route collects
             'plan_status' => $occ['status'],
             'status' => $occ['run_status'],
             'holder' => $holder === null ? null : ['id' => (int) $holder, 'name' => self::userName($users, $holder)],
@@ -700,10 +651,10 @@ final class Runs
         return $out;
     }
 
-    private static function jobStop(array $ix, array $x, string $job, array $occ, int $seq, int $cid, string $note, bool $onPlan, array $visits, string $lang): array
+    private static function jobStop(array $ix, array $x, string $job, array $occ, int $seq, int $cid, string $note, bool $onPlan, array $visits): array
     {
         $cu = $ix['customers'][$cid] ?? null;
-        $weigh = $occ['kind'] === 'task' ? [(string) $occ['waste_type']] : Visits::routeWeighTypes($ix['types'], $cu, !$onPlan);
+        $weigh = Visits::routeWeighTypes($ix['types'], (string) $occ['waste_type']);
         $v = $visits[$cid] ?? null;
         return [
             'seq' => $seq,
@@ -713,7 +664,7 @@ final class Runs
                 'address' => (string) ($cu['address'] ?? ''), 'phone' => (string) ($cu['phone'] ?? ''), 'note' => (string) ($cu['note'] ?? '')],
             'weigh_types' => $weigh,
             'ticket_types' => array_values(array_filter($weigh, static fn ($t) => ($ix['types'][$t]['weigh_method'] ?? '') === 'weighbridge')),
-            'also_on' => self::alsoOn($ix, $x, $job, $cid, $lang),
+            'also_on' => self::alsoOn($x, $job, $cid),
             'visit' => $v === null ? null : [
                 'outcome' => $v['outcome'] ?? null, 'weights' => (object) (($v['weights'] ?? null) ?: []),
                 'tickets' => (object) (($v['tickets'] ?? null) ?: []), 'photos' => array_values(($v['photos'] ?? null) ?: []),
@@ -724,20 +675,10 @@ final class Runs
         ];
     }
 
-    /**
-     * R31: the other jobs that day for the same customer: [{job, kind, label, outcome}]. A task's label is
-     * "<type> task" in the reader's language (zh: "<type> 任务"); a route's label is its code.
-     */
-    private static function alsoOn(array $ix, array $x, string $job, int $cid, string $lang): array
+    /** R31: the other routes that day for the same customer: [{job, kind, label (route code), outcome}]. */
+    private static function alsoOn(array $x, string $job, int $cid): array
     {
         $out = [];
-        foreach ($x['tasks'] as $o) {
-            $j = 't' . $o['task_id'];
-            if ($j !== $job && empty($o['orphan']) && (int) $o['customer_id'] === $cid && ($o['status'] === 'scheduled' || $o['run'] !== null)) {
-                $abbr = $ix['types'][$o['waste_type']]['abbr'] ?? $o['waste_type'];
-                $out[] = ['job' => $j, 'kind' => 'task', 'label' => $abbr . ($lang === 'en' ? ' task' : ' 任务'), 'outcome' => $o['visit']['outcome'] ?? null];
-            }
-        }
         foreach ($x['routes'] as $o) {
             $j = 'r' . $o['route_id'];
             if ($j === $job || !empty($o['orphan']) || ($o['status'] !== 'scheduled' && $o['run'] === null)) {

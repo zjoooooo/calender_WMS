@@ -1,16 +1,16 @@
 <?php
 // Waste types (R3, §10.7). Array order is display order. Never hard-deleted, only deactivated.
-// code, unit and routable never change.
+// code, unit and routable never change. A stored `recurring_tasks` (the old task feature) is ignored.
 final class WasteTypes
 {
-    public const FIELDS = ['code', 'name', 'abbr', 'unit', 'weigh_method', 'routable', 'recurring_tasks', 'confirm_over', 'active'];
+    public const FIELDS = ['code', 'name', 'abbr', 'unit', 'weigh_method', 'routable', 'confirm_over', 'active'];
 
     public static function out(array $t): array
     {
         return [
             'code' => $t['code'], 'name' => $t['name'], 'abbr' => $t['abbr'], 'unit' => $t['unit'],
             'weigh_method' => $t['weigh_method'], 'routable' => (bool) $t['routable'],
-            'recurring_tasks' => (bool) $t['recurring_tasks'], 'confirm_over' => $t['confirm_over'] ?? null,
+            'confirm_over' => $t['confirm_over'] ?? null,
             'active' => (bool) $t['active'],
         ];
     }
@@ -48,7 +48,6 @@ final class WasteTypes
             'unit' => V::str($b['unit'] ?? 'kg', 'unit', 1, 6),
             'weigh_method' => V::enum($b['weigh_method'] ?? 'on_site', 'weigh_method', ['on_site', 'weighbridge']),
             'routable' => V::bool($b['routable'] ?? false, 'routable'),
-            'recurring_tasks' => V::bool($b['recurring_tasks'] ?? false, 'recurring_tasks'),
             'confirm_over' => self::confirmOver($b['confirm_over'] ?? null),
             'active' => V::bool($b['active'] ?? true, 'active'),
         ];
@@ -57,7 +56,7 @@ final class WasteTypes
         return $c->created(self::out($t));
     }
 
-    /** PATCH /api/waste-types/{code} (admin) {name?, abbr?, weigh_method?, recurring_tasks?, confirm_over?, active?} */
+    /** PATCH /api/waste-types/{code} (admin) {name?, abbr?, weigh_method?, confirm_over?, active?} */
     public static function update(Ctx $c): array
     {
         $b = $c->body;
@@ -82,9 +81,6 @@ final class WasteTypes
         }
         if (array_key_exists('weigh_method', $b)) {
             $t['weigh_method'] = V::enum($b['weigh_method'], 'weigh_method', ['on_site', 'weighbridge']);
-        }
-        if (array_key_exists('recurring_tasks', $b)) {
-            $t['recurring_tasks'] = V::bool($b['recurring_tasks'], 'recurring_tasks');
         }
         if (array_key_exists('confirm_over', $b)) {
             $t['confirm_over'] = self::confirmOver($b['confirm_over']);
@@ -129,35 +125,24 @@ final class WasteTypes
     }
 
     /**
-     * R3 deactivation guard, 409 WASTE_TYPE_IN_USE:
-     * routable type -> {routes}: a customer that has it is on a stop list dated >= today;
-     * non-routable type -> {tasks}: a task of that type generates a date >= today.
+     * R3 deactivation guard: a routable type cannot be deactivated while a route that collects it runs
+     * today or later (409 WASTE_TYPE_IN_USE {routes}). A non-routable type can always be deactivated:
+     * nothing is planned for it, it only leaves the driver's pick list.
      */
     public static function guardDeactivate(array $plan, array $type, string $today): void
     {
-        if (!empty($type['routable'])) {
-            $routes = [];
-            foreach ($plan['customers'] ?? [] as $cu) {
-                if (!in_array($type['code'], $cu['waste_types'] ?? [], true)) {
-                    continue;
-                }
-                foreach (Usage::routeStops($plan, $cu['id'], $today) as $ref) {
-                    $routes[$ref['series']] ??= ['route_id' => $ref['route_id'], 'code' => $ref['code'], 'name' => $ref['name'], 'type' => $ref['type']];
-                }
-            }
-            if ($routes !== []) {
-                throw new ApiError('WASTE_TYPE_IN_USE', 409, 'active', ['routes' => array_values($routes)]);
-            }
+        if (empty($type['routable'])) {
             return;
         }
-        $tasks = [];
-        foreach ($plan['tasks'] ?? [] as $t) {
-            if ($t['waste_type'] === $type['code'] && Usage::taskLive($t, $today)) {
-                $tasks[] = ['task_id' => $t['id'], 'customer_id' => $t['customer_id'], 'schedule' => Usage::taskSchedule($t)];
+        $routes = [];
+        $series = Usage::seriesMap($plan);
+        foreach ($plan['routes'] ?? [] as $r) {
+            if (Usage::routeType($r) === $type['code'] && Usage::routeLive($r, $today)) {
+                $routes[$series[(int) $r['id']] ?? (int) $r['id']] ??= ['route_id' => $r['id'], 'code' => $r['code'], 'name' => $r['name'] ?? '', 'type' => $r['type']];
             }
         }
-        if ($tasks !== []) {
-            throw new ApiError('WASTE_TYPE_IN_USE', 409, 'active', ['tasks' => $tasks]);
+        if ($routes !== []) {
+            throw new ApiError('WASTE_TYPE_IN_USE', 409, 'active', ['routes' => array_values($routes)]);
         }
     }
 

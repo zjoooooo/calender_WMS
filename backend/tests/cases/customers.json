@@ -1,16 +1,16 @@
 [
   {
-    "name": "list: active customers by name, with routes and task types from today on",
+    "name": "list: active customers by name, with the routes that use them from today on (no tasks)",
     "now": "2026-11-11T10:00:00+08:00",
     "given": { "fixture": "basic" },
     "call": { "method": "GET", "path": "/api/customers", "as": "mei" },
     "expect": { "status": 200, "data_subset": [
       { "id": 12, "code": "C0012", "name": "ABC Restaurant", "address": "12 Jalan Besar", "phone": "+65 9123 4567", "note": "bins at back lane",
-        "waste_types": ["REL", "OTC"], "active": true, "routes": ["A1", "N1", "N1-25"], "tasks": ["OTC"] },
-      { "id": 40, "name": "Golden Bakery", "routes": ["N1", "N1-25"], "tasks": ["COMPACTOR"] },
-      { "id": 50, "name": "Only OTC Co", "routes": [], "tasks": [] },
-      { "id": 21, "name": "Sunday Market Stall", "routes": ["S1", "S2"], "tasks": [] },
-      { "id": 70, "name": "Zed Ended Route", "routes": [], "tasks": [] }
+        "waste_types": ["REL", "OTC"], "active": true, "routes": ["A1", "N1", "N1-25"], "tasks": { "$absent": true } },
+      { "id": 40, "name": "Golden Bakery", "routes": ["N1", "N1-25"], "tasks": { "$absent": true } },
+      { "id": 50, "name": "Only OTC Co", "routes": [] },
+      { "id": 21, "name": "Sunday Market Stall", "routes": ["S1", "S2"] },
+      { "id": 70, "name": "Zed Ended Route", "routes": [] }
     ] }
   },
   {
@@ -37,14 +37,13 @@
     ]
   },
   {
-    "name": "detail lists the routes and tasks that use the customer",
+    "name": "detail lists the routes that use the customer, with their waste type (no tasks)",
     "now": "2026-11-11T10:00:00+08:00",
     "given": { "fixture": "basic" },
     "steps": [
       { "call": { "method": "GET", "path": "/api/customers/40", "as": "mei" },
-        "expect": { "status": 200, "data_subset": { "id": 40, "routes": [ { "route_id": 5, "code": "N1", "name": "North 1", "type": "regular" }, { "route_id": 42, "code": "N1-25" } ],
-          "tasks": [ { "task_id": 3, "waste_type": "COMPACTOR", "schedule": { "start": "2026-11-03", "end": null, "days": [2, 5] } },
-                     { "task_id": 10, "waste_type": "COMPACTOR" } ] } } },
+        "expect": { "status": 200, "data_subset": { "id": 40, "routes": [ { "route_id": 5, "code": "N1", "name": "North 1", "type": "regular", "waste_type": "REL" }, { "route_id": 42, "code": "N1-25", "waste_type": "REL" } ],
+          "tasks": { "$absent": true } } } },
       { "call": { "method": "GET", "path": "/api/customers/999", "as": "mei" }, "expect": { "status": 404, "code": "NOT_FOUND" } },
       { "call": { "method": "GET", "path": "/api/customers/40", "as": "ali" }, "expect": { "status": 403, "code": "FORBIDDEN" } }
     ]
@@ -69,8 +68,8 @@
     "name": "create validation: waste types required, unknown, inactive; name; unknown field",
     "now": "2026-11-11T10:00:00+08:00",
     "given": { "plan": { "waste_types": [
-      { "code": "REL", "name": "REL", "abbr": "REL", "unit": "kg", "weigh_method": "on_site", "routable": true, "recurring_tasks": false, "confirm_over": 1000, "active": true },
-      { "code": "OLD", "name": "Old", "abbr": "OLD", "unit": "kg", "weigh_method": "on_site", "routable": false, "recurring_tasks": false, "confirm_over": null, "active": false } ] } },
+      { "code": "REL", "name": "REL", "abbr": "REL", "unit": "kg", "weigh_method": "on_site", "routable": true, "confirm_over": 1000, "active": true },
+      { "code": "OLD", "name": "Old", "abbr": "OLD", "unit": "kg", "weigh_method": "on_site", "routable": false, "confirm_over": null, "active": false } ] } },
     "steps": [
       { "call": { "method": "POST", "path": "/api/customers", "as": "mei", "body": { "name": "X" } }, "expect": { "status": 422, "code": "WASTE_TYPES_REQUIRED" } },
       { "call": { "method": "POST", "path": "/api/customers", "as": "mei", "body": { "name": "X", "waste_types": [] } }, "expect": { "status": 422, "code": "WASTE_TYPES_REQUIRED" } },
@@ -86,15 +85,15 @@
     "now": "2026-11-11T10:00:00+08:00",
     "given": { "plan": {
       "waste_types": [
-        { "code": "REL", "name": "REL", "abbr": "REL", "unit": "kg", "weigh_method": "on_site", "routable": true, "recurring_tasks": false, "confirm_over": 1000, "active": true },
-        { "code": "OLD", "name": "Old", "abbr": "OLD", "unit": "kg", "weigh_method": "on_site", "routable": false, "recurring_tasks": false, "confirm_over": null, "active": false } ],
+        { "code": "REL", "name": "REL", "abbr": "REL", "unit": "kg", "weigh_method": "on_site", "routable": true, "confirm_over": 1000, "active": true },
+        { "code": "OLD", "name": "Old", "abbr": "OLD", "unit": "kg", "weigh_method": "on_site", "routable": false, "confirm_over": null, "active": false } ],
       "customers": [ { "id": 1, "code": "C0001", "name": "A", "address": "", "phone": "", "note": "", "waste_types": ["REL", "OLD"], "active": true } ],
       "seq": { "customer": 1, "route": 0, "task": 0 } } },
     "call": { "method": "PATCH", "path": "/api/customers/1", "as": "mei", "body": { "name": "A2", "waste_types": ["OLD", "REL"] } },
     "expect": { "status": 200, "data_subset": { "name": "A2", "waste_types": ["REL", "OLD"] } }
   },
   {
-    "name": "R4 CUSTOMER_IN_USE: removing the last routable type while on stop lists",
+    "name": "R4 CUSTOMER_IN_USE: removing a type while on stop lists of routes of that type",
     "now": "2026-11-11T10:00:00+08:00",
     "given": { "fixture": "basic" },
     "call": { "method": "PATCH", "path": "/api/customers/12", "as": "mei", "body": { "waste_types": ["OTC"] } },
@@ -105,7 +104,7 @@
           { "kind": "route", "route_id": 41, "code": "A1", "where": "one-off", "date": "2026-11-12" },
           { "kind": "route", "route_id": 42, "code": "N1-25", "where": "one-off", "date": "2026-12-25" },
           { "kind": "route", "route_id": 5, "code": "N1", "where": "override", "date": "2026-11-18" } ],
-        "tasks": [] } },
+        "tasks": { "$absent": true } } },
       "docs_subset": { "plan": { "customers": { "$contains": [ { "id": 12, "waste_types": ["REL", "OTC"] } ] } } } }
   },
   {
@@ -124,22 +123,25 @@
           { "id": 44 } ],
         "route_overrides": [
           { "route_id": 5, "date": "2026-11-18", "stops": [] } ],
-        "tasks": { "$len": 4 } } } }
+        "tasks": { "$len": 4 }, "task_overrides": { "$len": 1 } } } }
   },
   {
-    "name": "R4: removing a task type ends a running series and deletes future tasks",
+    "name": "R4: removing a non-routable type is never blocked and leaves the old tasks of that type as they are",
     "now": "2026-11-11T10:00:00+08:00",
     "given": { "fixture": "basic" },
     "steps": [
       { "call": { "method": "PATCH", "path": "/api/customers/40", "as": "mei", "body": { "waste_types": ["REL"] } },
-        "expect": { "status": 409, "code": "CUSTOMER_IN_USE", "error_subset": { "details": { "routes": [],
-          "tasks": [ { "task_id": 3, "action": "ended" }, { "task_id": 10, "action": "deleted" } ] } } } },
-      { "call": { "method": "PATCH", "path": "/api/customers/40", "as": "mei", "body": { "waste_types": ["REL"], "detach": true } },
-        "expect": { "status": 200, "data_subset": { "waste_types": ["REL"], "removed": [ { "kind": "task", "task_id": 3, "action": "ended" }, { "kind": "task", "task_id": 10, "action": "deleted" } ] },
+        "expect": { "status": 200, "data_subset": { "waste_types": ["REL"], "removed": { "$absent": true } },
           "docs_subset": { "plan": {
-            "tasks": [ { "id": 3, "end": "2026-11-10", "rev": 3 }, { "id": 6 }, { "id": 9 } ],
-            "task_overrides": [],
-            "routes": { "$contains": [ { "id": 5, "rev": 4, "stops": [ { "customer_id": 12 }, { "customer_id": 40 } ] } ] } } } } }
+            "tasks": [ { "id": 3, "end": null, "rev": 2 }, { "id": 6 }, { "id": 9 }, { "id": 10, "rev": 1 } ],
+            "task_overrides": [ { "task_id": 10, "date": "2026-11-23", "cancelled": true, "note": "closed" } ],
+            "routes": { "$contains": [ { "id": 5, "rev": 4, "stops": [ { "customer_id": 12 }, { "customer_id": 40 } ] } ] } } } } },
+      { "call": { "method": "PATCH", "path": "/api/customers/40", "as": "mei", "body": { "waste_types": ["REL", "RECYCLING"] } },
+        "expect": { "status": 200, "data_subset": { "waste_types": ["REL", "RECYCLING"] } } },
+      { "call": { "method": "PATCH", "path": "/api/customers/40", "as": "mei", "body": { "waste_types": ["RECYCLING"] } },
+        "expect": { "status": 409, "code": "CUSTOMER_IN_USE", "error_subset": { "details": { "routes": [ { "route_id": 5, "where": "template" }, { "route_id": 42, "where": "one-off" } ] } } } },
+      { "call": { "method": "PATCH", "path": "/api/customers/40", "as": "mei", "body": { "waste_types": ["REL"] } },
+        "expect": { "status": 200, "data_subset": { "waste_types": ["REL"], "removed": { "$absent": true } } } }
     ]
   },
   {
@@ -155,22 +157,19 @@
     "given": { "fixture": "basic" },
     "steps": [
       { "call": { "method": "POST", "path": "/api/customers/12/archive", "as": "mei", "body": {} },
-        "expect": { "status": 409, "code": "RUN_EXISTS", "error_subset": { "details": { "runs": [ { "job": "t6", "driver": "Ali", "resolved": 0 } ] } } } },
-      { "call": { "method": "POST", "path": "/api/customers/12/archive", "as": "mei", "body": { "release_run": true } },
         "expect": { "status": 200, "data_subset": { "removed": [
             { "kind": "route", "route_id": 5, "where": "template" },
             { "kind": "route", "route_id": 41, "where": "one-off" },
             { "kind": "route", "route_id": 42, "where": "one-off" },
-            { "kind": "route", "route_id": 5, "where": "override", "date": "2026-11-18" },
-            { "kind": "task", "task_id": 6, "action": "deleted" } ] },
+            { "kind": "route", "route_id": 5, "where": "override", "date": "2026-11-18" } ] },
           "docs_subset": { "plan": { "customers": { "$contains": [ { "id": 12, "active": false, "waste_types": ["REL", "OTC"] } ] },
-            "tasks": [ { "id": 3 }, { "id": 9 }, { "id": 10 } ] },
-            "day:2026-11-11": { "runs": { "t6": { "$absent": true } }, "dropped_runs": [ { "job": "t6", "driver_id": null } ] } } } },
+            "tasks": [ { "id": 3 }, { "id": 6, "customer_id": 12 }, { "id": 9 }, { "id": 10 } ] },
+            "day:2026-11-11": { "runs": { "r5": { "driver_id": 3 }, "t6": { "driver_id": 3, "holds": [ { "to": null } ] } }, "dropped_runs": [] } } } },
       { "call": { "method": "GET", "path": "/api/customers", "as": "mei" }, "expect": { "data_subset": { "$not_contains": [ { "id": 12 } ] } } },
       { "call": { "method": "POST", "path": "/api/customers/12/restore", "as": "mei" },
         "expect": { "status": 200, "data_subset": { "id": 12, "active": true },
           "docs_subset": { "plan": { "routes": { "$contains": [ { "id": 41, "stops": [] } ] } } } } },
-      { "call": { "method": "GET", "path": "/api/customers/12", "as": "mei" }, "expect": { "data_subset": { "routes": [], "tasks": [] } } }
+      { "call": { "method": "GET", "path": "/api/customers/12", "as": "mei" }, "expect": { "data_subset": { "routes": [], "tasks": { "$absent": true } } } }
     ]
   },
   {

@@ -1,11 +1,12 @@
 <?php
-// Plan writes and reads for routes and tasks (§6, §10.5, §10.6):
-//   routes: identity R5 (code, colour), types R6, stop lists R10, past lock R11, save scope R12,
-//           change schedule R14, copy to date R15, overrides R9, revisions R20;
-//   tasks:  R17 validation, R18 generation (Schedule), R19 overrides and "move one date";
-//   plan_write hooks (src/hooks/30_plan_rules.php): R9/R19 override cleanup and the R26 run invariant.
+// Plan writes and reads for routes (§6, §10.5):
+//   routes: identity R5 (code, colour), types R6, the one waste type of a route, stop lists R10, past lock
+//           R11, save scope R12, change schedule R14, copy to date R15, overrides R9, revisions R20;
+//   plan_write hooks (src/hooks/30_plan_rules.php): R9 override cleanup and the R26 run invariant.
 // Every plan write goes through $c->savePlan(), so the hooks also cover the master-data writes
 // (holidays, customer detach/archive) of the core part.
+// plan.tasks / plan.task_overrides / plan.seq.task of data written before round 7 are never read or
+// changed here: they stay in plan.json as they are.
 final class Plan
 {
     /** §9.1 route palette (index -> colour). Routes store the index (R5). */
@@ -29,24 +30,9 @@ final class Plan
         return null;
     }
 
-    public static function taskIndex(array $plan, int $id): ?int
-    {
-        foreach ($plan['tasks'] ?? [] as $i => $t) {
-            if ((int) $t['id'] === $id) {
-                return $i;
-            }
-        }
-        return null;
-    }
-
     private static function mustRoute(array $plan, int $id): int
     {
         return self::routeIndex($plan, $id) ?? throw new ApiError('NOT_FOUND', 404, 'id', null, 'Route not found');
-    }
-
-    private static function mustTask(array $plan, int $id): int
-    {
-        return self::taskIndex($plan, $id) ?? throw new ApiError('NOT_FOUND', 404, 'id', null, 'Task not found');
     }
 
     /** A body value that is present and not empty (null, false, [] and '' count as absent). */
@@ -144,6 +130,7 @@ final class Plan
             'code' => $r['code'],
             'color' => (int) $r['color'],
             'type' => $r['type'],
+            'waste_type' => Usage::routeType($r),
             'name' => (string) ($r['name'] ?? ''),
             'note' => (string) ($r['note'] ?? ''),
             'rev' => (int) ($r['rev'] ?? 1),
@@ -164,6 +151,9 @@ final class Plan
     {
         $out = ['id' => (int) $r['id'], 'code' => $r['code'], 'color' => (int) $r['color'], 'type' => $r['type'],
             'name' => (string) $r['name'], 'note' => (string) ($r['note'] ?? ''), 'rev' => (int) $r['rev']];
+        if (isset($r['waste_type'])) {
+            $out['waste_type'] = (string) $r['waste_type']; // a record stored before round 7 has none (read as REL) and gets none
+        }
         if (Usage::isOneOff($r)) {
             $out += ['date' => $r['date'], 'copied_from' => $r['copied_from'] ?? null];
         } elseif ($r['type'] === 'regular') {
@@ -398,13 +388,12 @@ final class Plan
     }
 
     /**
-     * R10: every stop's customer exists, is active (CUSTOMER_INACTIVE) and routable (CUSTOMER_NOT_ROUTABLE),
-     * at most once (DUPLICATE_STOP). Returns [{customer_id, note}].
+     * R10: every stop's customer exists, is active (CUSTOMER_INACTIVE) and is registered with the route's
+     * waste type (CUSTOMER_NOT_ROUTABLE), at most once (DUPLICATE_STOP). Returns [{customer_id, note}].
      */
-    public static function validateStops(array $plan, mixed $stops, string $field = 'stops'): array
+    public static function validateStops(array $plan, mixed $stops, string $wasteType, string $field = 'stops'): array
     {
         V::list($stops, $field);
-        $types = Usage::typesByCode($plan);
         $customers = [];
         foreach ($plan['customers'] ?? [] as $cu) {
             $customers[(int) $cu['id']] = $cu;
@@ -425,8 +414,8 @@ final class Plan
             if (empty($cu['active'])) {
                 throw new ApiError('CUSTOMER_INACTIVE', 422, "$f.customer_id", ['customer_id' => $cid, 'name' => $cu['name']]);
             }
-            if (!Usage::customerRoutable($cu, $types)) {
-                throw new ApiError('CUSTOMER_NOT_ROUTABLE', 422, "$f.customer_id", ['customer_id' => $cid, 'name' => $cu['name']]);
+            if (!in_array($wasteType, $cu['waste_types'] ?? [], true)) {
+                throw new ApiError('CUSTOMER_NOT_ROUTABLE', 422, "$f.customer_id", ['customer_id' => $cid, 'name' => $cu['name'], 'waste_type' => $wasteType]);
             }
             if (isset($seen[$cid])) {
                 throw new ApiError('DUPLICATE_STOP', 422, "$f.customer_id", ['customer_id' => $cid, 'name' => $cu['name']]);
@@ -449,19 +438,6 @@ final class Plan
         }
         $plan['route_overrides'][] = $fn(['route_id' => $routeId, 'date' => $date, 'cancelled' => false, 'stops' => null, 'note' => '']);
         usort($plan['route_overrides'], static fn ($a, $b) => [$a['date'], $a['route_id']] <=> [$b['date'], $b['route_id']]);
-        return $plan;
-    }
-
-    private static function upsertTaskOverride(array $plan, int $taskId, string $date, callable $fn): array
-    {
-        foreach ($plan['task_overrides'] ?? [] as $k => $o) {
-            if ((int) $o['task_id'] === $taskId && $o['date'] === $date) {
-                $plan['task_overrides'][$k] = $fn($o);
-                return $plan;
-            }
-        }
-        $plan['task_overrides'][] = $fn(['task_id' => $taskId, 'date' => $date, 'cancelled' => false, 'note' => '']);
-        usort($plan['task_overrides'], static fn ($a, $b) => [$a['date'], $a['task_id']] <=> [$b['date'], $b['task_id']]);
         return $plan;
     }
 
@@ -725,23 +701,6 @@ final class Plan
         }
     }
 
-    public static function nextTaskDate(array $task, string $from, array $ix): ?string
-    {
-        if (Usage::isOneOff($task)) {
-            return $task['date'] >= $from ? $task['date'] : null;
-        }
-        $d = max($from, (string) $task['start']);
-        for ($i = 0; $i < 400; $i++, $d = Dates::addDays($d, 1)) {
-            if (($task['end'] ?? null) !== null && $d > $task['end']) {
-                return null;
-            }
-            if (Schedule::taskGenerates($task, $d) && empty(Schedule::taskOverride($ix, $task, $d)['cancelled'])) {
-                return $d;
-            }
-        }
-        return null;
-    }
-
     // =============================================================================================
     // Route endpoints (§10.5)
     // =============================================================================================
@@ -776,7 +735,7 @@ final class Plan
             }
             $o = self::routeView($plan, $r, $map, $periods);
             unset($o['stops']);
-            $o['stop_count'] = count(Schedule::filterStops($ix, $r['stops'] ?? []));
+            $o['stop_count'] = count(Schedule::filterStops($ix, $r['stops'] ?? [], Usage::routeType($r)));
             $o['next_date'] = $next[(int) $r['id']];
             $o['route_next_date'] = $seriesNext[$map[(int) $r['id']]] ?? null;
             $o['today_status'] = $cal->todayStatus('r' . $r['id']);
@@ -830,10 +789,15 @@ final class Plan
     public static function createRoute(Ctx $c): array
     {
         $b = $c->body;
-        V::only($b, ['type', 'code', 'color', 'name', 'note', 'start', 'end', 'days', 'sun', 'ph', 'date', 'stops']);
+        V::only($b, ['type', 'waste_type', 'code', 'color', 'name', 'note', 'start', 'end', 'days', 'sun', 'ph', 'date', 'stops']);
         $plan = $c->plan();
         $type = V::enum($b['type'] ?? null, 'type', self::ROUTE_TYPES);
-        $r = ['id' => 0, 'code' => self::normalizeCode($b['code'] ?? null), 'color' => 1, 'type' => $type,
+        // One route collects one waste type, picked here and never changed: an active routable type.
+        $wt = Usage::typesByCode($plan)[V::str($b['waste_type'] ?? null, 'waste_type', 1, 10)] ?? null;
+        if ($wt === null || empty($wt['routable']) || empty($wt['active'])) {
+            throw new ApiError('TYPE_NOT_ROUTABLE', 422, 'waste_type', ['waste_type' => $b['waste_type']]);
+        }
+        $r = ['id' => 0, 'code' => self::normalizeCode($b['code'] ?? null), 'color' => 1, 'type' => $type, 'waste_type' => $wt['code'],
             'name' => V::str($b['name'] ?? null, 'name', 1, 100), 'note' => V::optStr($b, 'note', 500), 'rev' => 1];
         if (array_key_exists('date', $b) && $b['date'] !== null) {
             foreach (['start', 'end', 'days', 'sun', 'ph'] as $f) {
@@ -851,7 +815,7 @@ final class Plan
             }
             $r = self::applyRecurring($r, $b, $c->today, true);
         }
-        $r['stops'] = self::validateStops($plan, $b['stops'] ?? [], 'stops');
+        $r['stops'] = self::validateStops($plan, $b['stops'] ?? [], $wt['code']);
         $r['color'] = self::given($b, 'color') ? V::int($b['color'], 'color', 1, count(self::PALETTE)) : self::autoColor($plan, $c->today);
         $r['id'] = (int) ($plan['seq']['route'] ?? 0) + 1;
         $plan['seq']['route'] = $r['id'];
@@ -878,7 +842,7 @@ final class Plan
     public static function patchRoute(Ctx $c): array
     {
         $b = $c->body;
-        V::only($b, ['rev', 'type', 'code', 'color', 'name', 'note', 'days', 'sun', 'ph', 'start', 'end', 'date', 'stops', 'parts', 'release_run']);
+        V::only($b, ['rev', 'type', 'waste_type', 'code', 'color', 'name', 'note', 'days', 'sun', 'ph', 'start', 'end', 'date', 'stops', 'parts', 'release_run']);
         $plan = $c->plan();
         $i = self::mustRoute($plan, $c->intParam('id'));
         $old = $plan['routes'][$i];
@@ -889,6 +853,9 @@ final class Plan
         }
         if (array_key_exists('type', $b) && $b['type'] !== $old['type']) {
             throw new ApiError('TYPE_IMMUTABLE', 422, 'type', ['type' => $old['type']]);
+        }
+        if (array_key_exists('waste_type', $b) && $b['waste_type'] !== Usage::routeType($old)) {
+            throw new ApiError('TYPE_IMMUTABLE', 422, 'waste_type', ['waste_type' => Usage::routeType($old)]);
         }
         $before = $plan;
         $r = $old;
@@ -943,7 +910,7 @@ final class Plan
             $r = self::applyRecurring($r, $sched, $c->today, false);
         }
         if (array_key_exists('stops', $b)) {
-            $r['stops'] = self::validateStops($plan, $b['stops'], 'stops');
+            $r['stops'] = self::validateStops($plan, $b['stops'], Usage::routeType($old));
         }
         $r['rev'] = (int) ($old['rev'] ?? 1) + 1;
         $r = self::canonRoute($r);
@@ -1053,7 +1020,7 @@ final class Plan
         if ($from === $seg['start']) {
             $new = self::applyRecurring($seg, $sched, $today, false);
             if (array_key_exists('stops', $b) && $b['stops'] !== null) {
-                $new['stops'] = self::validateStops($plan, $b['stops'], 'stops');
+                $new['stops'] = self::validateStops($plan, $b['stops'], Usage::routeType($seg));
             }
             $new['rev'] = (int) ($seg['rev'] ?? 1) + 1;
             $plan['routes'][$k] = self::canonRoute($new);
@@ -1069,7 +1036,7 @@ final class Plan
             $new['start'] = $from;
             $new = self::applyRecurring($new, $sched, $today, false);
             if (array_key_exists('stops', $b) && $b['stops'] !== null) {
-                $new['stops'] = self::validateStops($plan, $b['stops'], 'stops');
+                $new['stops'] = self::validateStops($plan, $b['stops'], Usage::routeType($seg));
             }
             $ended = $seg;
             $ended['end'] = Dates::addDays($from, -1);
@@ -1129,7 +1096,7 @@ final class Plan
         $scope = V::enum($b['scope'] ?? 'this', 'scope', ['this', 'following']);
         self::notPast($date, $c->today, 'date');
         $hasStops = array_key_exists('stops', $b);
-        $stops = ($hasStops && $b['stops'] !== null) ? self::validateStops($plan, $b['stops'], 'stops') : null;
+        $stops = ($hasStops && $b['stops'] !== null) ? self::validateStops($plan, $b['stops'], Usage::routeType($route)) : null;
         $note = array_key_exists('note', $b) ? V::optStr($b, 'note', 500) : null;
         $cancelled = (array_key_exists('cancelled', $b) && $b['cancelled'] !== null) ? V::bool($b['cancelled'], 'cancelled') : null;
         $targetId = (int) $route['id'];
@@ -1259,7 +1226,8 @@ final class Plan
         if ($route !== null) {
             self::checkRev($route, $b['rev'] ?? null);
         }
-        $source = self::sourceOccurrence($c, $plan, 'route', $id, $route, $src);
+        $source = self::sourceOccurrence($c, $plan, $id, $route, $src);
+        $wasteType = (string) ($source['waste_type'] ?? Usage::DEFAULT_ROUTE_TYPE);
         $to = V::date($b['to'] ?? null, 'to');
         self::notPast($to, $c->today, 'to');
         // R15 type: special on a rest day; on a work day adhoc stays adhoc, everything else becomes a regular one-off.
@@ -1269,13 +1237,14 @@ final class Plan
             'code' => self::given($b, 'code') ? self::normalizeCode($b['code']) : self::suggestCopy($plan, (string) $source['code'], $to),
             'color' => (int) ($source['color'] ?? 1),
             'type' => $type,
+            'waste_type' => $wasteType,
             'name' => self::given($b, 'name') ? V::str($b['name'], 'name', 1, 100)
                 : self::cut($source['name'] . ' (from ' . Dates::label($src) . ')', 100),
             'note' => V::optStr($b, 'note', 500),
             'rev' => 1,
             'date' => $to,
             'copied_from' => ['route_id' => $id, 'date' => $src],
-            'stops' => Schedule::filterStops(Schedule::index($plan), $source['stops'] ?? []),
+            'stops' => Schedule::filterStops(Schedule::index($plan), $source['stops'] ?? [], $wasteType),
         ];
         $plan['seq']['route'] = $new['id'];
         $new = self::canonRoute($new);
@@ -1302,23 +1271,22 @@ final class Plan
      * The occurrence a copy starts from: the frozen snapshot for a past date (R15 "a past date is read from
      * its frozen plan", also after the route was deleted), otherwise the live occurrence.
      */
-    private static function sourceOccurrence(Ctx $c, array $plan, string $kind, int $id, ?array $item, string $src): array
+    private static function sourceOccurrence(Ctx $c, array $plan, int $id, ?array $item, string $src): array
     {
-        $idKey = $kind === 'route' ? 'route_id' : 'task_id';
         if ($src < $c->today) {
             foreach (($c->tx->get('day:' . $src)['plan'] ?? null) ?: [] as $e) {
-                if (($e['kind'] ?? '') === $kind && (int) ($e[$idKey] ?? 0) === $id) {
+                if (($e['kind'] ?? '') === 'route' && (int) ($e['route_id'] ?? 0) === $id) {
                     return $e;
                 }
             }
         } elseif ($item !== null) {
-            $occ = $kind === 'route' ? Schedule::routeOccurrence($plan, $item, $src) : Schedule::taskOccurrence($plan, $item, $src);
+            $occ = Schedule::routeOccurrence($plan, $item, $src);
             if ($occ !== null) {
                 return $occ;
             }
         }
         if ($item === null) {
-            throw new ApiError('NOT_FOUND', 404, 'id', null, ucfirst($kind) . ' not found');
+            throw new ApiError('NOT_FOUND', 404, 'id', null, 'Route not found');
         }
         throw new ApiError('NOT_AN_OCCURRENCE', 422, 'date', ['date' => $src]);
     }
@@ -1348,367 +1316,13 @@ final class Plan
     }
 
     // =============================================================================================
-    // Tasks (R17-R19, §10.6)
-    // =============================================================================================
-
-    public static function taskOut(array $t): array
-    {
-        $oneOff = Usage::isOneOff($t);
-        return [
-            'id' => (int) $t['id'],
-            'waste_type' => $t['waste_type'],
-            'customer_id' => (int) $t['customer_id'],
-            'note' => (string) ($t['note'] ?? ''),
-            'rev' => (int) ($t['rev'] ?? 1),
-            'recurring' => !$oneOff,
-            'date' => $oneOff ? $t['date'] : null,
-            'start' => $oneOff ? null : $t['start'],
-            'end' => $oneOff ? null : ($t['end'] ?? null),
-            'days' => $oneOff ? null : array_values($t['days'] ?? []),
-            'copied_from' => $oneOff ? ($t['copied_from'] ?? null) : null,
-        ];
-    }
-
-    private static function canonTask(array $t): array
-    {
-        $out = ['id' => (int) $t['id'], 'waste_type' => $t['waste_type'], 'customer_id' => (int) $t['customer_id'],
-            'note' => (string) ($t['note'] ?? ''), 'rev' => (int) $t['rev']];
-        if (Usage::isOneOff($t)) {
-            return $out + ['date' => $t['date'], 'copied_from' => $t['copied_from'] ?? null];
-        }
-        return $out + ['start' => $t['start'], 'end' => $t['end'] ?? null, 'days' => array_values($t['days'])];
-    }
-
-    /**
-     * R17: the waste type exists, is active (UNKNOWN_WASTE_TYPE {inactive}) and non-routable (TYPE_ROUTABLE);
-     * the customer is active (CUSTOMER_INACTIVE) and registered for it (CUSTOMER_LACKS_TYPE).
-     * @return array{0:array,1:array} [waste type, customer]
-     */
-    private static function checkTaskTarget(array $plan, mixed $code, mixed $cid): array
-    {
-        $types = Usage::typesByCode($plan);
-        if (!is_string($code) || !isset($types[$code])) {
-            throw new ApiError('UNKNOWN_WASTE_TYPE', 422, 'waste_type', ['code' => $code]);
-        }
-        $type = $types[$code];
-        if (!empty($type['routable'])) {
-            throw new ApiError('TYPE_ROUTABLE', 422, 'waste_type', ['code' => $code],
-                "$code is collected on routes: add the customer to a route instead");
-        }
-        if (empty($type['active'])) {
-            throw new ApiError('UNKNOWN_WASTE_TYPE', 422, 'waste_type', ['code' => $code, 'inactive' => true], "Waste type $code is inactive");
-        }
-        $cid = V::id($cid, 'customer_id');
-        $k = Customers::index($plan, $cid);
-        if ($k === null) {
-            throw new ApiError('VALIDATION', 422, 'customer_id', ['customer_id' => $cid], 'Unknown customer');
-        }
-        $cu = $plan['customers'][$k];
-        if (empty($cu['active'])) {
-            throw new ApiError('CUSTOMER_INACTIVE', 422, 'customer_id', ['customer_id' => $cid, 'name' => $cu['name']]);
-        }
-        if (!in_array($code, $cu['waste_types'] ?? [], true)) {
-            throw new ApiError('CUSTOMER_LACKS_TYPE', 422, 'customer_id', ['customer_id' => $cid, 'waste_type' => $code]);
-        }
-        return [$type, $cu];
-    }
-
-    /** Task days: a non-empty subset of 1..7 (Sunday allowed), de-duplicated and sorted. */
-    private static function taskDays(mixed $v): array
-    {
-        if (!is_array($v) || !array_is_list($v) || $v === []) {
-            V::fail('days', 'Pick at least one weekday');
-        }
-        foreach ($v as $d) {
-            if (!is_int($d) || $d < 1 || $d > 7) {
-                V::fail('days', 'Weekdays are 1 (Monday) to 7 (Sunday)');
-            }
-        }
-        $v = array_values(array_unique($v));
-        sort($v);
-        return $v;
-    }
-
-    private static function applyTaskSchedule(array $t, array $b, string $today, bool $creating): array
-    {
-        if ($creating || array_key_exists('start', $b)) {
-            $start = V::date($b['start'] ?? null, 'start');
-            if ($creating || $start !== ($t['start'] ?? null)) {
-                self::notPast($start, $today, 'start');
-            }
-            $t['start'] = $start;
-        }
-        if ($creating || array_key_exists('end', $b)) {
-            $end = self::optDate($b['end'] ?? null, 'end');
-            if ($creating || $end !== ($t['end'] ?? null)) {
-                self::endNotPast($end, $today);
-            }
-            $t['end'] = $end;
-        }
-        if (($t['end'] ?? null) !== null && $t['end'] < Dates::addDays($t['start'], -1)) {
-            V::fail('end', 'The end cannot be before the start');
-        }
-        if ($creating || array_key_exists('days', $b)) {
-            $t['days'] = self::taskDays($b['days'] ?? null);
-        }
-        return $t;
-    }
-
-    private static function customerRef(array $plan, int $cid): array
-    {
-        $k = Customers::index($plan, $cid);
-        $cu = $k === null ? null : $plan['customers'][$k];
-        return ['id' => $cid, 'code' => $cu['code'] ?? '', 'name' => $cu['name'] ?? ''];
-    }
-
-    /** GET /api/tasks?type=OTC&kind=one_off|recurring&ended=0|1 */
-    public static function listTasks(Ctx $c): array
-    {
-        $plan = $c->plan();
-        $type = $c->query('type');
-        $kind = $c->query('kind');
-        if ($kind !== null && $kind !== '') {
-            V::enum($kind, 'kind', ['one_off', 'recurring']);
-        }
-        $all = $c->queryBool('ended');
-        $ix = Schedule::index($plan);
-        $cal = Calendar::forCtx($c);
-        $out = [];
-        foreach ($plan['tasks'] ?? [] as $t) {
-            $live = Usage::taskLive($t, $c->today);
-            if ((!$all && !$live) || ($type !== null && $type !== '' && $t['waste_type'] !== $type)
-                || ($kind === 'one_off' && !Usage::isOneOff($t)) || ($kind === 'recurring' && Usage::isOneOff($t))) {
-                continue;
-            }
-            $out[] = self::taskOut($t) + [
-                'customer' => self::customerRef($plan, (int) $t['customer_id']),
-                'next_date' => self::nextTaskDate($t, $c->today, $ix),
-                'today_status' => $cal->todayStatus('t' . $t['id']),
-                'ended' => !$live,
-            ];
-        }
-        usort($out, static fn ($a, $b) => [$ix['type_order'][$a['waste_type']] ?? 99, strtolower($a['customer']['name']), $a['id']]
-            <=> [$ix['type_order'][$b['waste_type']] ?? 99, strtolower($b['customer']['name']), $b['id']]);
-        return $out;
-    }
-
-    /** GET /api/tasks/{id} -> Task + customer + overrides dated >= today + next_date. */
-    public static function getTask(Ctx $c): array
-    {
-        $plan = $c->plan();
-        $t = $plan['tasks'][self::mustTask($plan, $c->intParam('id'))];
-        $ovs = [];
-        foreach ($plan['task_overrides'] ?? [] as $o) {
-            if ((int) $o['task_id'] === (int) $t['id'] && $o['date'] >= $c->today) {
-                $ovs[] = ['task_id' => (int) $o['task_id'], 'date' => $o['date'], 'cancelled' => !empty($o['cancelled']), 'note' => (string) ($o['note'] ?? '')];
-            }
-        }
-        $k = Customers::index($plan, (int) $t['customer_id']);
-        return self::taskOut($t) + [
-            'customer' => $k === null ? null : Customers::out($plan['customers'][$k]),
-            'overrides' => $ovs,
-            'next_date' => self::nextTaskDate($t, $c->today, Schedule::index($plan)),
-        ];
-    }
-
-    /** POST /api/tasks {waste_type, customer_id, date | start, end, days, note} -> 201 Task */
-    public static function createTask(Ctx $c): array
-    {
-        $b = $c->body;
-        V::only($b, ['waste_type', 'customer_id', 'date', 'start', 'end', 'days', 'note']);
-        $plan = $c->plan();
-        [$type] = self::checkTaskTarget($plan, $b['waste_type'] ?? null, $b['customer_id'] ?? null);
-        $t = ['id' => (int) ($plan['seq']['task'] ?? 0) + 1, 'waste_type' => $type['code'], 'customer_id' => (int) $b['customer_id'],
-            'note' => V::optStr($b, 'note', 500), 'rev' => 1];
-        if (self::given($b, 'start') || self::given($b, 'days') || self::given($b, 'end')) {
-            if (self::given($b, 'date')) {
-                V::fail('date', 'A task has either a date (one-off) or start and days (recurring)');
-            }
-            if (empty($type['recurring_tasks'])) {
-                throw new ApiError('RECURRING_NOT_ALLOWED', 422, 'days', ['waste_type' => $type['code']]);
-            }
-            $t = self::applyTaskSchedule($t, $b, $c->today, true);
-        } else {
-            $t['date'] = V::date($b['date'] ?? null, 'date');
-            self::notPast($t['date'], $c->today, 'date');
-            $t['copied_from'] = null;
-        }
-        $plan['seq']['task'] = $t['id'];
-        $t = self::canonTask($t);
-        $plan['tasks'][] = $t;
-        $c->savePlan($plan);
-        return $c->created(self::taskOut($t));
-    }
-
-    /** PATCH /api/tasks/{id} {rev, note?, date?, days?, start?, end?, release_run?} -> Task | TASK_FIELD_IMMUTABLE */
-    public static function patchTask(Ctx $c): array
-    {
-        $b = $c->body;
-        V::only($b, ['rev', 'note', 'date', 'days', 'start', 'end', 'release_run', 'waste_type', 'customer_id']);
-        $plan = $c->plan();
-        $i = self::mustTask($plan, $c->intParam('id'));
-        $old = $plan['tasks'][$i];
-        self::checkRev($old, $b['rev'] ?? null);
-        foreach (['waste_type', 'customer_id'] as $f) {
-            if (array_key_exists($f, $b) && $b[$f] !== $old[$f]) {
-                throw new ApiError('TASK_FIELD_IMMUTABLE', 422, $f);
-            }
-        }
-        $t = $old;
-        if (array_key_exists('note', $b)) {
-            $t['note'] = V::optStr($b, 'note', 500);
-        }
-        if (Usage::isOneOff($old)) {
-            foreach (['start', 'end', 'days'] as $f) {
-                if (self::given($b, $f)) {
-                    throw new ApiError('TASK_FIELD_IMMUTABLE', 422, $f, null, 'A one-off task stays one-off: create a new task');
-                }
-            }
-            if (array_key_exists('date', $b) && $b['date'] !== $old['date']) {
-                $t['date'] = V::date($b['date'], 'date');
-                self::notPast($t['date'], $c->today, 'date');
-            }
-        } else {
-            if (self::given($b, 'date')) {
-                throw new ApiError('TASK_FIELD_IMMUTABLE', 422, 'date', null, 'A recurring task stays recurring: create a new task');
-            }
-            $t = self::applyTaskSchedule($t, $b, $c->today, false);
-        }
-        $t['rev'] = (int) ($old['rev'] ?? 1) + 1;
-        $t = self::canonTask($t);
-        $plan['tasks'][$i] = $t;
-        $c->savePlan($plan, ['release_run' => self::flag($b, 'release_run')]);
-        return self::taskOut($t);
-    }
-
-    /** DELETE /api/tasks/{id}?rev=2[&release_run=1] -> 204 (the task and its overrides). */
-    public static function deleteTask(Ctx $c): mixed
-    {
-        $plan = $c->plan();
-        $id = $c->intParam('id');
-        $i = self::mustTask($plan, $id);
-        self::checkRev($plan['tasks'][$i], $c->query('rev'));
-        array_splice($plan['tasks'], $i, 1);
-        $plan['task_overrides'] = array_values(array_filter($plan['task_overrides'] ?? [], static fn ($o) => (int) $o['task_id'] !== $id));
-        $c->savePlan($plan, ['release_run' => $c->queryBool('release_run')]);
-        return $c->noContent();
-    }
-
-    /** PUT /api/tasks/{id}/dates/{date} {rev, cancelled?, note?, release_run?} -> {task, occurrence} (R19). */
-    public static function putTaskDate(Ctx $c): array
-    {
-        $b = $c->body;
-        V::only($b, ['rev', 'cancelled', 'note', 'release_run']);
-        $date = $c->dateParam('date');
-        $plan = $c->plan();
-        $id = $c->intParam('id');
-        $i = self::mustTask($plan, $id);
-        $task = $plan['tasks'][$i];
-        self::checkRev($task, $b['rev'] ?? null);
-        self::notPast($date, $c->today, 'date');
-        if (Usage::isOneOff($task)) {
-            V::fail('date', 'A one-off task has no per-date changes: edit or delete the task');
-        }
-        if (!Schedule::taskGenerates($task, $date)) {
-            throw new ApiError('NOT_AN_OCCURRENCE', 422, 'date', ['date' => $date]);
-        }
-        $note = array_key_exists('note', $b) ? V::optStr($b, 'note', 500) : null;
-        $cancelled = (array_key_exists('cancelled', $b) && $b['cancelled'] !== null) ? V::bool($b['cancelled'], 'cancelled') : null;
-        $plan = self::upsertTaskOverride($plan, $id, $date, static function (array $o) use ($note, $cancelled): array {
-            if ($note !== null) {
-                $o['note'] = $note;
-            }
-            if ($cancelled !== null) {
-                $o['cancelled'] = $cancelled;
-            }
-            return $o;
-        });
-        $plan['tasks'][$i]['rev'] = (int) ($task['rev'] ?? 1) + 1;
-        $c->savePlan($plan, ['release_run' => self::flag($b, 'release_run')]);
-        $plan = $c->plan();
-        return ['task' => self::taskOut($plan['tasks'][self::mustTask($plan, $id)]),
-            'occurrence' => Calendar::forCtx($c)->taskOccurrence($id, $date)];
-    }
-
-    /** DELETE /api/tasks/{id}/dates/{date}?rev=2[&release_run=1] -> {task, occurrence} (reset). */
-    public static function resetTaskDate(Ctx $c): array
-    {
-        $date = $c->dateParam('date');
-        $plan = $c->plan();
-        $id = $c->intParam('id');
-        $i = self::mustTask($plan, $id);
-        $task = $plan['tasks'][$i];
-        self::checkRev($task, $c->query('rev'));
-        self::notPast($date, $c->today, 'date');
-        if (Usage::isOneOff($task)) {
-            V::fail('date', 'A one-off task has no per-date changes');
-        }
-        $n = count($plan['task_overrides'] ?? []);
-        $plan['task_overrides'] = array_values(array_filter($plan['task_overrides'] ?? [],
-            static fn ($o) => !((int) $o['task_id'] === $id && $o['date'] === $date)));
-        if (count($plan['task_overrides']) !== $n) {
-            $plan['tasks'][$i]['rev'] = (int) ($task['rev'] ?? 1) + 1;
-        }
-        $c->savePlan($plan, ['release_run' => $c->queryBool('release_run')]);
-        $plan = $c->plan();
-        return ['task' => self::taskOut($plan['tasks'][self::mustTask($plan, $id)]),
-            'occurrence' => Calendar::forCtx($c)->taskOccurrence($id, $date)];
-    }
-
-    /**
-     * POST /api/tasks/{id}/dates/{src}/copy {rev, to, skip_source?, note?, release_run?} -> 201 {created: Task}.
-     * "Move one date" = skip_source true (R19). A past source is read from its frozen plan.
-     */
-    public static function copyTaskDate(Ctx $c): array
-    {
-        $b = $c->body;
-        V::only($b, ['rev', 'to', 'skip_source', 'note', 'release_run']);
-        $src = $c->dateParam('date');
-        $id = $c->intParam('id');
-        $plan = $c->plan();
-        $i = self::taskIndex($plan, $id);
-        $task = $i === null ? null : $plan['tasks'][$i];
-        if ($task !== null) {
-            self::checkRev($task, $b['rev'] ?? null);
-        }
-        $source = self::sourceOccurrence($c, $plan, 'task', $id, $task, $src);
-        $to = V::date($b['to'] ?? null, 'to');
-        self::notPast($to, $c->today, 'to');
-        self::checkTaskTarget($plan, $source['waste_type'] ?? null, (int) ($source['customer_id'] ?? 0));
-        $new = self::canonTask([
-            'id' => (int) ($plan['seq']['task'] ?? 0) + 1,
-            'waste_type' => $source['waste_type'],
-            'customer_id' => (int) $source['customer_id'],
-            'note' => array_key_exists('note', $b) ? V::optStr($b, 'note', 500) : (string) ($source['task_note'] ?? $source['note'] ?? ''),
-            'rev' => 1,
-            'date' => $to,
-            'copied_from' => ['task_id' => $id, 'date' => $src],
-        ]);
-        $plan['seq']['task'] = $new['id'];
-        $plan['tasks'][] = $new;
-        if (self::flag($b, 'skip_source')) {
-            if ($src < $c->today) {
-                V::fail('skip_source', 'Only a date from today on can be skipped');
-            }
-            if ($task === null || Usage::isOneOff($task) || ($source['status'] ?? '') !== 'scheduled') {
-                V::fail('skip_source', 'Only a scheduled date of a recurring task can be skipped (change the date of a one-off instead)');
-            }
-            $plan = self::upsertTaskOverride($plan, $id, $src, static fn (array $o): array => array_replace($o, ['cancelled' => true]));
-            $plan['tasks'][$i]['rev'] = (int) ($task['rev'] ?? 1) + 1;
-        }
-        $c->savePlan($plan, ['release_run' => self::flag($b, 'release_run')]);
-        return $c->created(['created' => self::taskOut($new)]);
-    }
-
-    // =============================================================================================
     // plan_write hooks (registered in src/hooks/30_plan_rules.php)
     // =============================================================================================
 
     /**
-     * R9 / R19 after every plan write: overrides dated before today are purged; overrides of missing or
-     * one-off items are dropped; a route override that is not cancelled, has an empty note and inherits
-     * (stops null or equal to the template's effective list) is deleted; a task override that is not
-     * cancelled and has an empty note is deleted.
+     * R9 after every plan write: overrides dated before today are purged; overrides of missing or
+     * one-off routes are dropped; a route override that is not cancelled, has an empty note and inherits
+     * (stops null or equal to the template's effective list) is deleted.
      */
     public static function cleanupOverrides(Ctx $c, array $before, array &$after, array $opts): void
     {
@@ -1725,27 +1339,12 @@ final class Plan
                 continue;
             }
             $inherits = !is_array($o['stops'] ?? null)
-                || Schedule::filterStops($ix, $o['stops']) === Schedule::filterStops($ix, $r['stops'] ?? []);
+                || Schedule::filterStops($ix, $o['stops'], Usage::routeType($r)) === Schedule::filterStops($ix, $r['stops'] ?? [], Usage::routeType($r));
             if (!empty($o['cancelled']) || trim((string) ($o['note'] ?? '')) !== '' || !$inherits) {
                 $keep[] = $o;
             }
         }
         $after['route_overrides'] = $keep;
-        $tasks = [];
-        foreach ($after['tasks'] ?? [] as $t) {
-            $tasks[(int) $t['id']] = $t;
-        }
-        $keep = [];
-        foreach ($after['task_overrides'] ?? [] as $o) {
-            $t = $tasks[(int) $o['task_id']] ?? null;
-            if ($t === null || Usage::isOneOff($t) || $o['date'] < $today) {
-                continue;
-            }
-            if (!empty($o['cancelled']) || trim((string) ($o['note'] ?? '')) !== '') {
-                $keep[] = $o;
-            }
-        }
-        $after['task_overrides'] = $keep;
     }
 
     /**
@@ -1810,6 +1409,13 @@ final class Plan
         if ($blocking !== []) {
             throw new ApiError('RUN_EXISTS', 409, null, ['runs' => $blocking]);
         }
+        // Only the changed runs are written back: every other key of the day file (runs of the old task
+        // feature included) stays as it is.
+        foreach ($runs as $job => $run) {
+            if ($run !== ($day['runs'][$job] ?? null)) {
+                $day['runs'][$job] = $run;
+            }
+        }
         foreach ($drop as $job) {
             $run = $runs[$job];
             if (($run['driver_id'] ?? null) !== null) {
@@ -1823,26 +1429,21 @@ final class Plan
             }
             $run['dropped_at'] = $c->nowIso;
             $day['dropped_runs'][] = $run;
-            unset($runs[$job]);
+            unset($day['runs'][$job]);
             $changed = true;
         }
         if ($changed) {
-            $day['runs'] = $runs;
             $c->tx->put($doc, $day);
         }
     }
 
-    /** Today's jobs of a plan: job => {status, stops (customer ids), label (route code / "OTC Customer")}. */
+    /** Today's jobs of a plan: job => {status, stops (customer ids), label (route code)}. */
     private static function todayJobs(array $plan, string $today): array
     {
         $ix = Schedule::index($plan);
         $out = [];
         foreach (Schedule::routesOn($plan, $today, $ix) as $o) {
             $out['r' . $o['route_id']] = ['status' => $o['status'], 'stops' => array_column($o['stops'], 'customer_id'), 'label' => $o['code']];
-        }
-        foreach (Schedule::tasksOn($plan, $today, $ix) as $o) {
-            $name = $ix['customers'][$o['customer_id']]['name'] ?? ('#' . $o['customer_id']);
-            $out['t' . $o['task_id']] = ['status' => $o['status'], 'stops' => [$o['customer_id']], 'label' => $o['waste_type'] . ' ' . $name];
         }
         return $out;
     }

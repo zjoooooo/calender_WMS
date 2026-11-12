@@ -1,10 +1,12 @@
-// S4 Result form (§9.3, R27): a route stop or a task.
-// - One weight field per weighable type (stop.weigh_types; route: the customer's routable types, task:
-//   the task's type): "REL (kg)", inputmode=decimal, 28 px, "," accepted, a [0] chip; a value at or above
+// S4 Result form (§9.3, R27): a route stop, or a free submission of a non-routable waste type.
+// - One weight field per weighable type (stop.weigh_types; route: the route's one waste type, submission:
+//   the type the driver picked): "REL (kg)", inputmode=decimal, 28 px, "," accepted, a [0] chip; a value at or above
 //   the type's confirm_over asks "1,250.0 kg, correct?". Every shown field is required (D12).
 // - A ticket field per type whose weigh_method is weighbridge (stop.ticket_types).
 // - Up to max_photos photos (resized on the phone, R35), a full-screen signature pad and a note.
 // - [Collected: save] / [Not collected] (reason sheet). Reopened from Done: [Save correction] / [Undo].
+// - A submission (p.submission) also asks for the truck plate (no claim picked one), has no [Not collected]
+//   (nothing was planned) and its [Undo] is [Delete].
 // Values are kept as a device draft on every change; a save goes to the outbox (never straight to the
 // server), so it works with no signal. The form is a snapshot: polls never re-render it (§8.2, D14).
 // The snapshot is taken only once this phone's outbox has been read (a fresh page load starts with an empty
@@ -12,7 +14,7 @@
 // A single weighable type has no [0] chip (0 alone is refused): "nothing to collect" is Not collected → No
 // waste. A result refused with TICKET_REQUIRED always shows that ticket field, even from an older job copy.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { JobStop, MissReason, Outcome, VisitWrite, WasteType } from '../api';
+import { prefs, type JobStop, type MissReason, type Outcome, type VisitWrite, type WasteType } from '../api';
 import { fmtWeight, useI18n } from '../i18n';
 import { Loading, useErrorText } from '../ui/Feedback';
 import { resizePhoto } from '../ui/photo';
@@ -23,7 +25,8 @@ import { useDriver } from './driverContext';
 import { effectiveVisit, type EffVisit } from './data';
 import { ReasonPicker } from './LeaveSheet';
 import { fileName, stopKey, type NotSentEntry } from './outbox';
-import { BottomBar, Sheet, TopBar } from './parts';
+import { LAST_PLATE, lastPlate } from './claim';
+import { BottomBar, PlatePicker, Sheet, TopBar } from './parts';
 import SignaturePad from './SignaturePad';
 
 const MAX_WEIGHT = 99999.9;
@@ -116,16 +119,18 @@ function visitOfBody(b: NotSentEntry['body'], myId: number): EffVisit {
 export interface ResultFormProps {
   date: string;
   job: string;
-  kind: 'route' | 'task';
-  /** Route code or the task's type, for the top bar and the Not sent list. */
+  kind: 'route' | 'submission';
+  /** Route code or the submission's waste type, for the top bar and the Not sent list. */
   jobLabel: string;
+  /** A free submission: its waste type, the plates to pick from and the plate it was saved with. */
+  submission?: { waste_type: string; trucks: string[]; vehicle_no: string | null };
   stop: JobStop;
   wasteTypes: Record<string, WasteType>;
   maxPhotos: number;
   backTo: string;
   notsent?: NotSentEntry | null;
   afterSave: (outcome: Outcome | null) => void;
-  /** Extra overflow actions (task: Give back). */
+  /** Extra overflow actions. */
   menu?: ReactNode;
   at?: number;
   cached?: boolean;
@@ -180,6 +185,12 @@ function ResultFormBody(p: ResultFormProps) {
   const [over, setOver] = useState<{ code: string; kg: number }[] | null>(null);
   const [sigOpen, setSigOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Submission: the truck plate, pre-filled with the saved one, else the plate this driver used last.
+  const [plate, setPlate] = useState(() => {
+    const trucks = p.submission?.trucks ?? [];
+    const saved = p.notsent?.body.vehicle_no ?? local?.body.vehicle_no ?? p.submission?.vehicle_no ?? '';
+    return saved && trucks.includes(saved) ? saved : lastPlate(trucks);
+  });
   const [photoBusy, setPhotoBusy] = useState(false);
   const photoInput = useRef<HTMLInputElement>(null);
 
@@ -230,7 +241,12 @@ function ResultFormBody(p: ResultFormProps) {
         date: p.date,
         job: p.job,
         customer_id: cid,
-        body: { base_rev: baseRev, ...body, captured_at: new Date().toISOString() },
+        body: {
+          base_rev: baseRev,
+          ...body,
+          ...(p.submission ? { waste_type: p.submission.waste_type, customer_id: cid, vehicle_no: plate || null } : {}),
+          captured_at: new Date().toISOString(),
+        },
         label: { customer: stop.customer.name, job_label: p.jobLabel, kind: p.kind, weigh_types: stop.weigh_types, ticket_types: stop.ticket_types },
         replacesNotSent: p.notsent?.id,
       });
@@ -264,6 +280,8 @@ function ResultFormBody(p: ResultFormProps) {
       else if (s.length > 30) errs['t.' + code] = t('driver.form.ticketTooLong');
       else tickets[code] = s;
     }
+    if (p.submission && !plate) errs.plate = t('err.VEHICLE_REQUIRED');
+    else if (p.submission) prefs.set(LAST_PLATE, plate);
     setErrors(errs);
     return Object.keys(errs).length ? null : { weights, tickets };
   };
@@ -404,6 +422,12 @@ function ResultFormBody(p: ResultFormProps) {
                 {errors.form}
               </div>
             )}
+            {p.submission && (
+              <div className={errors.plate ? 'dfield invalid' : 'dfield'}>
+                <PlatePicker trucks={p.submission.trucks} value={plate} onChange={setPlate} />
+                {errors.plate && <span className="err">{errors.plate}</span>}
+              </div>
+            )}
 
             <div className="stack">
               {values.photos.length > 0 && (
@@ -469,13 +493,15 @@ function ResultFormBody(p: ResultFormProps) {
             <button type="button" className="dbtn go big" data-testid="save-collected" disabled={busy} onClick={() => collected(false)}>
               {isCorrection ? t('driver.form.saveCorrection') : t('driver.form.collected')}
             </button>
-            <div className={isCorrection ? 'dbtns' : ''}>
-              <button type="button" className="dbtn" data-testid="not-collected" disabled={busy} onClick={() => setMissOpen(true)}>
-                {t('driver.form.notCollected')}
-              </button>
+            <div className={isCorrection && !p.submission ? 'dbtns' : ''}>
+              {!p.submission && (
+                <button type="button" className="dbtn" data-testid="not-collected" disabled={busy} onClick={() => setMissOpen(true)}>
+                  {t('driver.form.notCollected')}
+                </button>
+              )}
               {isCorrection && (
                 <button type="button" className="dbtn warn" data-testid="undo" disabled={busy} onClick={() => void doSave({ outcome: null })}>
-                  {t('driver.form.undo')}
+                  {t(p.submission ? 'driver.submit.delete' : 'driver.form.undo')}
                 </button>
               )}
             </div>

@@ -1,14 +1,14 @@
 <?php
 // HTTP smoke test: boots `php -S` on a port and drives the API over real HTTP (M1-M5 flow):
-// first start + admin password, forced change, users, master data, routes/tasks/calendar, roles, lockout, the 03:59/04:00
+// first start + admin password, forced change, users, master data, routes/calendar, roles, lockout, the 03:59/04:00
 // rollover (server restarted with WMS_FAKE_NOW on a .demo data dir), audit log, SPA fallback; then, on a freshly
-// seeded data dir, the M6-M8 scripted day of §13 (claims, photo upload, switch, office edits, OTC task, correction,
+// seeded data dir, the M6-M8 scripted day of §13 (claims, photo upload, switch, office edits, a free OTC submission, correction,
 // night shift 02:30 / 03:59 / 04:00, close-out and back-fill).
 //
 //   php backend/tests/api_smoke.php [port=8180] [data_dir=<temp dir>]
 //
 // The data dir is WIPED first. The server is always stopped at the end. Exit code 0 = all passed.
-// Later parts can append their own steps (routes, tasks, runs) using the helpers below.
+// Later parts can append their own steps (routes, runs, submissions) using the helpers below.
 
 $config = require __DIR__ . '/../bootstrap.php';
 
@@ -187,41 +187,53 @@ try {
     $dr = $expect('drivers list', $http('GET', '/api/drivers', null, $mei), 200);
     $check('drivers list has Ali', ($dr[0]['name'] ?? '') === 'Ali' && array_key_exists('route_job', $dr[0] ?? []) && $dr[0]['route_job'] === null);
 
-    // ---- M3-M5 plan: routes, tasks, calendar (Plan part) ----------------------------------
+    // ---- M3-M5 plan: routes, calendar (Plan part) -----------------------------------------
     $cA = (int) ($a['id'] ?? 0);
     $cB = (int) ($b['id'] ?? 0);
     $cC = $cB + 1; // customer C (COMPACTOR only)
     $st = static fn (int ...$ids) => array_map(static fn ($id) => ['customer_id' => $id, 'note' => ''], $ids);
-    $n1 = $expect('create regular route N1 (Mon Wed Fri)', $http('POST', '/api/routes', ['type' => 'regular', 'code' => 'n1', 'name' => 'North 1',
+    $n1 = $expect('create regular route N1 (Mon Wed Fri)', $http('POST', '/api/routes', ['waste_type' => 'REL', 'type' => 'regular', 'code' => 'n1', 'name' => 'North 1',
         'start' => '2026-11-11', 'days' => [5, 1, 3], 'stops' => $st($cA, $cB)], $mei), 201);
     $check('code upper-cased, days sorted, colour auto', ($n1['code'] ?? '') === 'N1' && ($n1['days'] ?? []) === [1, 3, 5] && ($n1['color'] ?? 0) === 1);
-    $expect('regular on Sunday refused', $http('POST', '/api/routes', ['type' => 'regular', 'code' => 'N2', 'name' => 'x',
+    $expect('regular on Sunday refused', $http('POST', '/api/routes', ['waste_type' => 'REL', 'type' => 'regular', 'code' => 'N2', 'name' => 'x',
         'start' => '2026-11-11', 'days' => [7], 'stops' => []], $mei), 422, 'WEEKDAY_NOT_ALLOWED');
-    $expect('special S1 every Sunday + PH', $http('POST', '/api/routes', ['type' => 'special', 'code' => 'S1', 'name' => 'Sunday',
+    $expect('special S1 every Sunday + PH', $http('POST', '/api/routes', ['waste_type' => 'REL', 'type' => 'special', 'code' => 'S1', 'name' => 'Sunday',
         'start' => '2026-11-15', 'sun' => true, 'ph' => true, 'stops' => $st($cA)], $mei), 201);
-    $expect('adhoc on a Sunday refused', $http('POST', '/api/routes', ['type' => 'adhoc', 'code' => 'A9', 'name' => 'x',
+    $expect('adhoc on a Sunday refused', $http('POST', '/api/routes', ['waste_type' => 'REL', 'type' => 'adhoc', 'code' => 'A9', 'name' => 'x',
         'date' => '2026-11-15', 'stops' => []], $mei), 422, 'DAY_CLASS_VIOLATION');
     $sg = $expect('suggest an adhoc code', $http('GET', '/api/routes/suggest-code?type=adhoc&date=2026-11-12', null, $mei), 200);
     $check('A1 suggested for a work day', ($sg['code'] ?? '') === 'A1' && ($sg['type'] ?? '') === 'adhoc' && ($sg['class'] ?? '') === 'work');
-    $expect('urgent adhoc A1 tomorrow', $http('POST', '/api/routes', ['type' => 'adhoc', 'code' => 'A1', 'name' => 'Adhoc 12 Nov',
+    $expect('urgent adhoc A1 tomorrow', $http('POST', '/api/routes', ['waste_type' => 'REL', 'type' => 'adhoc', 'code' => 'A1', 'name' => 'Adhoc 12 Nov',
         'date' => '2026-11-12', 'stops' => $st($cB)], $mei), 201);
-    $expect('COMPACTOR-only customer is not routable', $http('POST', '/api/routes', ['type' => 'adhoc', 'code' => 'A2', 'name' => 'x',
+    $expect('COMPACTOR-only customer is not routable', $http('POST', '/api/routes', ['waste_type' => 'REL', 'type' => 'adhoc', 'code' => 'A2', 'name' => 'x',
         'date' => '2026-11-12', 'stops' => $st($cC)], $mei), 422, 'CUSTOMER_NOT_ROUTABLE');
-    $expect('OTC task on a Sunday', $http('POST', '/api/tasks', ['waste_type' => 'OTC', 'customer_id' => $cB, 'date' => '2026-11-15'], $mei), 201);
-    $expect('recurring COMPACTOR task (Fri)', $http('POST', '/api/tasks', ['waste_type' => 'COMPACTOR', 'customer_id' => $cC,
-        'start' => '2026-11-12', 'days' => [5]], $mei), 201);
-    $expect('recurring OTC refused', $http('POST', '/api/tasks', ['waste_type' => 'OTC', 'customer_id' => $cB,
-        'start' => '2026-11-12', 'days' => [5]], $mei), 422, 'RECURRING_NOT_ALLOWED');
+    $expect('a route needs its waste type', $http('POST', '/api/routes', ['type' => 'adhoc', 'code' => 'A2', 'name' => 'x',
+        'date' => '2026-11-12', 'stops' => []], $mei), 422, 'VALIDATION');
+    $expect('OTC is never a route type', $http('POST', '/api/routes', ['waste_type' => 'OTC', 'type' => 'adhoc', 'code' => 'A2', 'name' => 'x',
+        'date' => '2026-11-12', 'stops' => $st($cB)], $mei), 422, 'TYPE_NOT_ROUTABLE');
+    $expect('a RECYCLING route refuses a customer without RECYCLING', $http('POST', '/api/routes', ['waste_type' => 'RECYCLING', 'type' => 'adhoc', 'code' => 'A2',
+        'name' => 'x', 'date' => '2026-11-12', 'stops' => $st($cA)], $mei), 422, 'CUSTOMER_NOT_ROUTABLE');
+    $expect('customer A also registers RECYCLING', $http('PATCH', "/api/customers/$cA", ['waste_types' => ['REL', 'RECYCLING']], $mei), 200);
+    $rc = $expect('RECYCLING route R1 (Tue Thu)', $http('POST', '/api/routes', ['waste_type' => 'RECYCLING', 'type' => 'regular', 'code' => 'R1', 'name' => 'Recycling 1',
+        'start' => '2026-11-12', 'days' => [2, 4], 'stops' => $st($cA)], $mei), 201);
+    $check('the route keeps its waste type', ($rc['waste_type'] ?? '') === 'RECYCLING' && ($n1['waste_type'] ?? '') === 'REL');
+    $expect('the waste type of a route never changes', $http('PATCH', '/api/routes/' . ($rc['id'] ?? 0), ['rev' => 1, 'waste_type' => 'REL'], $mei), 422, 'TYPE_IMMUTABLE');
+    $expect('RECYCLING is in use by R1', $http('PATCH', '/api/waste-types/RECYCLING', ['active' => false], $admin), 409, 'WASTE_TYPE_IN_USE');
+    $expect('the task endpoints are gone', $http('POST', '/api/tasks', ['waste_type' => 'OTC', 'customer_id' => $cB, 'date' => '2026-11-15'], $mei), 404, 'NOT_FOUND');
+    $expect('... also the list', $http('GET', '/api/tasks', null, $mei), 404, 'NOT_FOUND');
+    $dc = $expect('driver reads the customers for free submissions', $http('GET', '/api/driver/customers', null, $ali), 200);
+    $check('B (OTC) and C (COMPACTOR), without their routable types', array_column($dc ?? [], 'waste_types', 'name') === ['Customer B' => ['OTC'], 'Customer C' => ['COMPACTOR']],
+        json_encode($dc));
     $wk = $expect('calendar week', $http('GET', '/api/calendar?view=week&anchor=2026-11-11', null, $mei), 200);
     $todayN1 = array_values(array_filter($wk['routes'] ?? [], static fn ($o) => $o['key'] === 'r1@2026-11-11'))[0] ?? [];
     $check('calendar: 7 days, N1 today not started with 2 stops', count($wk['days'] ?? []) === 7
         && ($todayN1['run_status'] ?? '') === 'not_started' && count($todayN1['stops'] ?? []) === 2, json_encode($todayN1));
     $ph = $expect('calendar on the test PH', $http('GET', '/api/calendar?view=week&anchor=2026-11-20', null, $mei), 200);
     $fri = array_values(array_filter($ph['routes'] ?? [], static fn ($o) => $o['date'] === '2026-11-20'));
-    $friTasks = array_values(array_filter($ph['tasks'] ?? [], static fn ($o) => $o['date'] === '2026-11-20'));
-    $check('Fri PH: S1 runs, N1 paused (listed last); the COMPACTOR task still runs', array_column($fri, 'code') === ['S1', 'N1']
-        && ($fri[1]['status'] ?? '') === 'holiday_skipped'
-        && ($friTasks[0]['waste_type'] ?? '') === 'COMPACTOR', json_encode($fri));
+    $check('Fri PH: S1 runs, N1 paused (listed last); the calendar has no tasks', array_column($fri, 'code') === ['S1', 'N1']
+        && ($fri[1]['status'] ?? '') === 'holiday_skipped' && ($fri[0]['waste_type'] ?? '') === 'REL'
+        && is_array($ph) && !array_key_exists('tasks', $ph)
+        && !in_array('task', array_merge(...array_column($ph['days'] ?? [], 'can_create')), true), json_encode($fri));
     $cp = $expect('move the paused N1 to Saturday', $http('POST', '/api/routes/1/dates/2026-11-20/copy', ['rev' => 1, 'to' => '2026-11-21'], $mei), 201);
     $check('copy keeps type regular (R tag), code N1-21', ($cp['created']['type'] ?? '') === 'regular' && ($cp['created']['code'] ?? '') === 'N1-21');
     $ed = $expect('only this date: drop customer B on Fri 13 Nov', $http('PUT', '/api/routes/1/dates/2026-11-13',
@@ -304,7 +316,7 @@ try {
         ['id' => 3, 'code' => 'A3', 'color' => 3, 'type' => 'adhoc', 'name' => 'Never claimed', 'note' => '', 'rev' => 1, 'date' => '2026-11-11',
             'copied_from' => null, 'stops' => $stp(2)],
     ];
-    $seedPlan['seq'] = ['customer' => 4, 'route' => 3, 'task' => 0];
+    $seedPlan['seq'] = ['customer' => 4, 'route' => 3];
     $pwHash = password_hash('smoke-pass-1', PASSWORD_BCRYPT, ['cost' => 4]);
     $seedUsers = [];
     foreach ([[1, 'admin', 'admin'], [2, 'mei', 'office'], [3, 'ali', 'driver'], [4, 'bala', 'driver']] as [$id, $un, $role]) {
@@ -371,7 +383,7 @@ try {
     $sw = $expect('runs: Ali switches to A2', $http('POST', "$W/r2/claim", ['vehicle_no' => 'SBA1234X', 'switch' => true], $ali), 201);
     $check('runs: N1 left open', ($sw['left'] ?? null) === ['job' => 'r1', 'result' => 'open'], json_encode($sw['left'] ?? null));
     $cal = $expect('runs: calendar after the switch', $http('GET', '/api/calendar?view=week&anchor=2026-11-11', null, $mei), 200);
-    $occ = static fn (array $cal, string $key) => array_values(array_filter(array_merge($cal['routes'] ?? [], $cal['tasks'] ?? []), static fn ($o) => $o['key'] === $key))[0] ?? [];
+    $occ = static fn (array $cal, string $key) => array_values(array_filter($cal['routes'] ?? [], static fn ($o) => $o['key'] === $key))[0] ?? [];
     $check('runs: the office sees N1 Needs driver (open, left by Ali) and A2 active', ($occ($cal, 'r1@2026-11-11')['run_status'] ?? '') === 'open'
         && ($occ($cal, 'r1@2026-11-11')['run']['left_by'] ?? '') === 'Ali' && ($occ($cal, 'r2@2026-11-11')['run_status'] ?? '') === 'active');
 
@@ -386,14 +398,47 @@ try {
     $expect('runs: Ali\'s queued write for the removed stop is kept', $v, 200);
     $check('runs: ... as OFF_PLAN and LATE (Ali no longer holds N1)', array_column($v['json']['warnings'] ?? [], 'code') === ['OFF_PLAN', 'LATE'], $v['body']);
 
-    // 7. an OTC task for today, taken by Ali while he holds A2
-    $tk = $expect('runs: office creates an OTC task today', $http('POST', '/api/tasks', ['waste_type' => 'OTC', 'customer_id' => 2, 'date' => '2026-11-11', 'note' => 'sofa'], $mei), 201);
-    $tj = 't' . ($tk['id'] ?? 0);
-    $expect('runs: Ali takes the task while holding A2', $http('POST', "$W/$tj/claim", ['vehicle_no' => 'SBA1234X'], $ali), 201);
-    $expect('runs: REL is never weighed on an OTC task', $http('PUT', "$W/$tj/stops/2", $visitBody(5, 0, ['REL' => 3]), $ali), 422, 'TYPE_NOT_ALLOWED');
-    $expect('runs: Ali completes the task', $http('PUT', "$W/$tj/stops/2", $visitBody(6, 0, ['OTC' => 300]), $ali), 200);
+    // 7. a free OTC submission by Ali while he holds A2: no task, no claim; resend, correction, delete, office list
+    $S = '/api/driver/submissions/2026-11-11';
+    $sid = $op(900);
+    $subBody = static fn (int $n, int $base, array $w, array $extra = []) => array_merge(['op_id' => $op($n), 'base_rev' => $base, 'waste_type' => 'OTC',
+        'customer_id' => 2, 'vehicle_no' => 'sba 1234x', 'outcome' => 'collected', 'weights' => $w, 'tickets' => (object) [], 'photos' => [], 'signature' => null,
+        'note' => 'sofa', 'captured_at' => null], $extra);
+    $expect('runs: the task endpoints are gone', $http('POST', '/api/tasks', ['waste_type' => 'OTC', 'customer_id' => 2, 'date' => '2026-11-11', 'note' => 'sofa'], $mei), 404, 'NOT_FOUND');
+    $expect('runs: a task job cannot be claimed', $http('POST', "$W/t1/claim", ['vehicle_no' => 'SBA1234X'], $ali), 404, 'NOT_FOUND');
+    $dc = $expect('runs: the customers Ali can submit for', $http('GET', '/api/driver/customers', null, $ali), 200);
+    $check('runs: only ABC Restaurant, with OTC', array_column($dc ?? [], 'waste_types', 'name') === ['ABC Restaurant' => ['OTC']], json_encode($dc));
+    $expect('runs: REL is never submitted freely', $http('PUT', "$S/$sid", $subBody(5, 0, ['REL' => 3], ['waste_type' => 'REL']), $ali), 422, 'TYPE_ROUTABLE');
+    $expect('runs: a customer without OTC is refused', $http('PUT', "$S/$sid", $subBody(5, 0, ['OTC' => 3], ['customer_id' => 1]), $ali), 422, 'CUSTOMER_LACKS_TYPE');
+    $expect('runs: a submission needs a plate', $http('PUT', "$S/$sid", $subBody(5, 0, ['OTC' => 3], ['vehicle_no' => null]), $ali), 422, 'VEHICLE_REQUIRED');
+    $expect('runs: the office cannot submit', $http('PUT', "$S/$sid", $subBody(5, 0, ['OTC' => 3]), $mei), 403, 'FORBIDDEN');
+    $sv = $expect('runs: Ali submits OTC for ABC Restaurant', $http('PUT', "$S/$sid", $subBody(5, 0, ['OTC' => '300,5'], ['photos' => [$photo]]), $ali), 201);
+    $check('runs: the submission is stored with type, customer snapshot, plate and photo', ($sv['submission']['waste_type'] ?? '') === 'OTC'
+        && ($sv['submission']['customer']['name'] ?? '') === 'ABC Restaurant' && ($sv['submission']['vehicle_no'] ?? '') === 'SBA1234X'
+        && ($sv['submission']['photos'] ?? []) === ["files/0b/$photo"] && ($sv['submission']['weights']['OTC'] ?? 0) == 300.5
+        && ($sv['submission']['rev'] ?? 0) === 1 && ($sv['replay'] ?? null) === false, json_encode($sv));
+    $sv = $expect('runs: the outbox resends the same submission', $http('PUT', "$S/$sid", $subBody(5, 0, ['OTC' => '300,5'], ['photos' => [$photo]]), $ali), 200);
+    $check('runs: the resend is a replay, still one record', ($sv['replay'] ?? null) === true && ($sv['submission']['rev'] ?? 0) === 1);
+    $sv = $expect('runs: Ali corrects the weight', $http('PUT', "$S/$sid", $subBody(6, 1, ['OTC' => 300]), $ali), 200);
+    $check('runs: the correction is rev 2', ($sv['submission']['rev'] ?? 0) === 2 && ($sv['submission']['weights']['OTC'] ?? 0) == 300.0);
+    $expect('runs: the type of a submission cannot change', $http('PUT', "$S/$sid", $subBody(30, 2, ['COMPACTOR' => 3], ['waste_type' => 'COMPACTOR']), $ali), 422, 'VALIDATION');
+    $expect('runs: Bala cannot change Ali\'s submission', $http('PUT', "$S/$sid", $subBody(31, 2, ['OTC' => 1]), $bala), 404, 'NOT_FOUND');
+    $expect('runs: tomorrow is refused', $http('PUT', '/api/driver/submissions/2026-11-12/' . $op(902), $subBody(32, 0, ['OTC' => 1]), $ali), 422, 'NOT_TODAY');
+    $expect('runs: a second submission', $http('PUT', "$S/" . $op(901), $subBody(33, 0, ['OTC' => 12]), $ali), 201);
+    $dl = $expect('runs: ... deleted again', $http('PUT', "$S/" . $op(901), ['op_id' => $op(34), 'base_rev' => 1, 'outcome' => null], $ali), 200);
+    $check('runs: a deleted submission has no outcome', is_array($dl['submission'] ?? null) && array_key_exists('outcome', $dl['submission']) && $dl['submission']['outcome'] === null
+        && ($dl['submission']['rev'] ?? 0) === 2);
+    $ml = $expect('runs: Ali\'s submissions today', $http('GET', '/api/driver/submissions', null, $ali), 200);
+    $check('runs: one live submission, Bala has none', array_column($ml['submissions'] ?? [], 'id') === [$sid]
+        && ($http('GET', '/api/driver/submissions', null, $bala)['json']['data']['submissions'] ?? null) === []);
+    $ol = $expect('runs: the office reads the day\'s submissions', $http('GET', '/api/submissions?date=2026-11-11', null, $mei), 200);
+    $check('runs: the office sees it with the driver, the total and the history', count($ol['submissions'] ?? []) === 1
+        && ($ol['submissions'][0]['driver'] ?? '') === 'Ali' && ($ol['totals']['OTC'] ?? 0) == 300.0
+        && count($ol['submissions'][0]['history'] ?? []) === 1, json_encode($ol));
+    $expect('runs: a driver cannot read the office list', $http('GET', '/api/submissions', null, $ali), 403, 'FORBIDDEN');
     $t = $expect('runs: driver today', $http('GET', '/api/driver/today', null, $ali), 200);
-    $check('runs: Ali\'s work: A2, no held task left (done)', ($t['my_route']['job'] ?? '') === 'r2' && ($t['my_tasks'] ?? null) === []);
+    $check('runs: Ali\'s work: A2; today has no task lists', ($t['my_route']['job'] ?? '') === 'r2' && is_array($t)
+        && !array_key_exists('my_tasks', $t) && !array_key_exists('tasks', $t) && ($t['day_ends_at'] ?? '') === '2026-11-12T04:00:00+08:00');
 
     // 8. office corrects a weight with a reason; the driver sees it
     $expect('runs: a correction needs why', $http('PUT', "$O/r1/stops/1", $visitBody(7, 1, ['REL' => 118]), $mei), 422, 'WHY_REQUIRED');
@@ -425,7 +470,7 @@ try {
     $check('runs: Wed N1 done, A2 incomplete, A3 no record', ($occ($cal, 'r1@2026-11-11')['run_status'] ?? '') === 'done'
         && ($occ($cal, 'r2@2026-11-11')['run_status'] ?? '') === 'incomplete' && ($occ($cal, 'r3@2026-11-11')['run_status'] ?? '') === 'no_record',
         json_encode([$occ($cal, 'r1@2026-11-11')['run_status'] ?? null, $occ($cal, 'r2@2026-11-11')['run_status'] ?? null, $occ($cal, 'r3@2026-11-11')['run_status'] ?? null]));
-    $check('runs: Wednesday totals include the night shift and the OTC task', ($wed['totals']['REL'] ?? 0) == 167.0 && ($wed['totals']['OTC'] ?? 0) == 300.0
+    $check('runs: Wednesday totals include the night shift and the OTC submission', ($wed['totals']['REL'] ?? 0) == 167.0 && ($wed['totals']['OTC'] ?? 0) == 300.0
         && ($wed['past'] ?? null) === true, json_encode($wed['totals'] ?? null));
     $v = $http('PUT', "$W/r2/stops/4", $visitBody(10, 0, ['REL' => 15], ['captured_at' => '2026-11-12T04:00:30+08:00']), $ali);
     $expect('runs: a late first result on Wednesday is accepted', $v, 200);
@@ -437,14 +482,20 @@ try {
     $expect('runs: office back-fills A3 (done on paper)', $http('PUT', "$O/r3/stops/2", $visitBody(11, 0, ['REL' => 22], ['driver_id' => 4]), $mei), 200);
     $cal = $expect('runs: calendar after close-out', $http('GET', '/api/calendar?view=week&anchor=2026-11-11', null, $mei), 200);
     $wed = array_values(array_filter($cal['days'] ?? [], static fn ($d) => $d['date'] === '2026-11-11'))[0] ?? [];
-    $check('runs: every Wednesday job is done', ($wed['ops']['done'] ?? 0) === 4 && ($wed['ops']['incomplete'] ?? 1) === 0 && ($wed['ops']['no_record'] ?? 1) === 0,
+    $check('runs: every Wednesday job is done', ($wed['ops']['done'] ?? 0) === 3 && ($wed['ops']['incomplete'] ?? 1) === 0 && ($wed['ops']['no_record'] ?? 1) === 0,
         json_encode($wed['ops'] ?? null));
     $dayDoc = json_decode((string) file_get_contents("$dataDir/days/2026-11-11.json"), true);
-    $check('runs: the Wednesday day file has the frozen plan and 4 runs', is_array($dayDoc['plan'] ?? null) && count($dayDoc['runs'] ?? []) === 4);
+    $check('runs: the Wednesday day file has the frozen plan and 3 runs', is_array($dayDoc['plan'] ?? null) && count($dayDoc['runs'] ?? []) === 3);
+    $check('runs: ... and both submissions (the deleted one is kept with no outcome)', count($dayDoc['submissions'] ?? []) === 2
+        && array_key_exists('outcome', $dayDoc['submissions'][$op(901)] ?? []) && $dayDoc['submissions'][$op(901)]['outcome'] === null
+        && ($dayDoc['submissions'][$sid]['weights']['OTC'] ?? 0) == 300);
+    $ol = $expect('runs: the office still reads Wednesday\'s submissions after the rollover', $http('GET', '/api/submissions?date=2026-11-11', null, $mei), 200);
+    $check('runs: ... with today = Thursday', ($ol['today'] ?? '') === '2026-11-12' && ($ol['date'] ?? '') === '2026-11-11' && count($ol['submissions'] ?? []) === 1);
     $check('runs: the photo is on disk', is_file("$dataDir/files/0b/$photo"));
     $audit = (string) @file_get_contents("$dataDir/audit/2026-11.jsonl");
     $check('runs: claims and results are in the audit log', str_contains($audit, '"path":"/api/driver/runs/2026-11-11/r1/claim"')
-        && str_contains($audit, '"path":"/api/runs/2026-11-11/r1/stops/1"') && !str_contains($audit, 'smoke-pass-1'));
+        && str_contains($audit, '"path":"/api/runs/2026-11-11/r1/stops/1"') && str_contains($audit, '"path":"/api/driver/submissions/2026-11-11/' . $sid . '"')
+        && !str_contains($audit, 'smoke-pass-1'));
 } catch (Throwable $e) {
     $failures[] = 'exception: ' . $e->getMessage();
     echo "  FAIL  " . get_class($e) . ': ' . $e->getMessage() . "\n";

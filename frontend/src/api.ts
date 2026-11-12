@@ -38,11 +38,11 @@ export const ERROR_CODES = [
   // Plan
   'TYPE_IMMUTABLE', 'WEEKDAY_NOT_ALLOWED', 'DAY_CLASS_VIOLATION', 'PAST_DATE_LOCKED', 'NOT_AN_OCCURRENCE',
   'DUPLICATE_STOP', 'CUSTOMER_INACTIVE', 'CUSTOMER_NOT_ROUTABLE', 'CODE_IN_USE', 'STALE_REVISION',
-  'HOLIDAY_CONFLICT', 'RUN_EXISTS',
+  'HOLIDAY_CONFLICT', 'RUN_EXISTS', 'TYPE_NOT_ROUTABLE',
   // Master data and settings
   'WASTE_TYPES_REQUIRED', 'UNKNOWN_WASTE_TYPE', 'WASTE_TYPE_IN_USE', 'CUSTOMER_IN_USE', 'ROLLOVER_SHIFTS_TODAY',
-  // Tasks
-  'TYPE_ROUTABLE', 'CUSTOMER_LACKS_TYPE', 'RECURRING_NOT_ALLOWED', 'TASK_FIELD_IMMUTABLE',
+  // Submissions
+  'TYPE_ROUTABLE', 'CUSTOMER_LACKS_TYPE',
   // Runs
   'NOT_TODAY', 'NOT_RUNNABLE', 'RUN_TAKEN', 'DRIVER_HAS_ACTIVE_RUN', 'NOT_HOLDER', 'VEHICLE_REQUIRED', 'VEHICLE_UNKNOWN',
   // Visits
@@ -386,7 +386,6 @@ export interface WasteType {
   unit: string;
   weigh_method: WeighMethod;
   routable: boolean;
-  recurring_tasks: boolean;
   confirm_over: number | null;
   active: boolean;
 }
@@ -414,7 +413,7 @@ export type DayClass = 'work' | 'rest';
 export type RouteType = 'regular' | 'special' | 'adhoc';
 export type OccurrenceStatus = 'scheduled' | 'cancelled' | 'holiday_skipped';
 export type RunStatus = 'planned' | 'not_started' | 'active' | 'open' | 'done' | 'incomplete' | 'no_record';
-export type CanCreate = 'regular' | 'adhoc' | 'special' | 'special_once' | 'task';
+export type CanCreate = 'regular' | 'adhoc' | 'special' | 'special_once';
 export type Outcome = 'collected' | 'missed';
 export type MissReason = 'no_waste' | 'closed' | 'no_access' | 'refused' | 'other' | 'not_visited';
 export const MISS_REASONS: MissReason[] = ['no_waste', 'closed', 'no_access', 'refused', 'other', 'not_visited'];
@@ -487,6 +486,8 @@ export interface RouteOccurrence {
   code: string;
   color: number;
   type: RouteType;
+  /** The one waste type this route collects (REL for a route stored before routes had one). */
+  waste_type: string;
   name: string;
   date: IsoDate;
   recurring: boolean;
@@ -517,32 +518,6 @@ export interface RouteOccurrence {
   run: RunSummary | null;
 }
 
-export interface TaskOccurrence {
-  key: string; // 't6@2026-11-11'
-  kind: 'task';
-  task_id: number;
-  waste_type: string;
-  customer_id: number;
-  date: IsoDate;
-  recurring: boolean;
-  days: number[] | null;
-  start?: IsoDate | null;
-  end?: IsoDate | null;
-  status: OccurrenceStatus;
-  edited: boolean;
-  frozen: boolean;
-  note: string;
-  task_note?: string;
-  occurrence_note?: string;
-  orphan?: boolean;
-  rev: number;
-  copied_from: { task_id: number; date: IsoDate } | null;
-  covered_by: { task_id: number; date: IsoDate }[];
-  visit: VisitSummary | null;
-  run_status: RunStatus | null;
-  run: RunSummary | null;
-}
-
 export interface CustomerRef {
   id: number;
   code: string;
@@ -561,7 +536,6 @@ export interface CalendarResponse {
   missing_holiday_years: number[];
   days: CalendarDay[];
   routes: RouteOccurrence[];
-  tasks: TaskOccurrence[];
   customers: Record<string, CustomerRef>;
   /** First column of the week and of the month grid (the request's week_start, default 'mon'). */
   week_start?: WeekStart;
@@ -587,6 +561,8 @@ export interface Route {
   code: string;
   color: number;
   type: RouteType;
+  /** The one waste type the route collects; never changes. */
+  waste_type: string;
   name: string;
   note: string;
   rev: number;
@@ -640,6 +616,7 @@ export interface RouteListItem {
   code: string;
   color: number;
   type: RouteType;
+  waste_type: string;
   name: string;
   note?: string;
   recurring?: boolean;
@@ -663,10 +640,11 @@ export interface RouteListItem {
   route_next_date?: IsoDate | null;
 }
 
-export type RouteCreate =
+export type RouteCreate = { waste_type: string } & (
   | { type: 'regular'; code: string; color?: number | null; name: string; note?: string; start: IsoDate; end?: IsoDate | null; days: number[]; stops: Stop[] }
   | { type: 'special'; code: string; color?: number | null; name: string; note?: string; start: IsoDate; end?: IsoDate | null; sun: boolean; ph: boolean; stops: Stop[] }
-  | { type: 'special' | 'adhoc'; code: string; color?: number | null; name: string; note?: string; date: IsoDate; stops: Stop[] };
+  | { type: 'special' | 'adhoc'; code: string; color?: number | null; name: string; note?: string; date: IsoDate; stops: Stop[] }
+);
 
 export interface RoutePatch {
   rev: number;
@@ -758,100 +736,6 @@ export const suggestRouteCode = (q: { type: 'adhoc' | 'special' | 'copy'; date: 
   request('GET', '/routes/suggest-code', undefined, { query: q });
 
 // ---------------------------------------------------------------------------------------------
-// §10.6 Tasks
-// ---------------------------------------------------------------------------------------------
-
-export interface Task {
-  id: number;
-  waste_type: string;
-  customer_id: number;
-  note: string;
-  rev: number;
-  recurring?: boolean;
-  // one-off
-  date?: IsoDate | null;
-  copied_from?: { task_id: number; date: IsoDate } | null;
-  // recurring
-  start?: IsoDate | null;
-  end?: IsoDate | null;
-  days?: number[] | null;
-}
-
-export interface TaskOverride {
-  task_id: number;
-  date: IsoDate;
-  cancelled: boolean;
-  note: string;
-}
-
-export interface TaskDetail extends Task {
-  overrides: TaskOverride[];
-  customer?: CustomerRef | null;
-  next_date?: IsoDate | null;
-}
-
-export interface TaskListItem {
-  id: number;
-  waste_type: string;
-  customer: { id: number; code: string; name: string };
-  customer_id?: number;
-  recurring?: boolean;
-  date?: IsoDate | null;
-  start?: IsoDate | null;
-  end?: IsoDate | null;
-  days?: number[] | null;
-  note: string;
-  next_date: IsoDate | null;
-  today_status: RunStatus | OccurrenceStatus | null;
-  rev: number;
-  ended?: boolean;
-}
-
-export type TaskCreate =
-  | { waste_type: string; customer_id: number; date: IsoDate; note?: string }
-  | { waste_type: string; customer_id: number; start: IsoDate; end?: IsoDate | null; days: number[]; note?: string };
-
-export interface TaskPatch {
-  rev: number;
-  note?: string;
-  date?: IsoDate;
-  days?: number[];
-  start?: IsoDate;
-  end?: IsoDate | null;
-  release_run?: boolean;
-}
-
-export interface TaskDatePut {
-  rev: number;
-  cancelled?: boolean;
-  note?: string;
-  release_run?: boolean;
-}
-
-export interface CopyTaskBody {
-  rev?: number;
-  to: IsoDate;
-  note?: string;
-  skip_source?: boolean;
-  release_run?: boolean;
-}
-
-export const listTasks = (q: { type?: string; kind?: 'one_off' | 'recurring'; ended?: boolean } = {}): Promise<TaskListItem[]> =>
-  request('GET', '/tasks', undefined, { query: { type: q.type, kind: q.kind, ended: q.ended ? 1 : 0 } });
-export const getTask = (id: number): Promise<TaskDetail> => request('GET', `/tasks/${id}`);
-/** 201 Task | 422 TYPE_ROUTABLE | CUSTOMER_LACKS_TYPE | RECURRING_NOT_ALLOWED | PAST_DATE_LOCKED */
-export const createTask = (body: TaskCreate): Promise<Task> => request('POST', '/tasks', body);
-export const patchTask = (id: number, body: TaskPatch): Promise<Task> => request('PATCH', `/tasks/${id}`, body);
-export const deleteTask = (id: number, rev: number, releaseRun = false): Promise<null> =>
-  request('DELETE', `/tasks/${id}`, undefined, { query: { rev, release_run: releaseRun ? 1 : undefined } });
-export const putTaskDate = (id: number, date: IsoDate, body: TaskDatePut): Promise<{ task: Task; occurrence: TaskOccurrence }> =>
-  request('PUT', `/tasks/${id}/dates/${date}`, body);
-export const resetTaskDate = (id: number, date: IsoDate, rev: number, releaseRun = false): Promise<any> =>
-  request('DELETE', `/tasks/${id}/dates/${date}`, undefined, { query: { rev, release_run: releaseRun ? 1 : undefined } });
-export const copyTaskDate = (id: number, date: IsoDate, body: CopyTaskBody): Promise<{ created: Task }> =>
-  request('POST', `/tasks/${id}/dates/${date}/copy`, body);
-
-// ---------------------------------------------------------------------------------------------
 // §10.7 Customers
 // ---------------------------------------------------------------------------------------------
 
@@ -868,24 +752,24 @@ export interface Customer {
 
 export interface CustomerListItem extends Customer {
   routes: string[]; // codes of routes that use it from today on
-  tasks: string[]; // waste types of tasks that use it from today on
 }
 
-export type TaskSchedule = { date: IsoDate } | { start: IsoDate | null; end: IsoDate | null; days: number[] };
-
 export interface CustomerDetail extends Customer {
-  routes: { route_id: number; code: string; name: string; type: RouteType }[];
-  tasks: { task_id: number; waste_type: string; schedule: TaskSchedule }[];
+  routes: { route_id: number; code: string; name: string; type: RouteType; waste_type: string }[];
 }
 
 /** One item that a detach / archive removed (or, in CUSTOMER_IN_USE, would remove). */
-export type RemovedItem =
-  | { kind: 'route'; route_id: number; code: string; name?: string; where: 'template' | 'override' | 'one-off'; date: IsoDate | null }
-  | { kind: 'task'; task_id: number; waste_type: string; action: 'ended' | 'deleted' };
+export interface RemovedItem {
+  kind: 'route';
+  route_id: number;
+  code: string;
+  name?: string;
+  where: 'template' | 'override' | 'one-off';
+  date: IsoDate | null;
+}
 
 export interface CustomerInUseDetails {
-  routes: Extract<RemovedItem, { kind: 'route' }>[];
-  tasks: Extract<RemovedItem, { kind: 'task' }>[];
+  routes: RemovedItem[];
 }
 
 export interface CustomerWrite {
@@ -912,7 +796,7 @@ export const listCustomers = (q: CustomerQuery = {}, opts?: RequestOptions): Pro
 export const getCustomer = (id: number): Promise<CustomerDetail> => request('GET', `/customers/${id}`);
 export const createCustomer = (body: CustomerWrite & { name: string; waste_types: string[] }): Promise<Customer> =>
   request('POST', '/customers', body);
-/** PATCH; 409 CUSTOMER_IN_USE {routes, tasks} unless detach = true (then the result has `removed`). */
+/** PATCH; 409 CUSTOMER_IN_USE {routes} unless detach = true (then the result has `removed`). */
 export const patchCustomer = (
   id: number,
   body: CustomerWrite & { detach?: boolean; release_run?: boolean },
@@ -948,16 +832,15 @@ export const deleteHoliday = (date: IsoDate, releaseRun = false): Promise<null> 
 // ---------------------------------------------------------------------------------------------
 
 export type WasteTypeCreate = Omit<WasteType, 'active'> & { active?: boolean };
-export type WasteTypePatch = Partial<Pick<WasteType, 'name' | 'abbr' | 'weigh_method' | 'recurring_tasks' | 'confirm_over' | 'active'>>;
+export type WasteTypePatch = Partial<Pick<WasteType, 'name' | 'abbr' | 'weigh_method' | 'confirm_over' | 'active'>>;
 
 export interface WasteTypeInUseDetails {
   routes?: { route_id: number; code: string; name: string; type: RouteType }[];
-  tasks?: { task_id: number; customer_id: number; schedule: TaskSchedule }[];
 }
 
 export const listWasteTypes = (): Promise<WasteType[]> => request('GET', '/waste-types');
 export const createWasteType = (body: WasteTypeCreate): Promise<WasteType> => request('POST', '/waste-types', body);
-/** 409 WASTE_TYPE_IN_USE {routes | tasks} on deactivation. */
+/** 409 WASTE_TYPE_IN_USE {routes} when a routable type that live routes collect is deactivated. */
 export const patchWasteType = (code: string, body: WasteTypePatch): Promise<WasteType> =>
   request('PATCH', `/waste-types/${enc(code)}`, body);
 export const orderWasteTypes = (codes: string[]): Promise<WasteType[]> => request('PUT', '/waste-types/order', { codes });
@@ -1019,7 +902,6 @@ export interface DriverRow {
   name: string;
   active: boolean;
   route_job: { date: IsoDate; job: string; code: string; pending: number } | null;
-  task_jobs: { job: string; customer: string }[];
 }
 
 export const listUsers = (): Promise<UserRow[]> => request('GET', '/users');
@@ -1086,14 +968,14 @@ export interface JobStop {
 
 export interface JobDetail {
   date: IsoDate;
-  job: string; // 'r5' | 't6'
-  kind: 'route' | 'task';
-  code: string | null;
-  color: number | null;
-  type: RouteType | null;
-  name: string | null;
+  job: string; // 'r5'
+  kind: 'route';
+  code: string;
+  color: number;
+  type: RouteType;
+  name: string;
   note: string;
-  waste_type: string | null; // task: 'OTC'
+  waste_type: string; // the one type this route collects
   status: RunStatus;
   holder: { id: number; name: string } | null;
   mine: boolean;
@@ -1139,6 +1021,10 @@ export interface VisitWrite {
   captured_at?: IsoTime; // driver
   why?: string | null; // office, required when changing an existing visit
   driver_id?: number | null; // office, new visit only
+  // A driver's free submission only (PUT /driver/submissions/{date}/{id}; customer_id names the customer there).
+  waste_type?: string;
+  customer_id?: number;
+  vehicle_no?: string | null;
 }
 
 export const getRun = (date: IsoDate, job: string): Promise<OfficeJobDetail> => request('GET', `/runs/${date}/${job}`);
@@ -1157,6 +1043,7 @@ export interface DriverRouteCard {
   code: string;
   color: number;
   type: RouteType;
+  waste_type: string;
   name: string;
   note: string;
   stops: number;
@@ -1172,29 +1059,16 @@ export interface DriverRouteCard {
   can_take: boolean;
 }
 
-export interface DriverTaskCard {
-  job: string;
-  date: IsoDate;
-  waste_type: string;
-  recurring: boolean;
-  note: string;
-  customer: { id: number; name: string; address: string };
-  status: RunStatus;
-  driver: { id: number; name: string } | null;
-  can_take: boolean;
-  also_on: { job: string; code: string }[];
-}
-
 export interface DriverToday {
   today: IsoDate;
   now: IsoTime;
+  /** The rollover that ends `today` (absent in a copy cached by an older app version). */
+  day_ends_at?: IsoTime;
   me: { id: number; name: string; lang: Lang };
   my_route: null | { date: IsoDate; job: string; code: string; name: string; pending: number; total: number; vehicle_no: string | null; assigned: boolean };
-  my_tasks: { date: IsoDate; job: string; waste_type: string; customer: string; vehicle_no: string | null; assigned: boolean }[];
   waste_types: WasteType[];
   trucks: string[];
   routes: DriverRouteCard[];
-  tasks: DriverTaskCard[];
 }
 
 export interface ClaimBody {
@@ -1224,6 +1098,54 @@ export const putDriverStop = (date: IsoDate, job: string, customerId: number, bo
 /** Leave / give back / finish. */
 export const driverRelease = (date: IsoDate, job: string, body: ReleaseBody): Promise<ReleaseResult> =>
   request('POST', `/driver/runs/${date}/${job}/release`, body);
+
+// ---------------------------------------------------------------------------------------------
+// Free submissions of the non-routable waste types (OTC, COMPACTOR, EROSE): no plan, no claim
+// ---------------------------------------------------------------------------------------------
+
+/** A customer a driver can submit for: only its active non-routable types. */
+export interface SubmitCustomer {
+  id: number;
+  code: string;
+  name: string;
+  address: string;
+  waste_types: string[];
+}
+
+/** A submission: the shape of a visit plus id, date, waste_type and vehicle_no. */
+export interface Submission extends Omit<Visit, 'ops' | 'history'> {
+  id: string;
+  date: IsoDate;
+  waste_type: string;
+  vehicle_no: string | null;
+  ops?: Visit['ops'];
+  history?: Visit['history'];
+}
+
+/** Body of PUT /driver/submissions/{date}/{id}. outcome null deletes the submission. */
+export type SubmissionWrite = Omit<VisitWrite, 'why' | 'driver_id'>;
+
+export interface DriverSubmissions {
+  today: IsoDate;
+  date: IsoDate;
+  submissions: Submission[];
+}
+
+export interface OfficeSubmissions {
+  today: IsoDate;
+  date: IsoDate;
+  totals: Record<string, number>;
+  submissions: (Submission & { driver: string | null })[];
+}
+
+export const driverCustomers = (opts?: RequestOptions): Promise<SubmitCustomer[]> => request('GET', '/driver/customers', undefined, opts);
+export const driverSubmissions = (date?: IsoDate, opts?: RequestOptions): Promise<DriverSubmissions> =>
+  request('GET', '/driver/submissions', undefined, { ...opts, query: { date } });
+/** 201 new | 200 changed, deleted or replayed; warning LATE. The id is made on the phone, so a resend never duplicates. */
+export const putDriverSubmission = (date: IsoDate, id: string, body: SubmissionWrite, opts?: RequestOptions): Promise<ApiResult<{ submission: Submission | null; replay: boolean }>> =>
+  requestFull('PUT', `/driver/submissions/${date}/${id}`, body, opts);
+/** Office: every submission of one operational day (read only). */
+export const listSubmissions = (date: IsoDate): Promise<OfficeSubmissions> => request('GET', '/submissions', undefined, { query: { date } });
 
 // ---------------------------------------------------------------------------------------------
 // §10.10 Files

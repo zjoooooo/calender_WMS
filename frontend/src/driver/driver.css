@@ -71,7 +71,7 @@
 .sec.open { color: var(--warn); }
 .empty { color: var(--muted); font-size: 17px; padding: 8px 0; }
 
-/* ---- job cards (route 72 px, task) -------------------------------------------------------------- */
+/* ---- job cards (route 72 px, submission) -------------------------------------------------------------- */
 .jcard {
   display: grid; grid-template-columns: 8px 1fr; width: 100%; min-height: 72px; padding: 0; overflow: hidden; text-align: left;
   border: 2px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--fg); text-decoration: none;

@@ -1,8 +1,8 @@
 // Pure view logic of the office calendar (§5.8, §9.2): bucketing the server's occurrences per day,
-// type / task filters, the legend, highlight and search (one matcher), and small text helpers.
+// type filters, the legend, highlight and search (one matcher), and small text helpers.
 // The client never computes a weekday, day class, status or lock for rules: those come from the payload.
 // The only date arithmetic here (addDays, nextWorkDayAfter) is for form defaults such as "end = D − 1".
-import type { CalendarDay, CalendarResponse, RouteOccurrence, RouteType, RunStatus, TaskOccurrence } from '../api';
+import type { CalendarDay, CalendarResponse, RouteOccurrence, RouteType, RunStatus } from '../api';
 
 /** 'YYYY-MM-DD' + n days (UTC arithmetic, no time zone involved). */
 export function addDays(date: string, n: number): string {
@@ -33,8 +33,6 @@ export function naturalCompare(a: string, b: string): number {
 export interface Filters {
   /** Route types shown (R, S, ⚡A chips). */
   types: Record<RouteType, boolean>;
-  /** Task waste types hidden (chip off). A code not listed is shown. */
-  hiddenTaskTypes: string[];
 }
 
 export const ALL_TYPES: Record<RouteType, boolean> = { regular: true, special: true, adhoc: true };
@@ -42,22 +40,17 @@ export const ALL_TYPES: Record<RouteType, boolean> = { regular: true, special: t
 export interface DaySummary {
   routes: number; // scheduled routes
   stops: number; // stops on scheduled routes
-  tasks: number; // scheduled tasks
   paused: number; // holiday_skipped routes
 }
 
 export interface DayGroups {
   day: CalendarDay;
-  /** Tasks group (§5.8 1), after the task filter. */
-  tasks: TaskOccurrence[];
   /** Scheduled and cancelled routes (§5.8 2), after the type filter. */
   routes: RouteOccurrence[];
   /** holiday_skipped regular routes (§5.8 3), after the type filter. */
   paused: RouteOccurrence[];
   /** Counts of the whole day (filters do not change them). */
   summary: DaySummary;
-  /** Every task of the day (unfiltered), for the collapsed line and the month chip tooltip. */
-  allTasks: TaskOccurrence[];
 }
 
 export function byDate<T extends { date: string }>(items: T[]): Map<string, T[]> {
@@ -73,25 +66,20 @@ export function byDate<T extends { date: string }>(items: T[]): Map<string, T[]>
 /** Splits the payload into day columns, keeping the server's §5.8 order. */
 export function groupDays(data: CalendarResponse, filters: Filters): DayGroups[] {
   const routes = byDate(data.routes);
-  const tasks = byDate(data.tasks);
   return data.days.map((day) => {
     const r = routes.get(day.date) ?? [];
-    const t = tasks.get(day.date) ?? [];
     const scheduled = r.filter((o) => o.status === 'scheduled');
     const summary: DaySummary = {
       routes: scheduled.length,
       stops: scheduled.reduce((n, o) => n + o.stops.length, 0),
-      tasks: t.filter((o) => o.status === 'scheduled').length,
       paused: r.filter((o) => o.status === 'holiday_skipped').length,
     };
     const shown = r.filter((o) => filters.types[o.type] !== false);
     return {
       day,
-      tasks: t.filter((o) => !filters.hiddenTaskTypes.includes(o.waste_type)),
       routes: shown.filter((o) => o.status !== 'holiday_skipped'),
       paused: shown.filter((o) => o.status === 'holiday_skipped'),
       summary,
-      allTasks: t,
     };
   });
 }
@@ -102,7 +90,6 @@ export interface Matcher {
   /** True while a highlight or a search is in force (everything else dims). */
   active: boolean;
   route: (o: RouteOccurrence) => boolean;
-  task: (o: TaskOccurrence) => boolean;
   /** Legend chips: the code has at least one matching occurrence. */
   code: (code: string) => boolean;
 }
@@ -111,15 +98,15 @@ const yes = () => true;
 
 /**
  * Highlight and search are exclusive (the caller keeps only the last one used).
- * - Highlight: the code only, on every date; tasks dim.
- * - Search: routes by code, name or a stop customer's name or code; tasks by customer name or code.
+ * - Highlight: the code only, on every date.
+ * - Search: routes by code, name or a stop customer's name or code.
  */
 export function makeMatcher(data: CalendarResponse | undefined, hl: string | null, q: string): Matcher {
   if (hl) {
-    return { active: true, route: (o) => o.code === hl, task: () => false, code: (c) => c === hl };
+    return { active: true, route: (o) => o.code === hl, code: (c) => c === hl };
   }
   const needle = q.trim().toLowerCase();
-  if (!needle) return { active: false, route: yes, task: yes, code: yes };
+  if (!needle) return { active: false, route: yes, code: yes };
   const customers = data?.customers ?? {};
   const custHit = (id: number) => {
     const c = customers[String(id)];
@@ -131,7 +118,7 @@ export function makeMatcher(data: CalendarResponse | undefined, hl: string | nul
     o.stops.some((s) => custHit(s.customer_id)) ||
     (o.off_plan ?? []).some((s) => custHit(s.customer_id));
   const codes = new Set((data?.routes ?? []).filter(route).map((o) => o.code));
-  return { active: true, route, task: (o) => custHit(o.customer_id), code: (c) => codes.has(c) };
+  return { active: true, route, code: (c) => codes.has(c) };
 }
 
 /** Paused PH routes (§6.4): how many still need a decision and how many a copy already covers. */
@@ -145,10 +132,10 @@ export function pausedCounts(list: Pick<RouteOccurrence, 'covered_by'>[]): { ope
 /** A month cell shows at most this many lines before it collapses ("N more"). */
 export const MONTH_CELL_MAX = 4;
 
-export type CellItem = RouteOccurrence | TaskOccurrence;
+export type CellItem = RouteOccurrence;
 
 export interface MonthCellLines {
-  /** Every line of the cell: routes (day order) then tasks, after the type filters. */
+  /** Every line of the cell: routes (day order), after the type filters. */
   items: CellItem[];
   /** The lines drawn now. */
   shown: CellItem[];
@@ -168,14 +155,14 @@ export interface MonthCellLines {
  * a search / highlight matches one of the hidden lines. Paused PH routes are not lines (own "⏸ N" line).
  */
 export function monthCellLines(
-  g: Pick<DayGroups, 'routes' | 'tasks'>,
+  g: Pick<DayGroups, 'routes'>,
   expanded: boolean,
-  matcher?: Pick<Matcher, 'active' | 'route' | 'task'>,
+  matcher?: Pick<Matcher, 'active' | 'route'>,
   max: number = MONTH_CELL_MAX,
 ): MonthCellLines {
-  const items: CellItem[] = [...g.routes, ...g.tasks];
+  const items: CellItem[] = g.routes;
   const collapsible = items.length > max;
-  const matches = (o: CellItem) => (o.kind === 'route' ? matcher!.route(o) : matcher!.task(o));
+  const matches = (o: CellItem) => matcher!.route(o);
   const auto = collapsible && !expanded && !!matcher?.active && items.slice(max).some(matches);
   const open = !collapsible || expanded || auto;
   return {
@@ -254,30 +241,7 @@ export function routesByCustomer(routes: RouteOccurrence[], exceptRouteId?: numb
   return m;
 }
 
-/** Per customer: the waste types of the scheduled tasks on one date (stop label "also on: OTC task"). */
-export function tasksByCustomer(tasks: TaskOccurrence[]): Map<number, string[]> {
-  const m = new Map<number, string[]>();
-  for (const o of tasks) {
-    if (o.status !== 'scheduled') continue;
-    const list = m.get(o.customer_id) ?? [];
-    if (!list.includes(o.waste_type)) list.push(o.waste_type);
-    m.set(o.customer_id, list);
-  }
-  return m;
-}
-
-/** Counts for the collapsed tasks line: per waste type, plus how many are unclaimed today. */
-export function taskGroupCounts(tasks: TaskOccurrence[]): { byType: [string, number][]; unclaimed: number } {
-  const byType = new Map<string, number>();
-  let unclaimed = 0;
-  for (const o of tasks) {
-    byType.set(o.waste_type, (byType.get(o.waste_type) ?? 0) + 1);
-    if (o.run_status === 'not_started') unclaimed++;
-  }
-  return { byType: [...byType.entries()], unclaimed };
-}
-
-/** Job key of an occurrence for /api/runs/{date}/{job}: 'r5' or 't6'. */
-export function jobOf(o: RouteOccurrence | TaskOccurrence): string {
-  return o.kind === 'route' ? `r${o.route_id}` : `t${o.task_id}`;
+/** Job key of an occurrence for /api/runs/{date}/{job}: 'r5'. */
+export function jobOf(o: RouteOccurrence): string {
+  return `r${o.route_id}`;
 }

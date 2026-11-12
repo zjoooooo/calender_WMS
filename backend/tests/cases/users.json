@@ -27,13 +27,13 @@
     ]
   },
   {
-    "name": "drivers list shows the jobs each driver holds today (R25)",
+    "name": "drivers list shows the route job each driver holds today (R25); the old t6 run is not a job",
     "now": "2026-11-11T10:00:00+08:00",
     "given": { "fixture": "basic" },
     "call": { "method": "GET", "path": "/api/drivers", "as": "mei" },
     "expect": { "status": 200, "data_subset": [
-      { "id": 3, "name": "Ali", "active": true, "route_job": { "date": "2026-11-11", "job": "r5", "code": "N1", "pending": 1 }, "task_jobs": [ { "job": "t6", "customer": "ABC Restaurant" } ] },
-      { "id": 4, "name": "Bala", "active": true, "route_job": null, "task_jobs": [] } ] }
+      { "id": 3, "name": "Ali", "active": true, "route_job": { "date": "2026-11-11", "job": "r5", "code": "N1", "pending": 1 }, "task_jobs": { "$absent": true } },
+      { "id": 4, "name": "Bala", "active": true, "route_job": null } ] }
   },
   {
     "name": "a finished route is not held",
@@ -42,17 +42,17 @@
       "r5": { "job": "r5", "driver_id": 3, "holds": [], "removed": [], "visits": {
         "12": { "customer_id": 12, "outcome": "collected", "rev": 1 }, "40": { "customer_id": 40, "outcome": "missed", "rev": 1 } } } } } } },
     "call": { "method": "GET", "path": "/api/drivers", "as": "admin" },
-    "expect": { "status": 200, "data_subset": [ { "id": 3, "route_job": null, "task_jobs": [] }, { "id": 4 } ] }
+    "expect": { "status": 200, "data_subset": [ { "id": 3, "route_job": null }, { "id": 4 } ] }
   },
   {
     "name": "yesterday's runs are never held (night shift ended at the rollover)",
     "now": "2026-11-12T04:00:00+08:00",
     "given": { "fixture": "basic" },
     "call": { "method": "GET", "path": "/api/drivers", "as": "mei" },
-    "expect": { "status": 200, "data_subset": [ { "id": 3, "route_job": null, "task_jobs": [] }, { "id": 4 } ] }
+    "expect": { "status": 200, "data_subset": [ { "id": 3, "route_job": null }, { "id": 4 } ] }
   },
   {
-    "name": "deactivating a driver releases the jobs they hold (R24)",
+    "name": "deactivating a driver releases the route jobs they hold (R24); a run of the old task feature is left as it is",
     "now": "2026-11-11T10:00:00+08:00",
     "given": { "fixture": "basic" },
     "steps": [
@@ -60,7 +60,7 @@
         "expect": { "status": 200, "data_subset": { "active": false },
           "docs_subset": { "day:2026-11-11": { "runs": {
             "r5": { "driver_id": null, "holds": [ { "driver_id": 3, "to": "2026-11-11T10:00:00+08:00", "end": "released" } ], "visits": { "12": { "outcome": "collected" } } },
-            "t6": { "driver_id": null, "holds": [ { "end": "released" } ] } } } } } },
+            "t6": { "driver_id": 3, "holds": [ { "to": null, "end": null } ] } } } } } },
       { "call": { "method": "GET", "path": "/api/drivers", "as": "mei" },
         "expect": { "data_subset": [ { "id": 3, "active": false, "route_job": null }, { "id": 4 } ] } }
     ]

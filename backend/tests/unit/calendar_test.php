@@ -25,14 +25,14 @@ return (static function (): array {
             T::subset(['date' => '2026-11-09', 'dow' => 1, 'class' => 'rest', 'holiday' => 'Deepavali (observed)', 'past' => true,
                 'in_month' => true, 'can_create' => [], 'ops' => ['$any' => true]], $day($c, '2026-11-09'));
             T::subset(['date' => '2026-11-11', 'dow' => 3, 'class' => 'work', 'holiday' => null, 'past' => false,
-                'can_create' => ['regular', 'adhoc', 'task'], 'totals' => ['REL' => 120.5], 'provisional' => true,
-                'ops' => ['not_started' => 0, 'active' => 2, 'open' => 0, 'done' => 0, 'incomplete' => 0, 'no_record' => 0]], $day($c, '2026-11-11'));
-            T::subset(['class' => 'work', 'can_create' => ['regular', 'adhoc', 'task'], 'ops' => ['$absent' => true], 'provisional' => false],
+                'can_create' => ['regular', 'adhoc'], 'totals' => ['REL' => 120.5], 'provisional' => true,
+                'ops' => ['not_started' => 0, 'active' => 1, 'open' => 0, 'done' => 0, 'incomplete' => 0, 'no_record' => 0]], $day($c, '2026-11-11'));
+            T::subset(['class' => 'work', 'can_create' => ['regular', 'adhoc'], 'ops' => ['$absent' => true], 'provisional' => false],
                 $day($c, '2026-11-12'));
-            T::subset(['dow' => 7, 'class' => 'rest', 'can_create' => ['special', 'special_once', 'task']], $day($c, '2026-11-15'));
+            T::subset(['dow' => 7, 'class' => 'rest', 'can_create' => ['special', 'special_once']], $day($c, '2026-11-15'));
             $raw = $env()->call('GET', '/api/calendar?view=week&anchor=2026-11-11', null, 'mei')['response']->body;
             T::true(str_contains($raw, '"date":"2026-11-12","dow":4,"class":"work","holiday":null,"past":false,"in_month":true,'
-                . '"can_create":["regular","adhoc","task"],"totals":{}'), 'empty totals encode as an object');
+                . '"can_create":["regular","adhoc"],"totals":{}'), 'empty totals encode as an object');
             // anchor defaults to today; any day of the week gives the same range
             T::eq('2026-11-09', $cal($env(), 'view=week')['from']);
             T::eq('2026-11-16', $cal($env(), 'view=week&anchor=2026-11-22')['from']);
@@ -52,17 +52,16 @@ return (static function (): array {
             $d = $cal($env(), 'view=month&anchor=2026-12-05');
             T::subset(['prev_anchor' => '2026-11-01', 'next_anchor' => '2027-01-01'], $d);
         },
-        'occurrences: routes and tasks with keys, stops, covered_by, the paused PH group last; customers map' => function () use ($env, $cal, $on) {
+        'occurrences: routes with keys, waste type, stops, covered_by, the paused PH group last; customers map' => function () use ($env, $cal, $on) {
             $c = $cal($env(), 'view=week&anchor=2026-12-25');
             T::eq(['r42@2026-12-25', 'r7@2026-12-25', 'r5@2026-12-25'], array_column($on($c, 'routes', '2026-12-25'), 'key'));
             T::subset(['key' => 'r5@2026-12-25', 'status' => 'holiday_skipped', 'run_status' => null, 'run' => null, 'frozen' => false,
                 'covered_by' => [['route_id' => 42, 'code' => 'N1-25', 'date' => '2026-12-25']]], $on($c, 'routes', '2026-12-25')[2]);
-            T::subset(['key' => 'r42@2026-12-25', 'kind' => 'route', 'type' => 'special', 'recurring' => false, 'status' => 'scheduled',
+            T::subset(['key' => 'r42@2026-12-25', 'kind' => 'route', 'type' => 'special', 'waste_type' => 'REL', 'recurring' => false, 'status' => 'scheduled',
                 'run_status' => 'planned', 'copied_from' => ['route_id' => 5, 'date' => '2026-12-25'], 'rev' => 1, 'edited' => false,
                 'stops' => [['seq' => 1, 'customer_id' => 12, 'note' => '3 bins', 'visit' => null], ['seq' => 2, 'customer_id' => 40]], 'off_plan' => []],
                 $on($c, 'routes', '2026-12-25')[0]);
-            T::subset([['key' => 't3@2026-12-25', 'kind' => 'task', 'waste_type' => 'COMPACTOR', 'customer_id' => 40, 'run_status' => 'planned', 'visit' => null]],
-                $on($c, 'tasks', '2026-12-25'));
+            T::eq(false, array_key_exists('tasks', $c), 'the old tasks (t3 would run on Fri 25 Dec) are not on the calendar');
             T::subset(['12' => ['code' => 'C0012', 'name' => 'ABC Restaurant', 'waste_types' => ['REL', 'OTC']], '21' => ['$any' => true],
                 '40' => ['$any' => true], '60' => ['$absent' => true]], $c['customers']);
         },
@@ -82,7 +81,7 @@ return (static function (): array {
                     'last_activity_at' => '2026-11-11T07:30:00+08:00', 'flagged' => 0],
                 'stops' => [['customer_id' => 12, 'visit' => ['outcome' => 'collected', 'weights' => ['REL' => 120.5], 'rev' => 1, 'photos' => 0, 'signature' => false]],
                     ['customer_id' => 40, 'visit' => null]]], $n1);
-            T::subset([['key' => 't6@2026-11-11', 'run_status' => 'active', 'run' => ['pending' => 1, 'total' => 1], 'visit' => null]], $on($c, 'tasks', '2026-11-11'));
+            T::eq(['r5@2026-11-11'], array_column($on($c, 'routes', '2026-11-11'), 'key'), 'the t6 run of the old task feature is not shown, not even as an orphan');
             T::subset([['key' => 'r41@2026-11-12', 'run_status' => 'planned', 'run' => null]], $on($c, 'routes', '2026-11-12'));
         },
         'R22 statuses: not_started, open, done, off_plan visits; a give-back with nothing done is not_started' => function () use ($env, $cal, $on) {
@@ -100,11 +99,13 @@ return (static function (): array {
                 'totals' => ['REL' => 20], 'flagged' => 1, 'last_activity_at' => '2026-11-11T09:00:00+08:00'],
                 'off_plan' => [['customer_id' => 21, 'visit' => ['outcome' => 'collected', 'driver' => 'Bala', 'flags' => ['OFF_PLAN']]]]],
                 $on($c, 'routes', '2026-11-11')[0]);
-            T::eq('not_started', $on($c, 'tasks', '2026-11-11')[0]['run_status'], 'given back with nothing done');
+            $back = $days;
+            $back['2026-11-11']['runs']['r5']['visits'] = [];
+            T::eq('not_started', $on($cal($env(['days' => $back])), 'routes', '2026-11-11')[0]['run_status'], 'given back with nothing done');
             $days['2026-11-11']['runs']['r5']['visits']['40'] = $visit(40, 'missed');
             $c = $cal($env(['days' => $days]));
             T::eq('done', $on($c, 'routes', '2026-11-11')[0]['run_status']);
-            T::subset(['ops' => ['done' => 1, 'not_started' => 1, 'open' => 0], 'provisional' => false, 'totals' => ['REL' => 20]], $c['days'][2]);
+            T::subset(['ops' => ['done' => 1, 'not_started' => 0, 'open' => 0], 'provisional' => false, 'totals' => ['REL' => 20]], $c['days'][2]);
         },
         'R13 freeze at the rollover: 03:59 is still Wed and live; 04:00 freezes Wed (incomplete / no_record)' => function () use ($env, $cal, $on) {
             $e = $env([], '2026-11-12T03:59:00+08:00');
@@ -118,12 +119,11 @@ return (static function (): array {
             T::eq('2026-11-12', $c['today']);
             T::eq('2026-11-11', $e->doc('plan')['frozen_through']);
             $wed = $e->doc('day:2026-11-11');
-            T::subset(['plan' => [['key' => 'r5@2026-11-11', 'status' => 'scheduled', 'stops' => ['$len' => 2]], ['key' => 't6@2026-11-11']],
-                'runs' => ['r5' => ['driver_id' => 3]]], $wed, 'snapshot written, runs untouched');
+            T::subset(['plan' => [['key' => 'r5@2026-11-11', 'status' => 'scheduled', 'waste_type' => 'REL', 'stops' => ['$len' => 2]]],
+                'runs' => ['r5' => ['driver_id' => 3], 't6' => ['driver_id' => 3]]], $wed, 'snapshot written (routes only), runs untouched');
             T::subset(['frozen' => true, 'run_status' => 'incomplete', 'rev' => 4], $on($c, 'routes', '2026-11-11')[0]);
-            T::subset([['run_status' => 'incomplete']], $on($c, 'tasks', '2026-11-11'));
             T::subset([['key' => 'r41@2026-11-12', 'run_status' => 'not_started', 'frozen' => false]], $on($c, 'routes', '2026-11-12'));
-            T::subset(['past' => true, 'can_create' => [], 'ops' => ['incomplete' => 2]], $c['days'][2]);
+            T::subset(['past' => true, 'can_create' => [], 'ops' => ['incomplete' => 1]], $c['days'][2]);
         },
         'R13: the first request freezes every missing day once; a past job with no run is no_record' => function () use ($env, $cal, $on, $noRuns) {
             $e = $env(['days' => $noRuns, 'plan' => ['frozen_through' => '2026-11-07']]);
@@ -131,10 +131,14 @@ return (static function (): array {
             T::eq('2026-11-10', $e->doc('plan')['frozen_through']);
             T::eq([], $e->doc('day:2026-11-08')['plan'], 'Sunday 8 Nov: nothing planned, still frozen');
             T::subset(['plan' => [['key' => 'r5@2026-11-09', 'status' => 'holiday_skipped']]], $e->doc('day:2026-11-09'));
-            T::subset(['plan' => [['key' => 't3@2026-11-10', 'kind' => 'task']]], $e->doc('day:2026-11-10'));
+            T::eq([], $e->doc('day:2026-11-10')['plan'], 'Tue 10 Nov: the old task t3 is not frozen any more');
             $c = $cal($e);
-            T::subset([['key' => 't3@2026-11-10', 'run_status' => 'no_record', 'frozen' => true]], $on($c, 'tasks', '2026-11-10'));
-            T::subset(['ops' => ['no_record' => 1]], $c['days'][1]);
+            T::subset(['ops' => ['no_record' => 0]], $c['days'][1]);
+            // a past scheduled route with no run is no_record
+            $e2 = $env(['days' => $noRuns, 'plan' => ['frozen_through' => '2026-11-03']]);
+            $c2 = $cal($e2, 'view=week&anchor=2026-11-04');
+            T::subset([['key' => 'r5@2026-11-04', 'run_status' => 'no_record', 'frozen' => true, 'waste_type' => 'REL']], $on($c2, 'routes', '2026-11-04'));
+            T::subset(['ops' => ['no_record' => 1]], $c2['days'][2]);
             T::subset([['key' => 'r5@2026-11-09', 'status' => 'holiday_skipped', 'run_status' => null]], $on($c, 'routes', '2026-11-09'));
         },
         'R13: a frozen day never changes after a template edit, a rename, a holiday edit or a delete' => function () use ($env, $cal, $on, $noRuns) {

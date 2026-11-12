@@ -8,6 +8,7 @@ import { useI18n } from '../i18n';
 import { useErrorText } from '../ui/Feedback';
 import { useDriver } from './driverContext';
 import type { NotSentEntry } from './outbox';
+import { isSubJob, subId } from './submission';
 import { BottomBar, Sheet, TopBar } from './parts';
 
 export default function NotSent() {
@@ -52,7 +53,7 @@ export default function NotSent() {
               </div>
             )}
             <div className="dbtns">
-              <Link className="dbtn" to={`/driver/job/${e.date}/${e.job}/stop/${e.customer_id}?notsent=${e.id}`}>
+              <Link className="dbtn" to={isSubJob(e.job) ? `/driver/submit/${e.date}/${subId(e.job)}?notsent=${e.id}` : `/driver/job/${e.date}/${e.job}/stop/${e.customer_id}?notsent=${e.id}`}>
                 {t('driver.notsent.edit')}
               </Link>
               <button

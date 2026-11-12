@@ -1,5 +1,5 @@
 <?php
-// Read side of the plan (§5.1, §5.6, §5.9, §8.3, §10.4): RouteOccurrence / TaskOccurrence (§4.8) for any
+// Read side of the plan (§5.1, §5.6, §5.9, §8.3, §10.4): RouteOccurrence (§4.8) for any
 // date — live from plan.json for d >= today, from days/<d>.json.plan for d < today (R13) — with
 // covered_by, the run overlay (R22 status, RunSummary, VisitSummary) and GET /api/calendar.
 //
@@ -7,8 +7,9 @@
 // Runs::overlay(array $occ, ?array $run, array $ctx): array when that method exists (Runs part).
 // $occ is the occurrence (plan side, stops with seq), $run is runs[job] from the day file or null,
 // $ctx = ['today' => op_date, 'users' => [id => user record]]. It must return $occ with run_status, run
-// (RunSummary|null), and stops[].visit + off_plan (routes) or visit (tasks). defaultOverlay() below is
-// the built-in R22 version.
+// (RunSummary|null), and stops[].visit + off_plan. defaultOverlay() below is the built-in R22 version.
+// Entries of the old task feature (frozen plan entries of kind "task", runs keyed t<id>) stay in the day
+// files and are skipped here: not shown, not counted.
 final class Calendar
 {
     private array $ix;
@@ -16,8 +17,6 @@ final class Calendar
     private array $users = [];
     /** @var array<string,list<array>> "route_id@date" => covered_by entries */
     private array $coveredRoutes = [];
-    /** @var array<string,list<array>> "task_id@date" => covered_by entries */
-    private array $coveredTasks = [];
     /** @var array<int,array> live route id => route */
     private array $liveRoutes = [];
     /** @var array<string,array> memo of day() */
@@ -36,12 +35,6 @@ final class Calendar
                 $this->coveredRoutes[$cf['route_id'] . '@' . $cf['date']][] = ['route_id' => (int) $r['id'], 'code' => $r['code'], 'date' => $r['date']];
             }
         }
-        foreach ($plan['tasks'] ?? [] as $t) {
-            $cf = $t['copied_from'] ?? null;
-            if (Usage::isOneOff($t) && is_array($cf)) {
-                $this->coveredTasks[$cf['task_id'] . '@' . $cf['date']][] = ['task_id' => (int) $t['id'], 'date' => $t['date']];
-            }
-        }
     }
 
     public static function forCtx(Ctx $c): self
@@ -51,7 +44,7 @@ final class Calendar
 
     /**
      * Everything on date $d, already sorted per §5.8.
-     * @return array{routes:list<array>,tasks:list<array>,runs:array,frozen:bool}
+     * @return array{routes:list<array>,runs:array,submissions:array,frozen:bool}
      */
     public function day(string $d): array
     {
@@ -61,18 +54,14 @@ final class Calendar
         $frozen = $d < $this->today;
         $dayDoc = $d <= $this->today ? $this->tx->get('day:' . $d) : null;
         $routes = [];
-        $tasks = [];
         if ($frozen) {
             foreach (($dayDoc['plan'] ?? null) ?: [] as $e) {
                 if (($e['kind'] ?? '') === 'route') {
                     $routes[] = $this->fromFrozenRoute($e, $d);
-                } elseif (($e['kind'] ?? '') === 'task') {
-                    $tasks[] = $this->fromFrozenTask($e, $d);
                 }
             }
         } else {
             $routes = Schedule::routesOn($this->plan, $d, $this->ix);
-            $tasks = Schedule::tasksOn($this->plan, $d, $this->ix);
         }
         $runs = self::runsOf($dayDoc);
         $ctx = ['today' => $this->today, 'users' => $this->users];
@@ -84,31 +73,17 @@ final class Calendar
             $o['covered_by'] = $this->coveredRoutes[$o['route_id'] . '@' . $d] ?? [];
             $routes[$k] = self::overlay($o, $runs[$job] ?? null, $ctx);
         }
-        foreach ($tasks as $k => $o) {
-            $job = 't' . $o['task_id'];
-            $used[$job] = true;
-            $o['frozen'] = $frozen;
-            $o['covered_by'] = $this->coveredTasks[$o['task_id'] . '@' . $d] ?? [];
-            $tasks[$k] = self::overlay($o, $runs[$job] ?? null, $ctx);
-        }
         // §5.6: a run whose occurrence is missing is shown as an orphan row ("plan changed"), never hidden.
         foreach ($runs as $job => $run) {
             if (isset($used[$job])) {
                 continue;
             }
-            $orphan = $this->orphan((string) $job, $run, $d, $frozen);
-            if ($orphan !== null) {
-                if ($orphan['kind'] === 'route') {
-                    $routes[] = self::overlay($orphan, $run, $ctx);
-                } else {
-                    $tasks[] = self::overlay($orphan, $run, $ctx);
-                }
-            }
+            $routes[] = self::overlay($this->orphan((string) $job, $run, $d, $frozen), $run, $ctx);
         }
         return $this->days[$d] = [
             'routes' => Schedule::sortRoutes($routes),
-            'tasks' => Schedule::sortTasks($tasks, $this->ix),
             'runs' => $runs,
+            'submissions' => Submissions::of($dayDoc),
             'frozen' => $frozen,
         ];
     }
@@ -124,26 +99,15 @@ final class Calendar
         return null;
     }
 
-    public function taskOccurrence(int $taskId, string $d): ?array
-    {
-        foreach ($this->day($d)['tasks'] as $o) {
-            if ($o['task_id'] === $taskId && empty($o['orphan'])) {
-                return $o;
-            }
-        }
-        return null;
-    }
-
-    /** R22 status of today's occurrence of a job ('r5' / 't6'), or null. */
+    /** R22 status of today's occurrence of a route job ('r5'), or null. */
     public function todayStatus(string $job): ?string
     {
-        $id = (int) substr($job, 1);
-        $o = $job[0] === 'r' ? $this->routeOccurrence($id, $this->today) : $this->taskOccurrence($id, $this->today);
-        return $o['run_status'] ?? null;
+        return $this->routeOccurrence((int) substr($job, 1), $this->today)['run_status'] ?? null;
     }
 
     /**
-     * Runs of a day doc keyed by job, read defensively (a list of runs with a "job" key is accepted too).
+     * Route runs of a day doc keyed by job, read defensively (a list of runs with a "job" key is accepted
+     * too). Runs keyed t<id> (the old task feature) are left out: they stay in the file, unread.
      * @return array<string,array>
      */
     public static function runsOf(?array $dayDoc): array
@@ -154,7 +118,7 @@ final class Calendar
                 continue;
             }
             $job = is_string($k) ? $k : (string) ($run['job'] ?? '');
-            if (preg_match('/^[rt][1-9][0-9]*$/', $job)) {
+            if (preg_match(Runs::JOB_RE, $job)) {
                 $out[$job] = $run;
             }
         }
@@ -170,7 +134,7 @@ final class Calendar
         }
         return array_merge([
             'key' => 'r' . ($e['route_id'] ?? 0) . '@' . $d, 'kind' => 'route', 'route_id' => 0, 'code' => '', 'color' => 1,
-            'type' => 'regular', 'name' => '', 'recurring' => false, 'days' => null, 'sun' => null, 'ph' => null,
+            'type' => 'regular', 'waste_type' => Usage::DEFAULT_ROUTE_TYPE, 'name' => '', 'recurring' => false, 'days' => null, 'sun' => null, 'ph' => null,
             'start' => null, 'end' => null, 'route_start' => $e['start'] ?? null, 'route_end' => $e['end'] ?? null,
             'status' => 'scheduled', 'edited' => false, 'note' => '',
             'route_note' => '', 'occurrence_note' => '', 'copied_from' => null,
@@ -182,64 +146,32 @@ final class Calendar
         ]);
     }
 
-    private function fromFrozenTask(array $e, string $d): array
-    {
-        $rev = null;
-        foreach ($this->plan['tasks'] ?? [] as $t) {
-            if ((int) $t['id'] === (int) ($e['task_id'] ?? 0)) {
-                $rev = (int) ($t['rev'] ?? 1);
-            }
-        }
-        return array_merge([
-            'key' => 't' . ($e['task_id'] ?? 0) . '@' . $d, 'kind' => 'task', 'task_id' => 0, 'waste_type' => '',
-            'customer_id' => 0, 'recurring' => false, 'days' => null, 'start' => null, 'end' => null,
-            'status' => 'scheduled', 'edited' => false, 'note' => '', 'task_note' => '', 'occurrence_note' => '',
-            'copied_from' => null,
-        ], $e, [
-            'task_id' => (int) ($e['task_id'] ?? 0),
-            'customer_id' => (int) ($e['customer_id'] ?? 0),
-            'date' => $d,
-            'rev' => $rev,
-        ]);
-    }
-
     /** An occurrence-shaped row for a run whose job is not in the plan of that date (§5.6). */
-    private function orphan(string $job, array $run, string $d, bool $frozen): ?array
+    private function orphan(string $job, array $run, string $d, bool $frozen): array
     {
         $id = (int) substr($job, 1);
         $base = ['date' => $d, 'frozen' => $frozen, 'orphan' => true, 'status' => 'scheduled', 'edited' => false,
             'recurring' => false, 'days' => null, 'start' => null, 'end' => null, 'note' => '', 'occurrence_note' => '',
             'rev' => null, 'copied_from' => null, 'covered_by' => []];
-        if ($job[0] === 'r') {
-            // The stop list is unknown: the live route's template (if the route still exists) plus visited customers.
-            $r = $this->liveRoutes[$id] ?? null;
-            $stops = [];
-            $seen = [];
-            $add = static function (int $cid, string $note) use (&$stops, &$seen): void {
-                if (!isset($seen[$cid])) {
-                    $seen[$cid] = true;
-                    $stops[] = ['seq' => count($stops) + 1, 'customer_id' => $cid, 'note' => $note];
-                }
-            };
-            foreach ($r === null ? [] : Schedule::filterStops($this->ix, $r['stops'] ?? []) as $s) {
-                $add($s['customer_id'], $s['note']);
+        // The stop list is unknown: the live route's template (if the route still exists) plus visited customers.
+        $r = $this->liveRoutes[$id] ?? null;
+        $stops = [];
+        $seen = [];
+        $add = static function (int $cid, string $note) use (&$stops, &$seen): void {
+            if (!isset($seen[$cid])) {
+                $seen[$cid] = true;
+                $stops[] = ['seq' => count($stops) + 1, 'customer_id' => $cid, 'note' => $note];
             }
-            foreach (($run['visits'] ?? null) ?: [] as $cid => $v) {
-                $add((int) ($v['customer_id'] ?? $cid), '');
-            }
-            return $base + ['key' => "r$id@$d", 'kind' => 'route', 'route_id' => $id, 'code' => $r['code'] ?? $job,
-                'color' => (int) ($r['color'] ?? 1), 'type' => $r['type'] ?? 'regular', 'name' => (string) ($r['name'] ?? ''),
-                'sun' => null, 'ph' => null, 'route_start' => null, 'route_end' => null, 'route_note' => '', 'stops' => $stops];
+        };
+        foreach ($r === null ? [] : Schedule::filterStops($this->ix, $r['stops'] ?? [], Usage::routeType($r)) as $s) {
+            $add($s['customer_id'], $s['note']);
         }
-        $t = null;
-        foreach ($this->plan['tasks'] ?? [] as $x) {
-            if ((int) $x['id'] === $id) {
-                $t = $x;
-            }
+        foreach (($run['visits'] ?? null) ?: [] as $cid => $v) {
+            $add((int) ($v['customer_id'] ?? $cid), '');
         }
-        $cid = $t !== null ? (int) $t['customer_id'] : (int) (array_key_first($run['visits'] ?? []) ?? 0);
-        return $base + ['key' => "t$id@$d", 'kind' => 'task', 'task_id' => $id, 'waste_type' => $t['waste_type'] ?? '',
-            'customer_id' => $cid, 'task_note' => ''];
+        return $base + ['key' => "r$id@$d", 'kind' => 'route', 'route_id' => $id, 'code' => $r['code'] ?? $job,
+            'color' => (int) ($r['color'] ?? 1), 'type' => $r['type'] ?? 'regular', 'waste_type' => Usage::routeType($r ?? []),
+            'name' => (string) ($r['name'] ?? ''), 'sun' => null, 'ph' => null, 'route_start' => null, 'route_end' => null, 'route_note' => '', 'stops' => $stops];
     }
 
     // ---- run overlay (R22, §4.8, §8.3) -----------------------------------------------------------
@@ -266,7 +198,7 @@ final class Calendar
                 $visits[(int) ($v['customer_id'] ?? $k)] = $v;
             }
         }
-        $stopIds = $occ['kind'] === 'route' ? array_column($occ['stops'], 'customer_id') : [$occ['customer_id']];
+        $stopIds = array_column($occ['stops'], 'customer_id');
         $c = self::counts($stopIds, $visits);
         $status = null;
         if ($run === null || ($c['resolved'] === 0 && (($run['driver_id'] ?? null) === null || $c['pending'] === 0))) {
@@ -282,23 +214,18 @@ final class Calendar
         }
         $occ['run_status'] = $status;
         $occ['run'] = $run === null ? null : self::runSummary($run, $visits, $c, $users);
-        if ($occ['kind'] === 'route') {
-            $on = [];
-            foreach ($occ['stops'] as $k => $s) {
-                $on[$s['customer_id']] = true;
-                $occ['stops'][$k]['visit'] = isset($visits[$s['customer_id']]) ? self::visitSummary($visits[$s['customer_id']], $users) : null;
-            }
-            $off = [];
-            foreach ($visits as $cid => $v) {
-                if (!isset($on[$cid]) && ($v['outcome'] ?? null) !== null) {
-                    $off[] = ['customer_id' => $cid, 'visit' => self::visitSummary($v, $users)];
-                }
-            }
-            $occ['off_plan'] = $off;
-        } else {
-            $v = $visits[$occ['customer_id']] ?? null;
-            $occ['visit'] = $v === null ? null : self::visitSummary($v, $users);
+        $on = [];
+        foreach ($occ['stops'] as $k => $s) {
+            $on[$s['customer_id']] = true;
+            $occ['stops'][$k]['visit'] = isset($visits[$s['customer_id']]) ? self::visitSummary($visits[$s['customer_id']], $users) : null;
         }
+        $off = [];
+        foreach ($visits as $cid => $v) {
+            if (!isset($on[$cid]) && ($v['outcome'] ?? null) !== null) {
+                $off[] = ['customer_id' => $cid, 'visit' => self::visitSummary($v, $users)];
+            }
+        }
+        $occ['off_plan'] = $off;
         return $occ;
     }
 
@@ -452,7 +379,6 @@ final class Calendar
         $cal = new self($plan, $c->today, $c->tx);
         $days = [];
         $routes = [];
-        $tasks = [];
         $cids = [];
         for ($d = $from; $d <= $to; $d = Dates::addDays($d, 1)) {
             $x = $cal->day($d);
@@ -465,7 +391,7 @@ final class Calendar
                 'holiday' => $holidays[$d] ?? null,
                 'past' => $past,
                 'in_month' => $month === null || substr($d, 0, 7) === $month,
-                'can_create' => $past ? [] : ($class === 'work' ? ['regular', 'adhoc', 'task'] : ['special', 'special_once', 'task']),
+                'can_create' => $past ? [] : ($class === 'work' ? ['regular', 'adhoc'] : ['special', 'special_once']),
             ];
             $totals = [];
             foreach ($x['runs'] as $run) {
@@ -473,10 +399,14 @@ final class Calendar
                     $totals[$code] = round(($totals[$code] ?? 0) + $w, 1);
                 }
             }
+            // The drivers' free submissions of that day count in the totals; they are not listed on the calendar.
+            foreach (self::totals($x['submissions']) as $code => $w) {
+                $totals[$code] = round(($totals[$code] ?? 0) + $w, 1);
+            }
             $day['totals'] = (object) $totals;
             if ($d <= $c->today) {
                 $ops = ['not_started' => 0, 'active' => 0, 'open' => 0, 'done' => 0, 'incomplete' => 0, 'no_record' => 0];
-                foreach (array_merge($x['routes'], $x['tasks']) as $o) {
+                foreach ($x['routes'] as $o) {
                     if (isset($ops[$o['run_status'] ?? ''])) {
                         $ops[$o['run_status']]++;
                     }
@@ -496,10 +426,6 @@ final class Calendar
                     $cids[$s['customer_id']] = true;
                 }
             }
-            foreach ($x['tasks'] as $o) {
-                $tasks[] = $o;
-                $cids[$o['customer_id']] = true;
-            }
         }
         $customers = [];
         foreach ($plan['customers'] ?? [] as $cu) {
@@ -518,7 +444,6 @@ final class Calendar
             'missing_holiday_years' => self::missingHolidayYears($holidays, $from, $to, $c->today),
             'days' => $days,
             'routes' => $routes,
-            'tasks' => $tasks,
             'customers' => (object) $customers,
         ];
     }

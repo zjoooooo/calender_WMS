@@ -18,7 +18,10 @@ return [
         T::eq('2026-11-10', $plan['frozen_through']);
         T::eq([2026, 2027], $plan['seeded_years']);
         T::eq(4, $plan['settings']['rollover_hour']);
-        T::eq(['REL', 'OTC', 'COMPACTOR'], array_column($plan['waste_types'], 'code'));
+        T::eq(['REL', 'RECYCLING', 'OTC', 'COMPACTOR', 'EROSE'], array_column($plan['waste_types'], 'code'));
+        T::eq(['Recycling', 'RCY', true], [$plan['waste_types'][1]['name'], $plan['waste_types'][1]['abbr'], $plan['waste_types'][1]['routable']]);
+        T::eq([false, false, false], array_column(array_slice($plan['waste_types'], 2), 'routable'));
+        T::eq(false, isset($plan['tasks']) || isset($plan['task_overrides']) || isset($plan['seq']['task']), 'a new install has no task keys');
         T::eq(26, count($plan['holidays']));
         T::true(is_dir($env->dir . '/days'), 'days/ created');
         T::eq(64, strlen(trim($env->doc('file:secret.key')['content'])));
@@ -134,7 +137,7 @@ return [
         $env = TestEnv::make($now);
         $store = new FileStore($env->config);
         $store->transaction(function (Tx $tx) {
-            T::eq(['date' => '2026-11-11', 'plan' => null, 'runs' => [], 'dropped_runs' => []], $tx->get('day:2026-11-11'));
+            T::eq(['date' => '2026-11-11', 'plan' => null, 'runs' => [], 'dropped_runs' => [], 'submissions' => []], $tx->get('day:2026-11-11'));
             $p = $tx->get('plan');
             $p['x'] = 1;
             $tx->put('plan', $p);
@@ -174,7 +177,7 @@ return [
         file_put_contents($script, '<?php $config = require ' . var_export(realpath(__DIR__ . '/../../bootstrap.php'), true) . ';'
             . '$store = new FileStore(array_replace($config, ["data_dir" => $argv[1]]));'
             . 'for ($i = 0; $i < 10; $i++) { $store->transaction(function (Tx $tx) { $p = $tx->get("plan");'
-            . ' $p["seq"]["task"]++; usleep(500); $tx->put("plan", $p); }); }');
+            . ' $p["seq"]["route"]++; usleep(500); $tx->put("plan", $p); }); }');
         $procs = [];
         for ($i = 0; $i < 6; $i++) {
             $procs[] = proc_open([PHP_BINARY, $script, $env->dir], [], $pipes);
@@ -182,7 +185,7 @@ return [
         foreach ($procs as $p) {
             T::eq(0, proc_close($p), 'worker exit code');
         }
-        T::eq(60, $env->doc('plan')['seq']['task'], 'every increment kept');
+        T::eq(60, $env->doc('plan')['seq']['route'], 'every increment kept');
         T::true(is_array(json_decode((string) file_get_contents($env->dir . '/plan.json.bak'), true)), '.bak decodes');
         T::eq([], glob($env->dir . '/.*.tmp') ?: [], 'no temp files');
         $env->cleanup();

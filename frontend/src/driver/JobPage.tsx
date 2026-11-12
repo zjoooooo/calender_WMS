@@ -1,27 +1,24 @@
 // /driver/job/:date/:job — one job, shown by its state:
-//   route: mine with a plate, or done -> Run (S3); otherwise the preview (S2, also the plate step of a
-//          job the office assigned to me)
-//   task:  mine with a plate, or done -> the result form (S4 for the task); otherwise the preview (S2T)
+//   mine with a plate, or done -> Run (S3); otherwise the preview (S2, also the plate step of a job the
+//   office assigned to me)
 // /driver/job/:date/:job/stop/:cid[?notsent=<id>] — the result form of one route stop (S4). It keeps the
 // last loaded job, so an open form stays usable after the rollover or with no signal (§8.4).
 // Both watch the job: when the office releases or reassigns it (§8.2), the phone says so and returns to
 // Today, also from a stop form (which moves from stop to stop without passing through the run view).
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
-import { driverRelease, isApiError, type JobDetail, type JobStop } from '../api';
+import { isApiError, type JobDetail, type JobStop } from '../api';
 import { useI18n } from '../i18n';
 import { useSession } from '../session';
-import { useErrorText, Loading } from '../ui/Feedback';
+import { Loading } from '../ui/Feedback';
 import { useToast } from '../ui/Toast';
 import { useDriver } from './driverContext';
-import { clearSelfRelease, isSelfRelease, localEntries, markSelfRelease, nextPendingStop, refreshDriver, typeMap, useJob, useToday, type Loaded } from './data';
+import { isSelfRelease, localEntries, nextPendingStop, typeMap, useJob, useToday, type Loaded } from './data';
 import type { NotSentEntry } from './outbox';
-import { JobProblem, Sheet, TopBar } from './parts';
+import { JobProblem, TopBar } from './parts';
 import ResultForm from './ResultForm';
 import RoutePreview from './RoutePreview';
 import Run from './Run';
-import TaskPreview from './TaskPreview';
 
 function useMaxPhotos(): number {
   return useSession().meta?.config.max_photos ?? 5;
@@ -38,7 +35,7 @@ function useOfficeTookJob(data: Loaded<JobDetail> | undefined): void {
     if (!d || d.cached) return;
     const j = d.data;
     if (prevMine.current && !j.mine && !isSelfRelease(j.date, j.job)) {
-      const what = j.kind === 'route' ? j.code ?? '' : j.stops[0]?.customer.name ?? '';
+      const what = j.code;
       toast(j.holder ? t('driver.toast.movedTo', { code: what, name: j.holder.name }) : t('driver.toast.tookBack', { code: what }), 'warn', 6000);
       nav('/driver', { replace: true });
     }
@@ -74,88 +71,8 @@ export default function JobPage() {
     );
   }
   const j = q.data.data;
-  if (j.kind === 'route') {
-    if ((j.mine && j.vehicle_no) || j.status === 'done') return <Run loaded={q.data} today={td} />;
-    return <RoutePreview loaded={q.data} today={td} />;
-  }
-  if ((j.mine && j.vehicle_no) || j.status === 'done') return <TaskJob loaded={q.data} />;
-  return <TaskPreview loaded={q.data} today={td} />;
-}
-
-/** S4 for a task: one weight field for the task's type; after the save, back to Today. */
-function TaskJob({ loaded }: { loaded: Loaded<JobDetail> }) {
-  const { t } = useI18n();
-  const nav = useNavigate();
-  const qc = useQueryClient();
-  const toast = useToast();
-  const errText = useErrorText();
-  const { online, entries } = useDriver();
-  const today = useToday();
-  const maxPhotos = useMaxPhotos();
-  const job = loaded.data;
-  const stop = job.stops[0];
-  const types = typeMap(today.data?.data.waste_types);
-  const [menu, setMenu] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  if (!stop) return <JobProblem error={null} />;
-  const saved = stop.visit?.outcome != null || localEntries(entries, job.date, job.job).size > 0;
-  const label = types[job.waste_type ?? '']?.abbr || job.waste_type || '';
-
-  const giveBack = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      markSelfRelease(job.date, job.job);
-      await driverRelease(job.date, job.job, { mark_missed: false });
-      void refreshDriver(qc);
-      toast(t('driver.toast.gaveBack', { code: `${label} · ${stop.customer.name}` }));
-      nav('/driver', { replace: true });
-    } catch (e) {
-      clearSelfRelease(job.date, job.job);
-      setError(errText(e));
-      setBusy(false);
-    }
-  };
-
-  return (
-    <>
-      <ResultForm
-        key={`${job.date}/${job.job}`}
-        date={job.date}
-        job={job.job}
-        kind="task"
-        jobLabel={label}
-        stop={stop}
-        wasteTypes={types}
-        maxPhotos={maxPhotos}
-        backTo="/driver"
-        at={loaded.at}
-        cached={loaded.cached}
-        afterSave={() => nav('/driver', { replace: true })}
-        menu={
-          job.mine && !saved ? (
-            <button type="button" className="menu-btn" onClick={() => setMenu(true)}>
-              {t('driver.more')}
-            </button>
-          ) : null
-        }
-      />
-      <Sheet open={menu} title={t('driver.more')} onClose={() => setMenu(false)} busy={busy}>
-        <button type="button" className="dbtn" disabled={!online || busy} onClick={() => void giveBack()}>
-          {online ? t('driver.task.giveBack') : t('driver.needsSignal')}
-        </button>
-        {error && (
-          <div className="form-err" role="alert">
-            {error}
-          </div>
-        )}
-        <button type="button" className="dbtn" onClick={() => setMenu(false)}>
-          {t('common.cancel')}
-        </button>
-      </Sheet>
-    </>
-  );
+  if ((j.mine && j.vehicle_no) || j.status === 'done') return <Run loaded={q.data} today={td} />;
+  return <RoutePreview loaded={q.data} today={td} />;
 }
 
 /** A stop made from a Not sent entry when the job cannot be loaded any more (e.g. after the rollover). */
@@ -211,8 +128,7 @@ export function StopPage() {
     );
   }
 
-  const kind = j?.kind ?? (job.startsWith('t') ? 'task' : 'route');
-  const jobLabel = ns?.label.job_label ?? (kind === 'route' ? (j?.type === 'adhoc' ? '⚡' : '') + (j?.code ?? '') : types[j?.waste_type ?? '']?.abbr || j?.waste_type || '');
+  const jobLabel = ns?.label.job_label ?? (j?.type === 'adhoc' ? '⚡' : '') + (j?.code ?? '');
   const runUrl = `/driver/job/${date}/${job}`;
 
   return (
@@ -220,18 +136,17 @@ export function StopPage() {
       key={`${date}/${job}/${customerId}/${ns?.id ?? ''}`}
       date={date}
       job={job}
-      kind={kind}
+      kind="route"
       jobLabel={jobLabel}
       stop={stop}
       wasteTypes={types}
       maxPhotos={maxPhotos}
-      backTo={ns ? '/driver/notsent' : kind === 'task' ? '/driver' : runUrl}
+      backTo={ns ? '/driver/notsent' : runUrl}
       notsent={ns}
       at={loaded?.at}
       cached={loaded?.cached}
       afterSave={(outcome) => {
         if (ns) return nav('/driver/notsent', { replace: true });
-        if (kind === 'task') return nav('/driver', { replace: true });
         // Not mine any more (the office took it back; the hook above says so): no auto-advance.
         const latest = q.data && !q.data.cached ? q.data.data : j;
         if (outcome === null || !j || !latest?.mine) return nav(runUrl, { replace: true });

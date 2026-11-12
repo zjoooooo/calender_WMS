@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // Demo data through the API, similar to the approved mockup (docs/mockup.html): ~12 regular routes a day
 // (N1 … H1 on Mon–Sat patterns), three specials (Sunday / PH), an adhoc today and tomorrow, ~170 customers
-// (REL, REL + OTC, OTC only, COMPACTOR), trucks, drivers and a few OTC / COMPACTOR tasks (one OTC on a
-// Sunday, a recurring COMPACTOR Tue + Fri, five one-off tasks on the next work day so the tasks group
-// collapses). Idempotent: existing route codes, customer codes, usernames and plates are kept.
+// (REL, REL + OTC, Recycling, OTC only, COMPACTOR, EROSE), trucks and drivers. A route collects one waste
+// type: the routes above collect REL, and two Recycling routes (R1, R2) collect RECYCLING. OTC, COMPACTOR
+// and EROSE are never planned: drivers submit them freely (--with-runs makes a few submissions).
+// Idempotent: existing route codes, customer codes, usernames and plates are kept.
 //
 //   node scripts/seed-demo.mjs [--api http://127.0.0.1:8080] [--user admin] [--password <pw>]
 //                              [--new-password <pw>] [--data-dir <dir>] [--with-runs]
@@ -13,8 +14,9 @@
 //   --new-password (default "demo-pass-2026") and the new one is printed.
 // - Drivers ali, bala, chong, devi, eko get the password "driver-pass-2026" (they must change it at the
 //   first sign-in unless --with-runs already did).
-// - --with-runs (needs the runs/driver API, §10.8/§10.9): drivers claim some of today's routes and tasks
-//   and record a few results, so the calendar shows live statuses. Skipped with a note when that API is missing.
+// - --with-runs (needs the runs/driver API, §10.8/§10.9): drivers claim some of today's routes, record a
+//   few results and submit an OTC and a COMPACTOR collection, so the calendar shows live statuses and
+//   totals. Skipped with a note when that API is missing.
 // Routes start today (plan dates before today are locked, R11), so days before today stay empty.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -97,6 +99,9 @@ const ROUTES = [
   { code: 'S1', name: 'Sunday market', sun: true, ph: true, color: 5, area: 'Geylang Serai' },
   { code: 'S2', name: 'Holiday food & beverage', sun: true, ph: true, color: 7, area: 'Orchard Rd' },
   { code: 'S3', name: 'PH hospital run', sun: false, ph: true, color: 10, area: 'Jalan Bukit Merah' },
+  // Recycling routes (kept last, so the customer codes of the routes above never change).
+  { code: 'R1', name: 'Recycling · North', days: MWF, color: 6, area: 'Admiralty Dr', waste: 'RECYCLING' },
+  { code: 'R2', name: 'Recycling · East', days: TTS, color: 6, area: 'Changi Rd', waste: 'RECYCLING' },
 ];
 const POOL = [
   'ABC Restaurant', 'Kopi Tiam 88', 'FairPrice Supermarket', 'Hawker 21 Food Court', 'Golden Bakery', 'Lucky Seafood',
@@ -118,6 +123,15 @@ async function main() {
   const meta = await must('GET', '/meta');
   const today = meta.today;
   console.log(`today (op_date) = ${today}, next work day = ${meta.next_work_day}`);
+
+  // 1b. The seed waste types of a new data folder; an older folder gets the two new ones here (the demo
+  // tool only: a live data folder is never changed by itself).
+  for (const w of [
+    { code: 'RECYCLING', name: 'Recycling', abbr: 'RCY', routable: true, confirm_over: 1000 },
+    { code: 'EROSE', name: 'EROSE', abbr: 'EROSE', routable: false, confirm_over: null },
+  ]) {
+    if (!meta.waste_types.some((x) => x.code === w.code)) await must('POST', '/waste-types', { ...w, unit: 'kg', weigh_method: 'on_site' });
+  }
 
   // 2. Trucks and drivers.
   const trucks = await must('GET', '/trucks');
@@ -156,7 +170,8 @@ async function main() {
     for (let k = 0; k < n; k++) {
       const base = POOL[(ri * 7 + k * 3) % POOL.length];
       const short = rt.area.split(' ')[0];
-      const types = k % 4 === 0 ? ['REL', 'OTC'] : ['REL'];
+      // a route's customers are registered with the route's waste type
+      const types = rt.waste === 'RECYCLING' ? (k % 3 === 0 ? ['REL', 'RECYCLING'] : ['RECYCLING']) : k % 4 === 0 ? ['REL', 'OTC'] : ['REL'];
       const c = await customer(`C${++seq}`, `${base} · ${short}`, `Blk ${100 + (hash(rt.code + k) % 800)} ${rt.area} ${1 + (k % 9)}`, types, k % 3 === 0 ? `+65 9${(hash(rt.code + 'p' + k) % 9000000) + 1000000}` : '');
       routeStops[rt.code].push({ customer_id: c.id, note: k === 0 ? '3 bins' : '' });
     }
@@ -170,6 +185,9 @@ async function main() {
   for (let k = 0; k < 6; k++) {
     otcOnly.push(await customer(`C${2101 + k}`, `${['Renovation', 'Office Move', 'Condo MCST', 'Event Hall', 'Warehouse Clear', 'Shophouse'][k]} ${k + 1}`, `${20 + k} Jalan Besar`, ['OTC']));
   }
+  for (let k = 0; k < 3; k++) {
+    await customer(`C${2201 + k}`, `${['Harbour', 'Airport', 'Science Park'][k]} EROSE Site`, `${30 + k} Pioneer Rd`, ['EROSE']);
+  }
   // ABC Restaurant (REL + OTC) also goes on the adhoc routes: "also on N1".
   const abc = byCode.get('C1001');
   const kopi = byCode.get('C1002');
@@ -180,16 +198,17 @@ async function main() {
   let created = 0;
   for (const rt of ROUTES) {
     if (haveCode(rt.code)) continue;
+    const waste_type = rt.waste ?? 'REL';
     const body = rt.days
-      ? { type: 'regular', code: rt.code, color: rt.color, name: rt.name, note: '', start: today, end: null, days: rt.days, stops: routeStops[rt.code] }
-      : { type: 'special', code: rt.code, color: rt.color, name: rt.name, note: '', start: today, end: null, sun: rt.sun, ph: rt.ph, stops: routeStops[rt.code] };
+      ? { waste_type, type: 'regular', code: rt.code, color: rt.color, name: rt.name, note: '', start: today, end: null, days: rt.days, stops: routeStops[rt.code] }
+      : { waste_type, type: 'special', code: rt.code, color: rt.color, name: rt.name, note: '', start: today, end: null, sun: rt.sun, ph: rt.ph, stops: routeStops[rt.code] };
     await must('POST', '/routes', body);
     created++;
   }
   const adhoc = async (date, code, name, note, stops) => {
     const sug = await must('GET', `/routes/suggest-code?type=adhoc&date=${date}`);
     if (sug.class !== 'work' || routes.some((x) => x.date === date && x.name === name)) return;
-    await must('POST', '/routes', { type: 'adhoc', code: haveCode(code, date) ? sug.code : code, name, note, date, stops });
+    await must('POST', '/routes', { type: 'adhoc', waste_type: 'REL', code: haveCode(code, date) ? sug.code : code, name, note, date, stops });
     created++;
   };
   await adhoc(today, 'A2', 'Construction site clean-up', 'Call this morning: today please', [{ customer_id: byCode.get('C1050').id, note: 'gate B' }]);
@@ -198,31 +217,13 @@ async function main() {
     { customer_id: kopi.id, note: '' },
   ]);
 
-  // 5. Tasks.
-  const tasks = await must('GET', '/tasks?ended=1');
-  const haveTask = (cid, type, date) => tasks.some((x) => x.customer.id === cid && x.waste_type === type && (date ? x.date === date : !x.date));
-  const task = async (body) => {
-    if (haveTask(body.customer_id, body.waste_type, body.date)) return;
-    await must('POST', '/tasks', body);
-  };
-  let sunday = today;
-  while (weekday(sunday) !== 7) sunday = addDays(sunday, 1);
-  await task({ waste_type: 'OTC', customer_id: abc.id, date: today, note: 'Old furniture' });
-  await task({ waste_type: 'OTC', customer_id: otcOnly[0].id, date: sunday, note: 'Sunday renovation debris' });
-  await task({ waste_type: 'COMPACTOR', customer_id: compactors[0].id, start: today, end: null, days: [2, 5], note: 'Bin at loading bay' });
-  await task({ waste_type: 'COMPACTOR', customer_id: compactors[1].id, start: today, end: null, days: [1, 4, 7], note: '' });
-  for (let k = 1; k <= 4; k++) {
-    await task({ waste_type: 'OTC', customer_id: otcOnly[k].id, date: meta.next_work_day, note: k === 1 ? 'Call before arriving' : '' });
-  }
-  await task({ waste_type: 'COMPACTOR', customer_id: compactors[2].id, date: meta.next_work_day, note: 'Extra lift' });
-
-  console.log(`seeded: ${created} new routes, ${byCode.size} customers in total, tasks ok, trucks ok, drivers ok`);
+  console.log(`seeded: ${created} new routes, ${byCode.size} customers in total, trucks ok, drivers ok`);
 
   // 6. Optional live statuses (runs API, §10.9).
-  if (flag('with-runs')) await simulateRuns(today);
+  if (flag('with-runs')) await simulateRuns(today, { otc: abc, compactor: compactors[0] });
 }
 
-async function simulateRuns(today) {
+async function simulateRuns(today, cust) {
   const tokens = {};
   for (const u of ['ali', 'bala', 'chong', 'devi']) {
     let r = await call('POST', '/login', { username: u, password: DRIVER_PW });
@@ -264,12 +265,17 @@ async function simulateRuns(today) {
     }
     console.log(`runs: ${u} took ${code} and recorded ${Math.min(n, job.stops.length)} stops`);
   }
-  // Ali also takes today's OTC task.
-  const t = day.data.tasks[0];
-  if (t) {
-    const c = await call('POST', `/driver/runs/${today}/${t.job}/claim`, { vehicle_no: 'GBA1234X' }, tokens.ali);
-    console.log(`runs: ali took task ${t.job}: ${c.ok ? 'ok' : c.error?.code}`);
-  }
+  // Free submissions (no plan, no claim): Ali submits an OTC collection, Bala a COMPACTOR one. The ids are
+  // fixed, so running the seed again changes nothing (a resend never makes a second record).
+  const submit = async (u, id, waste_type, customer, plate, kg) => {
+    const r = await call('PUT', `/driver/submissions/${today}/${id}`, {
+      op_id: crypto.randomUUID(), base_rev: 0, waste_type, customer_id: customer.id, vehicle_no: plate, outcome: 'collected',
+      weights: { [waste_type]: kg }, tickets: {}, photos: [], signature: null, note: '', captured_at: new Date().toISOString(),
+    }, tokens[u]);
+    console.log(`runs: ${u} submitted ${waste_type} ${kg} kg for ${customer.name}: ${r.ok ? 'ok' : r.error?.code}`);
+  };
+  await submit('ali', '0a11ce00-0000-4000-8000-000000000001', 'OTC', cust.otc, 'GBA1234X', 300);
+  await submit('bala', '0a11ce00-0000-4000-8000-000000000002', 'COMPACTOR', cust.compactor, 'SBA1234X', 1250);
 }
 
 main().catch((e) => {

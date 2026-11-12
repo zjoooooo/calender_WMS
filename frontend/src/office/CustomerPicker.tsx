@@ -1,6 +1,7 @@
-// Route customer picker (§6.1, R10): searches name, code and address over ROUTABLE, active customers only
-// (customers with only OTC or COMPACTOR never appear), hides customers already in the list, labels
-// "also on N2 that day", and ends with "Create new customer" (REL pre-ticked, a routable type required).
+// Route customer picker (§6.1, R10): searches name, code and address over the active customers registered
+// with the route's waste type (a route collects one type; customers without it never appear), hides
+// customers already in the list, labels "also on N2 that day", and ends with "Create new customer" (the
+// route's type pre-ticked and required).
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { listCustomers, type Customer, type CustomerListItem } from '../api';
@@ -12,6 +13,8 @@ import { CustomerFormDialog } from './CustomerFormDialog';
 export type PickedCustomer = Pick<Customer, 'id' | 'code' | 'name' | 'address' | 'waste_types' | 'active'>;
 
 export function CustomerPicker(props: {
+  /** The route's waste type: only customers registered with it are listed. */
+  wasteType: string;
   excludeIds: number[];
   /** customer id -> codes of other routes on that date */
   alsoOn?: Map<number, string[]>;
@@ -26,8 +29,8 @@ export function CustomerPicker(props: {
   const [creating, setCreating] = useState(false);
   const dq = useDebounced(q.trim(), 200);
   const res = useQuery({
-    queryKey: ['customers', { q: dq, routable: true, picker: true }],
-    queryFn: ({ signal }) => listCustomers({ q: dq, routable: true, archived: '0' }, { signal }),
+    queryKey: ['customers', { q: dq, type: props.wasteType, picker: true }],
+    queryFn: ({ signal }) => listCustomers({ q: dq, type: props.wasteType, archived: '0' }, { signal }),
     enabled: dq.length > 0,
     staleTime: 30_000,
   });
@@ -101,8 +104,8 @@ export function CustomerPicker(props: {
       <CustomerFormDialog
         open={creating}
         customer={null}
-        initialTypes={routable.slice(0, 1).map((w) => w.code)}
-        requireRoutable
+        initialTypes={[props.wasteType]}
+        requireType={props.wasteType}
         initialName={q.trim()}
         onClose={() => setCreating(false)}
         onSaved={(c) => {

@@ -18,12 +18,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { deleteRoute, isApiError, patchRoute, putRouteDate, resetRouteDate, type PartRev, type RouteOccurrence, type Stop } from '../api';
 import { fmtDay, fmtWeight, useI18n } from '../i18n';
 import { useSession } from '../session';
-import { TypeTag } from '../ui/Chip';
+import { TypeTag, WasteTag } from '../ui/Chip';
 import { ConfirmDialog } from '../ui/Dialog';
 import { Drawer } from '../ui/Drawer';
 import { useToast } from '../ui/Toast';
 import { useCalendar } from './calendarContext';
-import { addDays, jobOf, routesByCustomer, tasksByCustomer } from './calendarModel';
+import { addDays, jobOf, routesByCustomer } from './calendarModel';
 import { EndDialog } from './CopyDialog';
 import { CustomerPicker, type PickedCustomer } from './CustomerPicker';
 import { MenuButton, routeRuleText, runDetailText, useGuardedWrite, workDone, type MenuItem } from './officeShared';
@@ -81,7 +81,6 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
 
   const dateOcc = useMemo(() => data.routes.filter((o) => o.date === occ.date), [data.routes, occ.date]);
   const alsoOnRoutes = useMemo(() => routesByCustomer(dateOcc, occ.route_id), [dateOcc, occ.route_id]);
-  const alsoOnTasks = useMemo(() => tasksByCustomer(data.tasks.filter((o) => o.date === occ.date)), [data.tasks, occ.date]);
   const visits = new Map(occ.stops.map((s) => [s.customer_id, s.visit]));
   const custOf = (id: number) => data.customers[String(id)] ?? extraCust[id];
   const canResult = occ.date <= today && (occ.status === 'scheduled' || !!occ.run);
@@ -101,13 +100,12 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
 
   const openResult = (cid: number) => {
     const c = custOf(cid);
-    const own = (c?.waste_types ?? []).filter((x) => routable.includes(x));
     setResult({
       date: occ.date,
       job,
       customerId: cid,
       customerName: c?.name ?? `#${cid}`,
-      weighTypes: own.length ? own : routable, // a detached OFF_PLAN customer may be weighed in any routable type (R27)
+      weighTypes: [occ.waste_type], // a route collects one waste type (R27)
       defaultDriverId: holderId,
     });
   };
@@ -140,12 +138,10 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
   const rowView = (s: Stop): StopRowView => {
     const c = custOf(s.customer_id);
     const v = visits.get(s.customer_id);
-    const tasks = alsoOnTasks.get(s.customer_id) ?? [];
     const also = alsoOnRoutes.get(s.customer_id) ?? [];
     const vt = visitText(s.customer_id);
     const extra = [
       vt ? <span key="v">{vt}</span> : null,
-      tasks.length > 0 ? <span key="t" className="muted">{t('rd.alsoTask', { types: tasks.map(typeAbbr).join(', ') })}</span> : null,
       also.length > 0 ? <span key="a" className="muted">{t('picker.alsoOn', { codes: also.join(', ') })}</span> : null,
       c && !c.active ? <span key="x" className="tag danger">{t('common.archived')}</span> : null,
     ].filter(Boolean);
@@ -292,6 +288,7 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
               {occ.code}
             </span>
             <TypeTag type={occ.type} />
+            <WasteTag code={occ.waste_type} abbr={typeAbbr(occ.waste_type)} />
             <strong title={occ.name}>{occ.name}</strong>
             {occ.edited && <span className="tag warn">{t('cal.edited')}</span>}
           </div>
@@ -405,6 +402,7 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
           (picking ? (
             <CustomerPicker
               autoFocus
+              wasteType={occ.waste_type}
               excludeIds={draft.stops.map((s) => s.customer_id)}
               alsoOn={alsoOnRoutes}
               onPick={(c) => {

@@ -1,4 +1,4 @@
-// Shared pieces of the office calendar, routes and tasks pages: the guarded write (busy / error /
+// Shared pieces of the office calendar and routes pages: the guarded write (busy / error /
 // RUN_EXISTS retry with release_run / STALE_REVISION refetch), query invalidation after plan writes, a
 // small popover menu, and text helpers for rules, totals and run status (§6.1, §8.3, §6.11).
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
@@ -14,7 +14,7 @@ type T = (key: string, vars?: Record<string, string | number>) => string;
 export function useInvalidatePlan(): () => void {
   const qc = useQueryClient();
   return useCallback(() => {
-    for (const key of ['calendar', 'routes', 'route', 'tasks', 'task', 'customers', 'customer', 'drivers', 'run']) {
+    for (const key of ['calendar', 'routes', 'route', 'customers', 'customer', 'drivers', 'run']) {
       void qc.invalidateQueries({ queryKey: [key] });
     }
   }, [qc]);

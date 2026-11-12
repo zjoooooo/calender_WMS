@@ -1,9 +1,18 @@
 <?php
 // Read-only questions about plan.json used by the master-data rules (R3, R4) and the drivers list:
-// which stop lists dated on or after today hold a customer, which tasks still generate a date,
-// and the R8 effective stop list of a job. Pure functions of (plan, today).
+// which stop lists dated on or after today hold a customer, and the R8 effective stop list of a job.
+// Pure functions of (plan, today).
 final class Usage
 {
+    /** The waste type of a route record stored before routes had one. */
+    public const DEFAULT_ROUTE_TYPE = 'REL';
+
+    /** The one waste type a route collects. */
+    public static function routeType(array $route): string
+    {
+        return (string) ($route['waste_type'] ?? self::DEFAULT_ROUTE_TYPE);
+    }
+
     public static function isOneOff(array $item): bool
     {
         return !empty($item['date']);
@@ -97,15 +106,19 @@ final class Usage
 
     /**
      * Every stop list dated on or after today that contains customer $cid: route templates of live
-     * recurring routes, one-off routes dated >= today, and override lists dated >= today.
+     * recurring routes, one-off routes dated >= today, and override lists dated >= today. With $wasteTypes,
+     * only the routes that collect one of those types.
      * @return list<array{kind:string,route_id:int,code:string,name:string,type:string,where:string,date:?string}>
      */
-    public static function routeStops(array $plan, int $cid, string $today): array
+    public static function routeStops(array $plan, int $cid, string $today, ?array $wasteTypes = null): array
     {
         $out = [];
         $byId = [];
         $map = self::seriesMap($plan);
         foreach ($plan['routes'] ?? [] as $r) {
+            if ($wasteTypes !== null && !in_array(self::routeType($r), $wasteTypes, true)) {
+                continue;
+            }
             $byId[$r['id']] = $r;
             if (self::routeLive($r, $today) && self::stopsHave($r['stops'] ?? [], $cid)) {
                 $oneOff = self::isOneOff($r);
@@ -125,7 +138,7 @@ final class Usage
     private static function routeRef(array $r, string $where, ?string $date, array $map): array
     {
         return ['kind' => 'route', 'route_id' => $r['id'], 'code' => $r['code'], 'name' => $r['name'] ?? '',
-            'type' => $r['type'], 'where' => $where, 'date' => $date, 'series' => $map[(int) $r['id']] ?? (int) $r['id']];
+            'type' => $r['type'], 'waste_type' => self::routeType($r), 'where' => $where, 'date' => $date, 'series' => $map[(int) $r['id']] ?? (int) $r['id']];
     }
 
     /** customer_id => list of route codes whose stop lists dated >= today hold it (customer list endpoint). */
@@ -160,66 +173,19 @@ final class Usage
         return $out;
     }
 
-    /** True when the task generates a date >= today (one-off: its date; recurring: a weekday in range). */
-    public static function taskLive(array $t, string $today): bool
-    {
-        if (self::isOneOff($t)) {
-            return $t['date'] >= $today;
-        }
-        $from = max((string) ($t['start'] ?? $today), $today);
-        $end = $t['end'] ?? null;
-        $days = $t['days'] ?? [];
-        for ($i = 0; $i < 7; $i++) {
-            $d = Dates::addDays($from, $i);
-            if ($end !== null && $d > $end) {
-                return false;
-            }
-            if (in_array(Dates::weekday($d), $days, true)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /** Live tasks (generating a date >= today) of a customer, optionally only of the given types. */
-    public static function liveTasksOf(array $plan, int $cid, string $today, ?array $types = null): array
-    {
-        $out = [];
-        foreach ($plan['tasks'] ?? [] as $t) {
-            if ((int) $t['customer_id'] === $cid && ($types === null || in_array($t['waste_type'], $types, true))
-                && self::taskLive($t, $today)) {
-                $out[] = $t;
-            }
-        }
-        return $out;
-    }
-
-    /** {"date"} or {"start","end","days"} of a task. */
-    public static function taskSchedule(array $t): array
-    {
-        return self::isOneOff($t)
-            ? ['date' => $t['date']]
-            : ['start' => $t['start'] ?? null, 'end' => $t['end'] ?? null, 'days' => $t['days'] ?? []];
-    }
-
     /**
      * R8 effective stop customer ids of a job on a date, from the live plan:
-     * route: override(d).stops ?? route.stops, minus inactive or non-routable customers;
-     * task: [task.customer_id]. Unknown job: [].
+     * override(d).stops ?? route.stops, minus inactive customers and customers without the route's waste
+     * type. Unknown job (also a job of the old task feature): [].
      * @return list<int>
      */
     public static function jobStopIds(array $plan, string $date, string $job): array
     {
         $id = (int) substr($job, 1);
-        if (str_starts_with($job, 't')) {
-            foreach ($plan['tasks'] ?? [] as $t) {
-                if ($t['id'] === $id) {
-                    return [(int) $t['customer_id']];
-                }
-            }
+        $route = null;
+        if (!str_starts_with($job, 'r')) {
             return [];
         }
-        $route = null;
         foreach ($plan['routes'] ?? [] as $r) {
             if ($r['id'] === $id) {
                 $route = $r;
@@ -236,7 +202,6 @@ final class Usage
                 }
             }
         }
-        $types = self::typesByCode($plan);
         $customers = [];
         foreach ($plan['customers'] ?? [] as $cu) {
             $customers[$cu['id']] = $cu;
@@ -244,7 +209,7 @@ final class Usage
         $ids = [];
         foreach ($stops as $s) {
             $cu = $customers[(int) $s['customer_id']] ?? null;
-            if ($cu !== null && !empty($cu['active']) && self::customerRoutable($cu, $types)) {
+            if ($cu !== null && !empty($cu['active']) && in_array(self::routeType($route), $cu['waste_types'] ?? [], true)) {
                 $ids[] = (int) $s['customer_id'];
             }
         }

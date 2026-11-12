@@ -1,4 +1,4 @@
-// Confirm = claim (R23, §7.3 step 4), shared by the route and task previews. Needs the network; the
+// Confirm = claim (R23, §7.3 step 4), used by the route preview. Needs the network; the
 // client never shows a claim before the server confirmed it.
 //   201 / 200 -> the returned JobDetail becomes the job's data (the page turns into the run / form)
 //   409 RUN_TAKEN -> "Taken by Chong 07:45", lists refresh

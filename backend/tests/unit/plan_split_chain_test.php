@@ -13,7 +13,7 @@ return (static function (): array {
     $stops = static fn (int ...$ids) => array_map(static fn ($id) => ['customer_id' => $id, 'note' => ''], $ids);
     $create = static function (TestEnv $e, string $code, string $start, array $days, array $cids, array $extra = []) use ($stops): int {
         $body = array_replace(['type' => 'regular', 'code' => $code, 'name' => "Route $code", 'start' => $start, 'days' => $days, 'stops' => $stops(...$cids)], $extra);
-        return T::ok($e->call('POST', '/api/routes', $body, 'mei'), 201)['id'];
+        return T::ok($e->call('POST', '/api/routes', $body + ['waste_type' => 'REL'], 'mei'), 201)['id'];
     };
     $route = static function (TestEnv $e, int $id): ?array {
         foreach ($e->doc('plan')['routes'] as $r) {
@@ -317,7 +317,7 @@ return (static function (): array {
                 T::eq($parts, T::ok($e->call('GET', "/api/routes/$id", null, 'mei'))['parts'], "the same parts from record $id");
             }
             // special parts carry Sunday / PH; a one-off has none
-            $s = T::ok($e->call('POST', '/api/routes', ['type' => 'special', 'code' => 'PS', 'name' => 'Sun', 'start' => '2026-11-15', 'sun' => true, 'ph' => false, 'stops' => $stops(21)], 'mei'), 201);
+            $s = T::ok($e->call('POST', '/api/routes', ['waste_type' => 'REL', 'type' => 'special', 'code' => 'PS', 'name' => 'Sun', 'start' => '2026-11-15', 'sun' => true, 'ph' => false, 'stops' => $stops(21)], 'mei'), 201);
             T::eq([['id' => $s['id'], 'rev' => 1, 'start' => '2026-11-15', 'end' => null, 'days' => null, 'sun' => true, 'ph' => false, 'stops' => $stops(21)]],
                 T::ok($e->call('GET', "/api/routes/{$s['id']}", null, 'mei'))['parts']);
             T::eq(null, T::ok($e->call('GET', '/api/routes/41', null, 'mei'))['parts']);

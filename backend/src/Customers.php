@@ -44,13 +44,6 @@ final class Customers
         $routableOnly = $c->queryBool('routable');
         $type = $c->query('type');
         $routeCodes = Usage::routeCodesByCustomer($plan, $c->today);
-        $taskTypes = [];
-        foreach ($plan['tasks'] ?? [] as $t) {
-            if (Usage::taskLive($t, $c->today) && !in_array($t['waste_type'], $taskTypes[$t['customer_id']] ?? [], true)) {
-                $taskTypes[$t['customer_id']][] = $t['waste_type'];
-            }
-        }
-        $order = array_flip(array_keys($types));
         $out = [];
         foreach ($plan['customers'] ?? [] as $cu) {
             $active = !empty($cu['active']);
@@ -66,9 +59,7 @@ final class Customers
             if ($q !== '' && stripos($cu['name'] . "\n" . $cu['code'] . "\n" . ($cu['address'] ?? ''), $q) === false) {
                 continue;
             }
-            $tt = $taskTypes[$cu['id']] ?? [];
-            usort($tt, static fn ($a, $b) => ($order[$a] ?? 99) <=> ($order[$b] ?? 99));
-            $out[] = self::out($cu) + ['routes' => $routeCodes[$cu['id']] ?? [], 'tasks' => $tt];
+            $out[] = self::out($cu) + ['routes' => $routeCodes[$cu['id']] ?? []];
         }
         usort($out, static fn ($a, $b) => [strtolower($a['name']), $a['id']] <=> [strtolower($b['name']), $b['id']]);
         return $out;
@@ -82,13 +73,10 @@ final class Customers
         $routes = [];
         foreach (Usage::routeStops($plan, $cu['id'], $c->today) as $ref) {
             // a split route (R12/R14) is one route: listed once, by its first record that holds the customer
-            $routes[$ref['series']] ??= ['route_id' => $ref['route_id'], 'code' => $ref['code'], 'name' => $ref['name'], 'type' => $ref['type']];
+            $routes[$ref['series']] ??= ['route_id' => $ref['route_id'], 'code' => $ref['code'], 'name' => $ref['name'], 'type' => $ref['type'],
+                'waste_type' => $ref['waste_type']];
         }
-        $tasks = [];
-        foreach (Usage::liveTasksOf($plan, $cu['id'], $c->today) as $t) {
-            $tasks[] = ['task_id' => $t['id'], 'waste_type' => $t['waste_type'], 'schedule' => Usage::taskSchedule($t)];
-        }
-        return self::out($cu) + ['routes' => array_values($routes), 'tasks' => $tasks];
+        return self::out($cu) + ['routes' => array_values($routes)];
     }
 
     // ---- writes --------------------------------------------------------------------------
@@ -148,17 +136,10 @@ final class Customers
         if (array_key_exists('waste_types', $b)) {
             $new = self::normalizeTypes($b['waste_types'], $plan, $cu['waste_types'] ?? []);
             $removedTypes = array_values(array_diff($cu['waste_types'] ?? [], $new));
-            $types = Usage::typesByCode($plan);
-            $lostRoutable = false;
-            foreach ($removedTypes as $code) {
-                if (!empty($types[$code]['routable'])) {
-                    $lostRoutable = true;
-                }
-            }
-            $routesToo = $lostRoutable && !Usage::customerRoutable(['waste_types' => $new], $types);
-            [$plan, $removed] = self::detach($plan, $cu['id'], $removedTypes, $routesToo, $c->today);
+            // A type cannot leave a customer that is still on a route of that type (from today on).
+            [$plan, $removed] = self::detach($plan, $cu['id'], $removedTypes, $c->today);
             if ($removed !== [] && !$detach) {
-                throw new ApiError('CUSTOMER_IN_USE', 409, 'waste_types', self::inUseDetails($removed));
+                throw new ApiError('CUSTOMER_IN_USE', 409, 'waste_types', ['routes' => $removed]);
             }
             $cu['waste_types'] = $new;
         }
@@ -179,7 +160,7 @@ final class Customers
         $plan = $c->plan();
         $i = self::mustFind($plan, $c->intParam('id'));
         $cu = $plan['customers'][$i];
-        [$plan, $removed] = self::detach($plan, $cu['id'], $cu['waste_types'] ?? [], true, $c->today);
+        [$plan, $removed] = self::detach($plan, $cu['id'], null, $c->today);
         $plan['customers'][$i]['active'] = false;
         $c->savePlan($plan, ['release_run' => $releaseRun]);
         return ['removed' => $removed];
@@ -246,64 +227,45 @@ final class Customers
     }
 
     /**
-     * R4 detach of customer $cid. When $routesToo, removes it from live route templates, from
-     * overrides dated >= today and from one-off routes dated >= today. For each removed type it ends
-     * recurring tasks (end = today - 1; a series starting >= today is deleted) and deletes one-off
-     * tasks dated >= today. Bumps the rev of every changed route/task (R20).
+     * R4 detach of customer $cid from the routes that collect one of $wasteTypes (null: every route): it is
+     * removed from live route templates, from overrides dated >= today and from one-off routes dated >= today.
+     * Bumps the rev of every changed route (R20).
      * @return array{0:array,1:list<array>} [new plan, removed items]
      */
-    public static function detach(array $plan, int $cid, array $removedTypes, bool $routesToo, string $today): array
+    public static function detach(array $plan, int $cid, ?array $wasteTypes, string $today): array
     {
         $removed = [];
-        if ($routesToo) {
-            $byId = [];
-            $series = Usage::seriesMap($plan);
-            $listed = [];
-            foreach ($plan['routes'] as $k => $r) {
-                $byId[$r['id']] = $k;
-                if (Usage::routeLive($r, $today) && Usage::stopsHave($r['stops'] ?? [], $cid)) {
-                    $plan['routes'][$k]['stops'] = self::withoutCustomer($r['stops'], $cid);
-                    $plan['routes'][$k]['rev'] = (int) ($r['rev'] ?? 0) + 1;
-                    $oneOff = Usage::isOneOff($r);
-                    // the template of a split route (R12/R14) is listed once, although each record is changed
-                    $sid = $series[(int) $r['id']] ?? (int) $r['id'];
-                    if (!$oneOff && isset($listed[$sid])) {
-                        continue;
-                    }
-                    $listed[$sid] = true;
-                    $removed[] = ['kind' => 'route', 'route_id' => $r['id'], 'code' => $r['code'], 'name' => $r['name'] ?? '',
-                        'where' => $oneOff ? 'one-off' : 'template', 'date' => $oneOff ? $r['date'] : null];
-                }
-            }
-            foreach ($plan['route_overrides'] ?? [] as $k => $o) {
-                $rk = $byId[$o['route_id']] ?? null;
-                if ($rk !== null && $o['date'] >= $today && is_array($o['stops'] ?? null) && Usage::stopsHave($o['stops'], $cid)) {
-                    $plan['route_overrides'][$k]['stops'] = self::withoutCustomer($o['stops'], $cid);
-                    $plan['routes'][$rk]['rev'] = (int) ($plan['routes'][$rk]['rev'] ?? 0) + 1;
-                    $r = $plan['routes'][$rk];
-                    $removed[] = ['kind' => 'route', 'route_id' => $r['id'], 'code' => $r['code'], 'name' => $r['name'] ?? '',
-                        'where' => 'override', 'date' => $o['date']];
-                }
-            }
-        }
-        $deleteTaskIds = [];
-        foreach ($plan['tasks'] ?? [] as $k => $t) {
-            if ((int) $t['customer_id'] !== $cid || !in_array($t['waste_type'], $removedTypes, true) || !Usage::taskLive($t, $today)) {
+        $byId = [];
+        $series = Usage::seriesMap($plan);
+        $listed = [];
+        foreach ($plan['routes'] ?? [] as $k => $r) {
+            if ($wasteTypes !== null && !in_array(Usage::routeType($r), $wasteTypes, true)) {
                 continue;
             }
-            if (Usage::isOneOff($t) || ($t['start'] ?? '') >= $today) {
-                $deleteTaskIds[] = $t['id'];
-                $removed[] = ['kind' => 'task', 'task_id' => $t['id'], 'waste_type' => $t['waste_type'], 'action' => 'deleted'];
-            } else {
-                $plan['tasks'][$k]['end'] = Dates::addDays($today, -1);
-                $plan['tasks'][$k]['rev'] = (int) ($t['rev'] ?? 0) + 1;
-                $removed[] = ['kind' => 'task', 'task_id' => $t['id'], 'waste_type' => $t['waste_type'], 'action' => 'ended'];
+            $byId[$r['id']] = $k;
+            if (Usage::routeLive($r, $today) && Usage::stopsHave($r['stops'] ?? [], $cid)) {
+                $plan['routes'][$k]['stops'] = self::withoutCustomer($r['stops'], $cid);
+                $plan['routes'][$k]['rev'] = (int) ($r['rev'] ?? 0) + 1;
+                $oneOff = Usage::isOneOff($r);
+                // the template of a split route (R12/R14) is listed once, although each record is changed
+                $sid = $series[(int) $r['id']] ?? (int) $r['id'];
+                if (!$oneOff && isset($listed[$sid])) {
+                    continue;
+                }
+                $listed[$sid] = true;
+                $removed[] = ['kind' => 'route', 'route_id' => $r['id'], 'code' => $r['code'], 'name' => $r['name'] ?? '',
+                    'where' => $oneOff ? 'one-off' : 'template', 'date' => $oneOff ? $r['date'] : null];
             }
         }
-        if ($deleteTaskIds !== []) {
-            $plan['tasks'] = array_values(array_filter($plan['tasks'], static fn ($t) => !in_array($t['id'], $deleteTaskIds, true)));
-            $plan['task_overrides'] = array_values(array_filter($plan['task_overrides'] ?? [],
-                static fn ($o) => !in_array($o['task_id'], $deleteTaskIds, true)));
+        foreach ($plan['route_overrides'] ?? [] as $k => $o) {
+            $rk = $byId[$o['route_id']] ?? null;
+            if ($rk !== null && $o['date'] >= $today && is_array($o['stops'] ?? null) && Usage::stopsHave($o['stops'], $cid)) {
+                $plan['route_overrides'][$k]['stops'] = self::withoutCustomer($o['stops'], $cid);
+                $plan['routes'][$rk]['rev'] = (int) ($plan['routes'][$rk]['rev'] ?? 0) + 1;
+                $r = $plan['routes'][$rk];
+                $removed[] = ['kind' => 'route', 'route_id' => $r['id'], 'code' => $r['code'], 'name' => $r['name'] ?? '',
+                    'where' => 'override', 'date' => $o['date']];
+            }
         }
         return [$plan, $removed];
     }
@@ -311,20 +273,5 @@ final class Customers
     private static function withoutCustomer(array $stops, int $cid): array
     {
         return array_values(array_filter($stops, static fn ($s) => (int) $s['customer_id'] !== $cid));
-    }
-
-    /** 409 CUSTOMER_IN_USE details: {"routes":[…],"tasks":[…]} (what a detach would remove). */
-    private static function inUseDetails(array $removed): array
-    {
-        $routes = [];
-        $tasks = [];
-        foreach ($removed as $r) {
-            if ($r['kind'] === 'route') {
-                $routes[] = $r;
-            } else {
-                $tasks[] = $r;
-            }
-        }
-        return ['routes' => $routes, 'tasks' => $tasks];
     }
 }

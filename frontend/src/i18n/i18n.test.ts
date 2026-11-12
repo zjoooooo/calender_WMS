@@ -59,11 +59,11 @@ describe('translate and format', () => {
   });
 
   it('uses the singular text for n = 1 when there is one (OFF-9)', () => {
-    expect(translate('en', 'cal.nTasks', { n: 1 })).toBe('1 task');
-    expect(translate('en', 'cal.nTasks', { n: 2 })).toBe('2 tasks');
-    expect(translate('en', 'users.taskJobs', { n: 1 })).toBe('1 task');
+    expect(translate('en', 'cal.nRoutes', { n: 1 })).toBe('1 route');
+    expect(translate('en', 'cal.nRoutes', { n: 2 })).toBe('2 routes');
+    expect(translate('en', 'subs.count', { n: 1 })).toBe('1 submission');
     expect(translate('en', 'cal.moreN', { n: 1 })).toBe('1 more'); // no _one text: the plain one
-    expect(translate('zh', 'cal.nTasks', { n: 1 })).toBe('1 个任务');
+    expect(translate('zh', 'cal.nRoutes', { n: 1 })).toBe(translate('zh', 'cal.nRoutes', { n: 2 }).replace('2', '1'));
     expect(translate('en', 'err.required_field', { field: 'Name' })).toBe('Name is required');
   });
 

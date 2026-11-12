@@ -63,8 +63,8 @@ return (static function (): array {
             T::eq(['result' => 'done'], T::ok($rel($e, 'r50', ['mark_missed' => true], 'mei', RunsFx::WED, true)));
             T::subset(['job' => 'r50', 'driver_id' => null, 'holds' => [], 'visits' => ['21' => ['outcome' => 'missed', 'reason' => 'not_visited']]], RunsFx::diskRun($e, 'r50'));
             T::subset(['run_status' => 'done', 'run' => ['missed' => 1]], RunsFx::occ($e, 'r50@2026-11-11'));
-            T::ok($rel($e, 't11', ['mark_missed' => true, 'reason' => 'closed'], 'admin', RunsFx::WED, true));
-            T::eq('closed', RunsFx::diskRun($e, 't11')['visits']['50']['reason']);
+            T::err($rel($e, 't11', ['mark_missed' => true, 'reason' => 'closed'], 'admin', RunsFx::WED, true), 404, 'NOT_FOUND'); // an old task job
+            T::eq(null, RunsFx::diskRun($e, 't11'));
             // refusals
             T::err($rel($e, 'r7', ['mark_missed' => true], 'mei', RunsFx::WED, true), 404, 'NOT_FOUND'); // not on Wednesday
             T::err($rel($e, 'r41', ['mark_missed' => true], 'mei', '2026-11-12', true), 422, 'NOT_TODAY'); // future
@@ -102,54 +102,58 @@ return (static function (): array {
             T::err($e->call('POST', '/api/runs/2026-11-11/r5/assign', ['driver_id' => 4], 'ali'), 403, 'FORBIDDEN');
         },
 
-        'assign runs finishIdleRouteHold(X), then DRIVER_HAS_ACTIVE_RUN unless switch; tasks never conflict' => function () use ($assign) {
+        'assign runs finishIdleRouteHold(X), then DRIVER_HAS_ACTIVE_RUN unless switch; an old task job cannot be assigned' => function () use ($assign) {
             $e = RunsFx::env(['runs' => ['r50' => RunsFx::run('r50', 3)]]);
             T::subset(['details' => ['job' => 'r50', 'code' => 'A2', 'pending' => 1]], T::err($assign($e, 'r5', ['driver_id' => 3]), 409, 'DRIVER_HAS_ACTIVE_RUN'));
-            T::ok($assign($e, 't6', ['driver_id' => 3]));
+            T::err($assign($e, 't6', ['driver_id' => 3]), 404, 'NOT_FOUND');
             $d = T::ok($assign($e, 'r5', ['driver_id' => 3, 'switch' => true]));
             T::eq(['job' => 'r50', 'result' => 'not_started'], $d['gave_back']);
             T::subset(['driver_id' => null, 'holds' => [['end' => 'switched', 'closed_by' => 'user:2']]], RunsFx::diskRun($e, 'r50'));
             // DRV-5: given back by the office for the assign, so not "left by Ali"
             T::subset(['run' => ['left_by' => null, 'released_by_office' => true]], RunsFx::occ($e, 'r50@2026-11-11'));
-            T::eq(3, RunsFx::diskRun($e, 't6')['driver_id']);
+            T::eq(null, RunsFx::diskRun($e, 't6'));
             // X's idle route (all stops done) is finished first, so it does not block
             $f = RunsFx::env(['runs' => ['r50' => RunsFx::run('r50', 4, [RunsFx::visit(21, 'collected', ['REL' => 5.0], 'user:4', 1, 4)])]]);
             T::subset(['gave_back' => null], T::ok($assign($f, 'r5', ['driver_id' => 4])));
             T::subset(['driver_id' => null, 'holds' => [['end' => 'finished']]], RunsFx::diskRun($f, 'r50'));
         },
 
-        'deactivating a driver releases every job they hold today (end released)' => function () {
-            $e = RunsFx::env(['runs' => ['r5' => RunsFx::run('r5', 3, [RunsFx::visit(12)]), 't6' => RunsFx::run('t6', 3), 't11' => RunsFx::run('t11', 4)]]);
+        'deactivating a driver releases every route job they hold today (end released); old task runs are left as they are' => function () {
+            $e = RunsFx::env(['runs' => ['r5' => RunsFx::run('r5', 3, [RunsFx::visit(12)]), 't6' => RunsFx::run('t6', 3), 'r50' => RunsFx::run('r50', 4)]]);
+            $t6 = RunsFx::diskRun($e, 't6');
             T::ok($e->call('PATCH', '/api/users/3', ['active' => false], 'admin'));
             T::subset(['driver_id' => null, 'holds' => [['end' => 'released', 'to' => '2026-11-11T10:00:00+08:00']]], RunsFx::diskRun($e, 'r5'));
-            T::subset(['driver_id' => null, 'holds' => [['end' => 'released']]], RunsFx::diskRun($e, 't6'));
-            T::eq(4, RunsFx::diskRun($e, 't11')['driver_id'], "another driver's job is untouched");
+            T::eq($t6, RunsFx::diskRun($e, 't6'), 'the run of the old task feature is not touched');
+            T::eq(4, RunsFx::diskRun($e, 'r50')['driver_id'], "another driver's job is untouched");
             T::eq('open', RunsFx::occ($e, 'r5@2026-11-11')['run_status']);
-            T::eq('not_started', RunsFx::occ($e, 't6@2026-11-11')['run_status']);
             T::subset(['run' => ['left_by' => null, 'released_by_office' => true]], RunsFx::occ($e, 'r5@2026-11-11'));
         },
 
         'API-1: a role change away from driver releases every job the driver holds today, like deactivation' => function () {
-            $e = RunsFx::env(['runs' => ['r5' => RunsFx::run('r5', 3, [RunsFx::visit(12)]), 't6' => RunsFx::run('t6', 3), 't11' => RunsFx::run('t11', 4)]]);
+            $e = RunsFx::env(['runs' => ['r5' => RunsFx::run('r5', 3, [RunsFx::visit(12)]), 't6' => RunsFx::run('t6', 3), 'r50' => RunsFx::run('r50', 4)]]);
+            $t6 = RunsFx::diskRun($e, 't6');
             T::subset(['role' => 'office', 'active' => true], T::ok($e->call('PATCH', '/api/users/3', ['role' => 'office'], 'admin')));
             T::subset(['driver_id' => null, 'holds' => [['end' => 'released', 'to' => '2026-11-11T10:00:00+08:00']]], RunsFx::diskRun($e, 'r5'));
-            T::subset(['driver_id' => null, 'holds' => [['end' => 'released']]], RunsFx::diskRun($e, 't6'));
-            T::eq(4, RunsFx::diskRun($e, 't11')['driver_id'], "another driver's job is untouched");
+            T::eq($t6, RunsFx::diskRun($e, 't6'), 'the run of the old task feature is not touched');
+            T::eq(4, RunsFx::diskRun($e, 'r50')['driver_id'], "another driver's job is untouched");
             T::subset(['status' => 'open', 'holder' => null], T::ok($e->call('GET', '/api/runs/2026-11-11/r5', null, 'mei')));
             // a real driver can take the route now (no RUN_TAKEN)
-            T::subset(['run' => ['mine' => true]], T::ok(RunsFx::claim($e, 'r5', 'bala')));
+            T::subset(['run' => ['mine' => true]], T::ok(RunsFx::claim($e, 'r5', 'chong')));
             // a change that keeps the driver role (or other users' role changes) releases nothing
-            T::ok($e->call('PATCH', '/api/users/4', ['role' => 'driver', 'name' => 'Bala B'], 'admin'));
-            T::eq(4, RunsFx::diskRun($e, 'r5')['driver_id']);
+            T::ok($e->call('PATCH', '/api/users/5', ['role' => 'driver', 'name' => 'Chong C'], 'admin'));
+            T::eq(5, RunsFx::diskRun($e, 'r5')['driver_id']);
         },
 
-        '/api/drivers lists the jobs each driver holds today (R25)' => function () {
+        '/api/drivers lists the route job each driver holds today (R25)' => function () {
             $e = RunsFx::env();
             T::ok(RunsFx::claim($e, 'r5', 'ali'), 201);
-            T::ok(RunsFx::claim($e, 't11', 'ali'), 201);
             $list = T::ok($e->call('GET', '/api/drivers', null, 'mei'));
             $ali = array_values(array_filter($list, static fn ($d) => $d['id'] === 3))[0];
-            T::subset(['route_job' => ['date' => '2026-11-11', 'job' => 'r5', 'code' => 'N1', 'pending' => 2], 'task_jobs' => [['job' => 't11', 'customer' => 'Only OTC Co']]], $ali);
+            T::subset(['route_job' => ['date' => '2026-11-11', 'job' => 'r5', 'code' => 'N1', 'pending' => 2], 'task_jobs' => ['$absent' => true]], $ali);
+            // a legacy task run held by a driver is not a job
+            $l = RunsFx::env(['runs' => ['t6' => RunsFx::run('t6', 4)]]);
+            $bala = array_values(array_filter(T::ok($l->call('GET', '/api/drivers', null, 'mei')), static fn ($d) => $d['id'] === 4))[0];
+            T::eq(null, $bala['route_job']);
         },
     ];
 })();

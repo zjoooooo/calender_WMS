@@ -1,7 +1,9 @@
 // The driver app at /driver/* (§9.3), a lazy chunk (§11.1). It never imports @dnd-kit.
 //   /driver/login                         S0 Login
 //   /driver                               S1 Today (?switch=1: pick the route to switch to)
-//   /driver/job/:date/:job                S2 / S2T preview, S3 Run, or S4 for a task
+//   /driver/job/:date/:job                S2 preview or S3 Run
+//   /driver/submit                        a free submission: waste type -> customer -> form
+//   /driver/submit/:date/:id              change or delete a submission (?notsent=<id>: a refused one)
 //   /driver/job/:date/:job/stop/:cid      S4 Result form of a route stop (?notsent=<id>: edit a refused entry)
 //   /driver/job/:date/:job/done           S6 Route done
 //   /driver/notsent                       S7 Not sent
@@ -18,6 +20,7 @@ import { DriverProvider, type DriverMe } from './driverContext';
 import JobPage, { StopPage } from './JobPage';
 import Login from './Login';
 import NotSent from './NotSent';
+import SubmitPage, { SubmissionPage } from './SubmitPage';
 import Today from './Today';
 import './driver.css';
 
@@ -88,6 +91,8 @@ function Authed() {
       <Routes>
         <Route index element={<Today />} />
         <Route path="notsent" element={<NotSent />} />
+        <Route path="submit" element={<SubmitPage />} />
+        <Route path="submit/:date/:id" element={<SubmissionPage />} />
         <Route path="job/:date/:job" element={<JobPage />} />
         <Route path="job/:date/:job/stop/:cid" element={<StopPage />} />
         <Route path="job/:date/:job/done" element={<Done />} />

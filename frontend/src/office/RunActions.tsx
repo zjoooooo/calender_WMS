@@ -1,11 +1,11 @@
-// Office run actions (§6.12, §10.8) for a route or task job:
+// Office run actions (§6.12, §10.8) for a route job:
 // - today: [Assign driver…] (drivers with their current route, R24), [Release] (only with a holder),
 //   [Close out] (every pending stop becomes missed "not visited"; also creates a holder-less run when none);
 // - past: incomplete -> [Close out] [Re-plan leftovers…]; no_record -> [Close out] (results: click a stop).
-// Results are entered or corrected in the ResultDialog (click a stop row or the task's result).
+// Results are entered or corrected in the ResultDialog (click a stop row).
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { assignRun, isApiError, listDrivers, releaseRun, type RouteOccurrence, type TaskOccurrence } from '../api';
+import { assignRun, isApiError, listDrivers, releaseRun, type RouteOccurrence } from '../api';
 import { useI18n } from '../i18n';
 import { ConfirmDialog, Dialog } from '../ui/Dialog';
 import { ErrorBanner, Loading, useErrorText } from '../ui/Feedback';
@@ -13,27 +13,23 @@ import { useToast } from '../ui/Toast';
 import { jobOf } from './calendarModel';
 import { useInvalidatePlan } from './officeShared';
 
-type Occ = RouteOccurrence | TaskOccurrence;
+type Occ = RouteOccurrence;
 
-function labelOf(occ: Occ, customerName?: string): string {
-  return occ.kind === 'route' ? occ.code : `${occ.waste_type} ${customerName ?? ''}`.trim();
-}
-
-export function RunPanel({ occ, today, customerName, onReplan }: { occ: Occ; today: string; customerName?: string; onReplan?: () => void }) {
+export function RunPanel({ occ, today, onReplan }: { occ: Occ; today: string; onReplan?: () => void }) {
   const { t } = useI18n();
   const [dlg, setDlg] = useState<'assign' | 'release' | 'close' | null>(null);
   const date = occ.date;
   if (date > today || (occ.status !== 'scheduled' && !occ.run)) return null;
   const s = occ.run_status;
   const run = occ.run;
-  const pending = run ? run.pending : occ.kind === 'route' ? occ.stops.length : 1;
+  const pending = run ? run.pending : occ.stops.length;
   const isToday = date === today;
   const canAssign = isToday && occ.status === 'scheduled' && pending > 0;
   const canRelease = isToday && !!run?.driver && pending > 0; // a holder holds only while stops are pending (R25)
   const canClose = pending > 0 && !!s && ['not_started', 'active', 'open', 'incomplete', 'no_record'].includes(s);
   const canReplan = !isToday && !!onReplan && pending > 0 && (s === 'incomplete' || s === 'no_record');
   if (!canAssign && !canRelease && !canClose && !canReplan) return null;
-  const label = labelOf(occ, customerName);
+  const label = occ.code;
   return (
     <div className="acts" role="group" aria-label={t('run.actions')}>
       {canAssign && (
@@ -163,7 +159,6 @@ function AssignDialog(props: { date: string; job: string; label: string; onClose
               <strong>{d.name}</strong>
               <span className="muted small">
                 {d.route_job ? t('run.holdsRoute', { code: d.route_job.code, n: d.route_job.pending }) : t('run.free')}
-                {d.task_jobs.length ? ` · ${t('run.holdsTasks', { n: d.task_jobs.length })}` : ''}
               </span>
             </button>
           ))}

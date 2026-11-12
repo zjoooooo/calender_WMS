@@ -12,7 +12,7 @@ import { LangSwitch } from '../ui/LangSwitch';
 const NAV: { to: string; key: string; admin?: boolean }[] = [
   { to: '/', key: 'nav.calendar' },
   { to: '/routes', key: 'nav.routes' },
-  { to: '/tasks', key: 'nav.tasks' },
+  { to: '/submissions', key: 'nav.submissions' },
   { to: '/customers', key: 'nav.customers' },
   { to: '/holidays', key: 'nav.holidays' },
   { to: '/settings', key: 'nav.settings' },

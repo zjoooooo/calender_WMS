@@ -34,9 +34,9 @@ describe('a job the office took back', () => {
     expect(runDetailText('open', run({}), en, [])).toBe('Needs driver · 3/10');
   });
   it('driver Today card: "⇄ Needs driver 3/10 · taken back by office"', () => {
-    expect(statusText(en, 'open', { mine: false, resolved: 3, total: 10, byOffice: true, kind: 'route' })).toBe('⇄ Needs driver 3/10 · taken back by office');
-    expect(statusText(zh, 'open', { mine: false, resolved: 3, total: 10, byOffice: true, kind: 'route' })).toContain('办公室已收回');
-    expect(statusText(en, 'open', { mine: false, resolved: 3, total: 10, leftBy: 'Bala', byOffice: false, kind: 'route' })).toBe('⇄ Needs driver 3/10 · left by Bala');
+    expect(statusText(en, 'open', { mine: false, resolved: 3, total: 10, byOffice: true })).toBe('⇄ Needs driver 3/10 · taken back by office');
+    expect(statusText(zh, 'open', { mine: false, resolved: 3, total: 10, byOffice: true })).toContain('办公室已收回');
+    expect(statusText(en, 'open', { mine: false, resolved: 3, total: 10, leftBy: 'Bala', byOffice: false })).toBe('⇄ Needs driver 3/10 · left by Bala');
   });
 });
 

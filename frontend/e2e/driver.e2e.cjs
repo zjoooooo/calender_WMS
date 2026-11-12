@@ -229,8 +229,8 @@ async function main() {
     check(true, 'Ali signs in, changes the first password and lands on Today');
     const theme = await pageA.evaluate(() => document.documentElement.dataset.app);
     check(theme === 'driver', 'driver high-contrast theme is on', theme);
-    const tabText = await pageA.locator('.dtabs button').first().innerText();
-    check(/Routes \(\d+\)/.test(tabText), 'Routes tab shows its count', tabText);
+    const tabText = await pageA.locator('[data-testid=routes-head]').innerText();
+    check(/Routes \(\d+\)/i.test(tabText), 'the Routes heading shows the count', tabText);
     const cardH = (await pageA.locator(`button.jcard[data-code="${RA.code}"]`).boundingBox()).height;
     check(cardH >= 72, 'route card is at least 72 px high', cardH);
     const noHScroll = await pageA.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
@@ -449,29 +449,125 @@ async function main() {
     const aliRowLink = await pageB.locator(`[data-testid=done-list] a.drow[data-cid="${cid1}"]`).count();
     check(aliRowLink === 0, "Bala cannot open Ali's results for correction");
 
-    // ---- 6b. A task while holding a route (tasks never conflict, R23) -----------------------------------
-    const task = dayList.tasks.find((x) => x.status === 'not_started');
-    if (task) {
-      console.log('task');
-      await pageB.goto(BASE + '/driver');
-      await pageB.locator('.dtabs button').nth(1).click();
-      await pageB.click(`button.jcard[data-job="${task.job}"]`);
-      await pageB.waitForSelector('[data-testid=confirm]');
-      check((await pageB.locator('select[name=plate]').inputValue()) === 'SBA1234X', "the task's plate is pre-filled with the plate of the driver's route");
-      await pageB.click('[data-testid=confirm]');
-      await pageB.waitForSelector('[data-testid=result-form]');
-      const fields = await pageB.locator('input[name^="weight-"]').evaluateAll((els) => els.map((e) => e.name));
-      check(fields.length === 1 && fields[0] === `weight-${task.waste_type}`, 'the task form has one weight field, for the task type', fields);
-      await pageB.fill(`input[name="weight-${task.waste_type}"]`, '300');
-      await pageB.click('[data-testid=save-collected]');
-      await pageB.waitForURL(/\/driver$/);
-      const tv = await until(async () => (await call('GET', `/runs/${today}/${task.job}`, null, admin)).visits[task.customer.id]);
-      check(tv && tv.outcome === 'collected' && tv.weights[task.waste_type] === 300, 'task result recorded; back on Today', tv && tv.weights);
-      const mr = (await call('GET', '/driver/today', null, bala)).my_route;
-      check(mr && mr.job === RA.job, 'Bala still holds route A while doing the task', mr);
-    } else {
-      console.log('  (no task today: task step skipped)');
-    }
+    // ---- 6b. Round 7: free submissions (OTC / COMPACTOR / EROSE): no plan, no claim --------------------
+    console.log('submissions');
+    const subsOf = async () => (await call('GET', `/submissions?date=${today}`, null, admin)).submissions;
+    await pageB.goto(BASE + '/driver');
+    await pageB.waitForSelector('[data-testid=submit-new]');
+    check((await pageB.locator('.dtabs').count()) === 0 && dayList.tasks === undefined && dayList.my_tasks === undefined, 'Today has no Tasks tab: the driver API lists routes only');
+    const routeTags = await pageB.locator(`button.jcard[data-code="${RA.code}"] .wtag`).allInnerTexts();
+    check(routeTags.join() === (RA.waste_type === 'RECYCLING' ? 'RCY' : 'REL'), `the ${RA.code} card shows the route's waste-type tag`, routeTags);
+    check(/Submit OTC \/ COMPACTOR \/ EROSE/.test(await pageB.locator('[data-testid=submit-new]').innerText()), 'Today offers [Submit OTC / COMPACTOR / EROSE]', await pageB.locator('[data-testid=submit-new]').innerText());
+    await pageB.click('[data-testid=submit-new]');
+    await pageB.waitForSelector('[data-testid=submit-page]');
+    const typeBtns = await pageB.locator('[data-testid=submit-page] button[data-type]').evaluateAll((els) => els.map((e) => e.dataset.type));
+    check(typeBtns.join() === 'OTC,COMPACTOR,EROSE', 'step 1: the non-routable types only (no REL, no Recycling)', typeBtns);
+    await pageB.click('button[data-type="OTC"]');
+    const mine = await call('GET', '/driver/customers', null, bala);
+    const otcIds = mine.filter((c) => c.waste_types.includes('OTC')).map((c) => c.id);
+    await pageB.waitForSelector('[data-testid=submit-customers] button[data-customer]');
+    const listed = await pageB.locator('[data-testid=submit-customers] button[data-customer]').evaluateAll((els) => els.map((e) => Number(e.dataset.customer)));
+    check(listed.length > 0 && listed.every((id) => otcIds.includes(id)) && listed.length === Math.min(otcIds.length, 50), 'step 2: only customers registered with OTC are listed', { listed: listed.length, otc: otcIds.length });
+    await pageB.fill('input[name=customer-search]', 'event hall');
+    const found = pageB.locator('[data-testid=submit-customers] button[data-customer]');
+    await until(async () => (await found.count()) === 1);
+    check((await found.count()) === 1 && /Event Hall/.test(await found.first().innerText()), 'the customer list is searchable');
+    const otcCid = Number(await found.first().getAttribute('data-customer'));
+    await found.first().click();
+    await pageB.waitForSelector('[data-testid=result-form]');
+    const fields = await pageB.locator('input[name^="weight-"]').evaluateAll((els) => els.map((e) => e.name));
+    check(fields.length === 1 && fields[0] === 'weight-OTC', 'step 3: the form has one weight field, for the picked type', fields);
+    check((await pageB.locator('select[name=plate]').inputValue()) === 'SBA1234X', "the truck plate is pre-filled with the plate of the driver's route");
+    check((await pageB.locator('[data-testid=not-collected]').count()) === 0, 'a submission has no "Not collected" (nothing was planned)');
+    await pageB.selectOption('select[name=plate]', '');
+    await pageB.fill('input[name="weight-OTC"]', '300');
+    await pageB.click('[data-testid=save-collected]');
+    check(/plate/i.test(await pageB.locator('[data-testid=result-form]').innerText()) && (await subsOf()).length === 0, 'without a truck plate nothing is saved');
+    await pageB.selectOption('select[name=plate]', 'SBA1234X');
+    await pageB.click('[data-testid=save-collected]');
+    await pageB.waitForURL(/\/driver$/);
+    const s1 = await until(async () => ((await subsOf()).length === 1 ? (await subsOf())[0] : null));
+    check(s1 && s1.waste_type === 'OTC' && s1.weights.OTC === 300 && s1.customer_id === otcCid && s1.vehicle_no === 'SBA1234X' && s1.driver === 'Bala' && s1.date === today,
+      'the submission is recorded: OTC 300 kg, customer, truck, driver, today', s1 && { w: s1.weights, v: s1.vehicle_no, d: s1.driver });
+    check(s1 && /Event Hall/.test(s1.customer.name) && s1.customer.code !== '', 'with a snapshot of the customer code and name', s1 && s1.customer);
+    const myRow = pageB.locator(`[data-submission="${s1.id}"]`);
+    await myRow.waitFor();
+    check(/OTC/.test(await myRow.innerText()) && /300/.test(await myRow.innerText()), 'Today lists it under my submissions', await myRow.innerText());
+    const mr = (await call('GET', '/driver/today', null, bala)).my_route;
+    check(mr && mr.job === RA.job, 'Bala still holds route A: a submission needs no claim', mr);
+
+    // Offline: saved on the phone, sent once when the signal is back (the first answer is lost: no duplicate).
+    await ctxB.setOffline(true);
+    await pageB.click('[data-testid=submit-new]');
+    await pageB.waitForSelector('[data-testid=submit-page]');
+    await pageB.click('button[data-type="COMPACTOR"]');
+    await pageB.fill('input[name=customer-search]', 'Tuas');
+    await pageB.locator('[data-testid=submit-customers] button[data-customer]').first().click();
+    await pageB.waitForSelector('[data-testid=result-form]');
+    await pageB.fill('input[name="weight-COMPACTOR"]', '880');
+    await pageB.setInputFiles('[data-testid=photo-input]', { name: 'c1.png', mimeType: 'image/png', buffer: makePng(320, 240) });
+    await pageB.waitForSelector('[data-testid=photos] img');
+    await pageB.click('[data-testid=save-collected]');
+    await pageB.waitForURL(/\/driver$/);
+    const unsent = pageB.locator('[data-submission]', { hasText: 'Tuas' });
+    await unsent.waitFor();
+    check(/880/.test(await unsent.innerText()) && /not sent yet/.test(await unsent.innerText()), 'offline: the submission is kept on the phone ("not sent yet")', await unsent.innerText());
+    check((await subsOf()).length === 1, 'the server has only the first one so far');
+    const subOps = [];
+    let subLost = false;
+    await pageB.route('**/api/driver/submissions/**', async (route) => {
+      const req = route.request();
+      if (req.method() === 'PUT') subOps.push(JSON.parse(req.postData() || '{}').op_id);
+      if (req.method() === 'PUT' && !subLost) {
+        subLost = true;
+        await route.fetch(); // the server stores it ...
+        await route.abort('failed'); // ... but the phone never hears back
+        return;
+      }
+      await route.continue();
+    });
+    await ctxB.setOffline(false);
+    await until(async () => subOps.length >= 1, 15000);
+    await pageB.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await until(async () => subOps.length >= 2, 20000);
+    const sent = await until(async () => !/not sent yet/.test(await unsent.innerText()), 20000);
+    await pageB.unroute('**/api/driver/submissions/**');
+    const all2 = await subsOf();
+    const s2 = all2.find((x) => x.waste_type === 'COMPACTOR');
+    check(sent && all2.length === 2 && s2 && s2.weights.COMPACTOR === 880, 'back online it is sent: 2 submissions on the server', all2.map((x) => x.waste_type));
+    check(subOps.length >= 2 && new Set(subOps).size === 1 && s2 && s2.rev === 1 && s2.history.length === 0, 'the lost answer was resent with the same id: one record, rev 1, never two', { subOps, rev: s2 && s2.rev });
+    check(s2 && s2.photos.length === 1, 'its photo was uploaded first and is referenced', s2 && s2.photos);
+    const calTotals = async () => (await call('GET', `/calendar?view=week&anchor=${today}`, null, admin)).days.find((d) => d.date === today).totals;
+    check((await calTotals()).COMPACTOR === 880 && (await calTotals()).OTC === 300, "both count in the calendar's totals of today", await calTotals());
+
+    // Change, then delete (the driver's own record, same day).
+    await unsent.click();
+    await pageB.waitForSelector('[data-testid=result-form]');
+    check((await pageB.locator('input[name="weight-COMPACTOR"]').inputValue()) === '880', 'opening my submission shows its values');
+    await pageB.fill('input[name="weight-COMPACTOR"]', '900');
+    await pageB.click('[data-testid=save-collected]');
+    await pageB.waitForURL(/\/driver$/);
+    const s2b = await until(async () => {
+      const x = (await subsOf()).find((y) => y.id === s2.id);
+      return x && x.rev === 2 ? x : null;
+    });
+    check(s2b && s2b.weights.COMPACTOR === 900 && s2b.history.length === 1 && s2b.history[0].weights.COMPACTOR === 880, 'a correction is rev 2 and keeps the old weight in the history', s2b && { w: s2b.weights, h: s2b.history.length });
+    await pageB.locator(`[data-submission="${s2.id}"]`).click();
+    await pageB.waitForSelector('[data-testid=result-form]');
+    check(/Delete this submission/.test(await pageB.locator('[data-testid=undo]').innerText()), 'my submission can be deleted');
+    await pageB.click('[data-testid=undo]');
+    await pageB.waitForURL(/\/driver$/);
+    const left1 = await until(async () => ((await subsOf()).length === 1 ? await subsOf() : null));
+    check(left1 && left1[0].waste_type === 'OTC', 'deleted: it is gone from the office list');
+    check((await calTotals()).COMPACTOR === undefined, 'and from the calendar totals', await calTotals());
+    await until(async () => (await pageB.locator(`[data-submission="${s2.id}"]`).count()) === 0);
+    check((await pageB.locator(`[data-submission="${s2.id}"]`).count()) === 0 && (await pageB.locator(`[data-submission="${s1.id}"]`).count()) === 1, 'Today shows only the remaining submission');
+    await shot(pageB, '06b-submissions');
+    // Another driver cannot change it; the office cannot write at all.
+    const aliTok2 = (await call('POST', '/login', { username: 'ali', password: DRIVER_PW })).token;
+    const foreign = await fetch(`${API}/api/driver/submissions/${today}/${s1.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + aliTok2 },
+      body: JSON.stringify({ op_id: '0e2e0000-0000-4000-8000-000000000001', base_rev: 1, outcome: null }) });
+    check(foreign.status === 404 && (await subsOf())[0].rev === 1, "another driver cannot change or delete it (404)", foreign.status);
 
     // ---- 6c. Leave sheet: mark the rest not collected -> S6 Route done ------------------------------------
     console.log('leave: mark all not collected');
@@ -549,23 +645,26 @@ async function main() {
 
     // ---- 7b. Office actions reach the phone (§8.2) -------------------------------------------------------
     console.log('office actions');
-    const otcCust = (await call('GET', '/customers?type=OTC', null, admin)).find((c) => c.waste_types.length === 1 && c.waste_types[0] === 'OTC');
-    if (otcCust) {
-      await call('POST', '/tasks', { waste_type: 'OTC', customer_id: otcCust.id, date: today, note: 'Called the office' }, admin);
+    {
+      // A route the office adds today is announced on the phone ("New today").
+      const relCust = (await call('GET', '/customers?type=REL', null, admin))[0];
+      const mk = async (name) => {
+        const code = (await call('GET', `/routes/suggest-code?type=adhoc&date=${today}`, null, admin)).code;
+        return call('POST', '/routes', { type: 'adhoc', waste_type: 'REL', code, name, note: 'Called the office', date: today, stops: [{ customer_id: relCust.id, note: '' }] }, admin);
+      };
+      const fresh = await mk('Office added');
       await pageB.goto(BASE + '/driver');
       const banner = await pageB.locator('[data-testid=new-today]').innerText({ timeout: 10000 });
-      check(banner.includes(otcCust.name), '"New today" banner for a task the office just created', banner);
-      // DRV-6: a new task someone else already took is not announced.
-      const other = (await call('GET', '/customers?type=OTC', null, admin)).find((c) => c.id !== otcCust.id && c.waste_types.includes('OTC'));
-      if (other) {
-        const tk = await call('POST', '/tasks', { waste_type: 'OTC', customer_id: other.id, date: today, note: 'taken at once' }, admin);
-        const aliTok = (await call('POST', '/login', { username: 'ali', password: DRIVER_PW })).token;
-        await call('POST', `/driver/runs/${today}/t${tk.id}/claim`, { vehicle_no: 'GBA1234X' }, aliTok);
-        await pageB.goto(BASE + '/driver');
-        await pageB.locator(`[data-testid=new-today]`).waitFor();
-        const banner2 = await pageB.locator('[data-testid=new-today]').innerText();
-        check(banner2.includes(otcCust.name) && !banner2.includes(other.name), '"New today" leaves out a task another driver already took', banner2);
-      }
+      check(banner.includes(fresh.code), '"New today" banner for a route the office just created', banner);
+      // DRV-6: a new route someone else already took is not announced.
+      const other = await mk('Taken at once');
+      const devi = await call('POST', '/login', { username: 'devi', password: SEED_DRIVER_PW });
+      const deviTok = (await call('POST', '/me/password', { old: SEED_DRIVER_PW, new: DRIVER_PW }, devi.token)).token;
+      await call('POST', `/driver/runs/${today}/r${other.id}/claim`, { vehicle_no: 'SGX9021K' }, deviTok);
+      await pageB.goto(BASE + '/driver');
+      await pageB.locator('[data-testid=new-today]').waitFor();
+      const banner2 = await pageB.locator('[data-testid=new-today]').innerText();
+      check(banner2.includes(fresh.code) && !banner2.includes(other.code), '"New today" leaves out a route another driver already took', banner2);
     }
     await pageA.goto(`${BASE}/driver/job/${today}/${RB.job}`);
     await pageA.waitForSelector('[data-testid=run]');
@@ -590,8 +689,8 @@ async function main() {
     await pageB.click('.dsheet >> text=中文');
     await pageB.keyboard.press('Escape');
     const zhTab = await until(async () => {
-      const x = await pageB.locator('.dtabs button').first().innerText();
-      return /路线/.test(x) ? x : null;
+      const x = await pageB.locator('[data-testid=submit-new]').innerText();
+      return /提交/.test(x) ? x : null;
     });
     check(!!zhTab, 'language switch to 中文 on the phone', zhTab);
     await shot(pageB, '09-zh');
@@ -614,7 +713,7 @@ async function main() {
     await pageC.click('button[type=submit]');
     await pageC.waitForURL(/\/driver$/);
     const tabC = await until(async () => {
-      const x = await pageC.locator('.dtabs button').first().innerText();
+      const x = await pageC.locator('[data-testid=routes-head]').innerText();
       return /路线/.test(x) ? x : null;
     });
     check(!!tabC, 'Today is in 中文 after the sign-in', tabC);

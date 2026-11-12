@@ -40,7 +40,7 @@ export function interpolate(text: string, vars?: Vars): string {
 
 /**
  * Translates `key`; an unknown key returns the key itself (so a missing text is visible).
- * Singular: with `n` = 1, a `<key>_one` text is used when the dictionary has one ("1 task", not "1 tasks").
+ * Singular: with `n` = 1, a `<key>_one` text is used when the dictionary has one ("1 route", not "1 routes").
  */
 export function translate(lang: Lang, key: string, vars?: Vars): string {
   const k = vars && Number(vars.n) === 1 && DICTS[lang][key + '_one'] !== undefined ? key + '_one' : key;

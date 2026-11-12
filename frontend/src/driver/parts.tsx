@@ -162,9 +162,9 @@ export function RouteHead({ code, color, type, name, children }: { code: string 
 export function statusText(
   t: (k: string, v?: Record<string, string | number>) => string,
   status: RunStatus | null,
-  opts: { mine: boolean; driver?: string | null; resolved?: number; total?: number; leftBy?: string | null; byOffice?: boolean; kind: 'route' | 'task' },
+  opts: { mine: boolean; driver?: string | null; resolved?: number; total?: number; leftBy?: string | null; byOffice?: boolean },
 ): string {
-  const count = opts.kind === 'route' && opts.total ? ` ${opts.resolved ?? 0}/${opts.total}` : '';
+  const count = opts.total ? ` ${opts.resolved ?? 0}/${opts.total}` : '';
   switch (status) {
     case 'not_started':
       return '○ ' + t('driver.st.available');

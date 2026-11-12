@@ -7,6 +7,7 @@
 // then the write (rev + 1, the previous version appended to history).
 // A conflict (409 VISIT_CHANGED) is COMMITTED: the rejected body goes into history with rejected = true and
 // the visit gets the CONFLICT flag, so no weight is ever lost.
+// values(), build() and publicVisit() are shared with the drivers' free submissions (src/Submissions.php).
 final class Visits
 {
     public const OP_RE = '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/';
@@ -61,7 +62,15 @@ final class Visits
         }
 
         $occ = Schedule::jobOccurrence($plan, $day, $date, $job, $c->today);
-        $kind = $job[0] === 'r' ? 'route' : 'task';
+        // The one waste type this route collects (the frozen entry for a past date, else the live route).
+        $routeType = (string) ($occ['waste_type'] ?? Usage::DEFAULT_ROUTE_TYPE);
+        if ($occ === null) {
+            foreach ($plan['routes'] ?? [] as $r) {
+                if ((int) $r['id'] === (int) substr($job, 1)) {
+                    $routeType = Usage::routeType($r);
+                }
+            }
+        }
         if (!$office && ($run === null || Runs::lastHoldOf($run, $me) === null)) {
             throw new ApiError('NOT_HOLDER', 409); // R28: the driver must appear in run.holds
         }
@@ -81,17 +90,11 @@ final class Visits
         $ix = Schedule::index($plan);
         $customer = $ix['customers'][$cid] ?? null;
         $offPlan = false;
-        $taskType = null;
-        if ($kind === 'task') {
-            [$taskCid, $taskType] = self::taskOf($plan, $occ, $job, $run);
-            if ($cid !== $taskCid || $customer === null) {
-                throw new ApiError('NOT_ON_JOB', 422, 'customer_id');
-            }
-        } elseif (!in_array($cid, Runs::stopIds($occ), true)) {
+        if (!in_array($cid, Runs::stopIds($occ), true)) {
             $removed = array_map('intval', ($run['removed'] ?? null) ?: []);
             $ok = $prev !== null || in_array($cid, $removed, true);
-            if ($office && !$ok) { // R29: the office may record any routable customer as OFF_PLAN
-                $ok = $customer !== null && Usage::customerRoutable($customer, $ix['types']);
+            if ($office && !$ok) { // R29: the office may record any customer registered with the route's type as OFF_PLAN
+                $ok = $customer !== null && in_array($routeType, $customer['waste_types'] ?? [], true);
             }
             if (!$ok || $customer === null) {
                 throw new ApiError('NOT_ON_JOB', 422, 'customer_id');
@@ -120,7 +123,7 @@ final class Visits
                 }
             }
         }
-        $values = self::values($c, $b, $ix['types'], $kind, $taskType, $customer, $offPlan) + ['why' => $why];
+        $values = self::values($c, $b, $ix['types'], self::routeWeighTypes($ix['types'], $routeType)) + ['why' => $why];
         $cap = Clock::parse($b['captured_at'] ?? null);
 
         if ($values['outcome'] === null && !$changing) {
@@ -192,43 +195,20 @@ final class Visits
         ];
     }
 
-    /** [customer_id, waste_type] of a task job (the occurrence, else the live task, else the run's visit). */
-    private static function taskOf(array $plan, ?array $occ, string $job, ?array $run): array
+    /**
+     * R27 weighable types of a route stop: exactly the route's one waste type (also for an OFF_PLAN stop).
+     * @param array<string,array> $types Usage::typesByCode()
+     */
+    public static function routeWeighTypes(array $types, string $routeType): array
     {
-        if ($occ !== null) {
-            return [(int) $occ['customer_id'], (string) $occ['waste_type']];
-        }
-        foreach ($plan['tasks'] ?? [] as $t) {
-            if ((int) $t['id'] === (int) substr($job, 1)) {
-                return [(int) $t['customer_id'], (string) $t['waste_type']];
-            }
-        }
-        $first = array_key_first(Runs::visits($run));
-        return [$first === null ? 0 : (int) $first, ''];
+        return isset($types[$routeType]) ? [$routeType] : [];
     }
 
     /**
-     * R27 weighable types of a route stop: the customer's registered, active, routable types (waste-type
-     * order). An OFF_PLAN customer with none left may be weighed in any active routable type.
-     * @param array<string,array> $types Usage::typesByCode()
+     * R27 content of a write: {outcome, weights, tickets, photos, signature, reason, note}.
+     * @param list<string> $weighable the waste types this write may carry weights for
      */
-    public static function routeWeighTypes(array $types, ?array $customer, bool $offPlan): array
-    {
-        $own = [];
-        $all = [];
-        foreach ($types as $code => $t) {
-            if (!empty($t['routable']) && !empty($t['active'])) {
-                $all[] = (string) $code;
-                if (in_array((string) $code, ($customer['waste_types'] ?? null) ?: [], true)) {
-                    $own[] = (string) $code;
-                }
-            }
-        }
-        return ($own === [] && $offPlan) ? $all : $own;
-    }
-
-    /** R27 content of a write: {outcome, weights, tickets, photos, signature, reason, note}. */
-    private static function values(Ctx $c, array $b, array $types, string $kind, ?string $taskType, ?array $customer, bool $offPlan): array
+    public static function values(Ctx $c, array $b, array $types, array $weighable): array
     {
         $outcome = $b['outcome'];
         if ($outcome !== null && $outcome !== 'collected' && $outcome !== 'missed') {
@@ -237,7 +217,6 @@ final class Visits
         if ($outcome === null) { // undo: the stop is pending again
             return ['outcome' => null, 'weights' => [], 'tickets' => [], 'photos' => [], 'signature' => null, 'reason' => null, 'note' => ''];
         }
-        $weighable = $kind === 'task' ? [(string) $taskType] : self::routeWeighTypes($types, $customer, $offPlan);
         $weightsIn = self::map($b['weights'] ?? [], 'weights');
         $ticketsIn = self::map($b['tickets'] ?? [], 'tickets');
         $note = ($b['note'] ?? null) === null ? '' : V::str($b['note'], 'note', 0, 500);

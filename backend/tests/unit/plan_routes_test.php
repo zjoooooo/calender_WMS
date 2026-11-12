@@ -6,7 +6,7 @@ return (static function (): array {
     $now = '2026-11-11T10:00:00+08:00';
     $noRuns = ['2026-11-11' => ['date' => '2026-11-11', 'plan' => null, 'runs' => [], 'dropped_runs' => []]];
     $env = static fn (array $given = []) => TestEnv::make($given['now'] ?? $now, ['fixture' => 'basic'] + $given);
-    $post = static fn (TestEnv $e, array $body) => $e->call('POST', '/api/routes', $body, 'mei');
+    $post = static fn (TestEnv $e, array $body) => $e->call('POST', '/api/routes', $body + ['waste_type' => 'REL'], 'mei');
     $route = static function (TestEnv $e, int $id): ?array {
         foreach ($e->doc('plan')['routes'] as $r) {
             if ($r['id'] === $id) {
@@ -37,7 +37,7 @@ return (static function (): array {
             $r = T::ok($post($e, $base + ['days' => [5, 3, 3], 'note' => 'n']), 201);
             T::subset(['id' => 45, 'code' => 'W1', 'type' => 'regular', 'recurring' => true, 'days' => [3, 5], 'start' => '2026-11-16',
                 'end' => null, 'date' => null, 'sun' => null, 'rev' => 1, 'stops' => [['customer_id' => 12, 'note' => '']]], $r);
-            T::eq(['id' => 45, 'code' => 'W1', 'color' => 3, 'type' => 'regular', 'name' => 'West 1', 'note' => 'n', 'rev' => 1,
+            T::eq(['id' => 45, 'code' => 'W1', 'color' => 3, 'type' => 'regular', 'name' => 'West 1', 'note' => 'n', 'rev' => 1, 'waste_type' => 'REL',
                 'start' => '2026-11-16', 'end' => null, 'days' => [3, 5], 'series' => 45, 'stops' => [['customer_id' => 12, 'note' => '']]],
                 $e->doc('plan')['routes'][6], 'stored shape (§4.4); a created route starts its own series');
             T::eq(45, $e->doc('plan')['seq']['route']);
@@ -126,9 +126,9 @@ return (static function (): array {
             T::err($e->call('PATCH', '/api/routes/5', ['rev' => 5, 'end' => '2026-11-09'], 'mei'), 422, 'PAST_DATE_LOCKED');
             T::subset(['end' => '2026-11-10', 'rev' => 6], T::ok($e->call('PATCH', '/api/routes/5', ['rev' => 5, 'end' => '2026-11-10'], 'mei')),
                 '"End route from today" = end yesterday');
-            T::err($e->call('POST', '/api/routes', ['type' => 'regular', 'code' => 'W1', 'name' => 'x', 'start' => '2026-11-10', 'days' => [1], 'stops' => []], 'mei'),
+            T::err($e->call('POST', '/api/routes', ['waste_type' => 'REL', 'type' => 'regular', 'code' => 'W1', 'name' => 'x', 'start' => '2026-11-10', 'days' => [1], 'stops' => []], 'mei'),
                 422, 'PAST_DATE_LOCKED');
-            T::err($e->call('POST', '/api/routes', ['type' => 'adhoc', 'code' => 'A5', 'name' => 'x', 'date' => '2026-11-10', 'stops' => []], 'mei'),
+            T::err($e->call('POST', '/api/routes', ['waste_type' => 'REL', 'type' => 'adhoc', 'code' => 'A5', 'name' => 'x', 'date' => '2026-11-10', 'stops' => []], 'mei'),
                 422, 'PAST_DATE_LOCKED');
             T::err($e->call('PATCH', '/api/routes/7', ['rev' => 1, 'end' => '2026-11-13'], 'mei'), 422, 'VALIDATION'); // end before start - 1
             T::ok($e->call('PATCH', '/api/routes/7', ['rev' => 1, 'end' => '2026-11-14'], 'mei'));
@@ -136,12 +136,12 @@ return (static function (): array {
         'R11 past lock uses the op_date: 03:30 still edits Wed, 04:00 locks it' => function () use ($env, $stops) {
             $e = $env(['now' => '2026-11-12T03:30:00+08:00']);
             $body = ['type' => 'adhoc', 'code' => 'A5', 'name' => 'night', 'date' => '2026-11-11', 'stops' => $stops(21)];
-            T::ok($e->call('POST', '/api/routes', $body, 'mei'), 201);
+            T::ok($e->call('POST', '/api/routes', $body + ['waste_type' => 'REL'], 'mei'), 201);
             T::ok($e->call('PUT', '/api/routes/5/dates/2026-11-11', ['rev' => 4, 'scope' => 'this', 'note' => 'night shift'], 'mei'));
             $e->setNow('2026-11-12T04:00:00+08:00');
-            T::err($e->call('POST', '/api/routes', ['code' => 'A6'] + $body, 'mei'), 422, 'PAST_DATE_LOCKED');
+            T::err($e->call('POST', '/api/routes', ['waste_type' => 'REL', 'code' => 'A6'] + $body, 'mei'), 422, 'PAST_DATE_LOCKED');
             T::err($e->call('PUT', '/api/routes/5/dates/2026-11-11', ['rev' => 5, 'scope' => 'this', 'note' => 'late'], 'mei'), 422, 'PAST_DATE_LOCKED');
-            T::ok($e->call('POST', '/api/routes', ['code' => 'A6', 'date' => '2026-11-12'] + $body, 'mei'), 201);
+            T::ok($e->call('POST', '/api/routes', ['waste_type' => 'REL', 'code' => 'A6', 'date' => '2026-11-12'] + $body, 'mei'), 201);
         },
         'R12 only this date: override(D) stops and note; reset deletes it' => function () use ($env, $stops, $route, $occ) {
             $e = $env();
@@ -324,7 +324,7 @@ return (static function (): array {
                 T::eq(null, $occ($e, $d, $id), "no N1 on $d");
             }
             // deleting an ended segment deletes only that segment
-            T::ok($e->call('POST', '/api/routes', ['type' => 'regular', 'code' => 'N1', 'name' => 'North 1 again', 'start' => '2026-11-16', 'days' => [1], 'stops' => []], 'mei'), 201);
+            T::ok($e->call('POST', '/api/routes', ['waste_type' => 'REL', 'type' => 'regular', 'code' => 'N1', 'name' => 'North 1 again', 'start' => '2026-11-16', 'days' => [1], 'stops' => []], 'mei'), 201);
             T::eq(204, $e->call('DELETE', '/api/routes/3?rev=2', null, 'mei')['status']);
             T::eq('North 1 again', $route($e, 48)['name']);
         },

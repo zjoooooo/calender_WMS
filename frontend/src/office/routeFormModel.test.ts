@@ -10,6 +10,7 @@ const detail = (id: number, start: string, end: string | null, extra: Partial<Ro
   code: 'E2',
   color: 4,
   type: 'regular',
+  waste_type: 'REL',
   name: 'East 2 · Bedok',
   note: '',
   rev: 1,

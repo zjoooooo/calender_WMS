@@ -3,11 +3,12 @@
 // and every 15 s (backing off to 60 s while sending fails). Results of a flush refresh the driver queries.
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { ApiError, putDriverStop, uploadFile } from '../api';
+import { ApiError } from '../api';
 import { useI18n } from '../i18n';
 import { useErrorText } from '../ui/Feedback';
 import { useToast } from '../ui/Toast';
 import { draftFileNames } from './cache';
+import { outboxApi } from './submission';
 import { createIdbOutbox, nextFlushDelay, type FlushResult, type NotSentEntry, type Outbox, type OutboxEntry, type OutboxEvent, type SaveInput } from './outbox';
 
 export interface DriverMe {
@@ -84,7 +85,7 @@ export function DriverProvider({ me, children }: { me: DriverMe; children: React
     () =>
       createIdbOutbox(
         me.id,
-        { uploadFile, putStop: putDriverStop },
+        outboxApi(),
         {
           extraRefs: draftFileNames,
           isOnline: () => typeof navigator === 'undefined' || navigator.onLine !== false,
