@@ -43,41 +43,44 @@
   --shadow: 0 8px 24px rgba(0, 0, 0, .5);
   color-scheme: dark;
 }
-/* The "jiangshan" look (src/ui/style.ts): the palette of the Song blue-green landscape "A Thousand Li of
-   Rivers and Mountains": the bright azurite blue (石青) of its peaks leads, on a pale blue-white ground, with
-   malachite green (石绿), ochre (赭石) and cinnabar (朱砂) for states and warnings; headings in a Song typeface. Without data-style the neutral look above applies. */
+/* The "jiangshan" look (src/ui/style.ts). Its colours come from the Palace Museum's reproduction of the Song
+   blue-green landscape "A Thousand Li of Rivers and Mountains" (docs/Project.md §9.1 lists every sample and
+   its pixel): azurite blue (石青, hue 243) leads; water teal, malachite green (石绿), silk ochre and the
+   seals' cinnabar give the states. Sampled as they are: ink #1A2020, cinnabar #933F34, water #486670 and the
+   four colours of the ridge line. Derived (same hue as the sample, lightness and chroma set for the screen and
+   for 4.5:1 contrast): everything else. Headings in a Song typeface. Without data-style the neutral look applies. */
 :root[data-style="jiangshan"]:not([data-app="driver"]) {
-  --bg: #F2F8FA; --surface: #FFFFFF; --surface-2: #E1EFF4; --fg: #12303F; --muted: #4F6B78; --line: #C5DCE5;
-  --ink: #0B7CAB; --ink-fg: #FFFFFF; --today: #0A7F8F; --rest: #FBEFEA; --ph: #B8402D; --ok: #1B7F5B;
-  --warn: #9A5B1E; --danger: #B03A26; --dim: .18;
-  --warn-bg: #FBEBC8; --danger-bg: #F8DAD2; --ok-bg: #D3EEE0; --info-bg: #D5ECF5;
-  --cal-today: #0B7CAB; --cal-ph: #B8402D; --cal-ph-bg: #F8DCD3;
-  --shadow: 0 8px 24px rgba(11, 60, 85, .2);
-  --st-idle: #5F7480; --st-early: #A8642A; --st-late: #0B7CAB; --st-done: #1B7F5B; --st-problem: #B8402D;
+  --bg: #F2F8FC; --surface: #FFFFFF; --surface-2: #E0EDF8; --fg: #1A2020; --muted: #556673; --line: #C4D7E7;
+  --ink: #0069A2; --ink-fg: #FFFFFF; --today: #07657D; --rest: #FDF0EE; --ph: #933F34; --ok: #3B6B34;
+  --warn: #7D5E13; --danger: #933F34; --dim: .18;
+  --warn-bg: #F8E6C3; --danger-bg: #FEDBD5; --ok-bg: #D8F0D4; --info-bg: #D5EBFE;
+  --cal-today: #0069A2; --cal-ph: #933F34; --cal-ph-bg: #FEDBD5;
+  --shadow: 0 8px 24px rgba(10, 50, 80, .2);
+  --st-idle: #486670; --st-early: #7D5E13; --st-late: #0069A2; --st-done: #3B6B34; --st-problem: #933F34;
   --font-head: "Songti SC", "Noto Serif SC", "Source Han Serif SC", "STSong", "SimSun", Georgia, serif;
 }
 @media (prefers-color-scheme: dark) {
   :root[data-style="jiangshan"]:not([data-theme="light"]):not([data-app="driver"]) {
-    --bg: #0B1E2B; --surface: #102A3A; --surface-2: #173A4E; --fg: #E6F3F7; --muted: #9BB8C4; --line: #25495C;
-    --ink: #3DB8E0; --ink-fg: #06202C; --today: #4FD1C5; --rest: #2B1D1A; --ph: #F08A75; --ok: #5FD3A4;
-    --warn: #E8B45F; --danger: #F08A75; --dim: .2;
-    --warn-bg: #3A2B12; --danger-bg: #3D1C15; --ok-bg: #0F3326; --info-bg: #0F3447;
-    --cal-today: #1C93C4; --cal-ph: #F08A75; --cal-ph-bg: #3D1C15;
+    --bg: #091823; --surface: #122431; --surface-2: #1E3343; --fg: #EFEBE2; --muted: #9EB1C0; --line: #2F4556;
+    --ink: #69B3EB; --ink-fg: #091823; --today: #7CC3DC; --rest: #311F1B; --ph: #ED8D7D; --ok: #90C986;
+    --warn: #DCB970; --danger: #ED8D7D; --dim: .2;
+    --warn-bg: #382C11; --danger-bg: #47211B; --ok-bg: #1F341C; --info-bg: #17364D;
+    --cal-today: #1778B4; --cal-ph: #ED8D7D; --cal-ph-bg: #47211B;
     --shadow: 0 8px 24px rgba(0, 0, 0, .5);
     color-scheme: dark;
   }
 }
 :root[data-style="jiangshan"][data-theme="dark"]:not([data-app="driver"]) {
-  --bg: #0B1E2B; --surface: #102A3A; --surface-2: #173A4E; --fg: #E6F3F7; --muted: #9BB8C4; --line: #25495C;
-  --ink: #3DB8E0; --ink-fg: #06202C; --today: #4FD1C5; --rest: #2B1D1A; --ph: #F08A75; --ok: #5FD3A4;
-  --warn: #E8B45F; --danger: #F08A75; --dim: .2;
-  --warn-bg: #3A2B12; --danger-bg: #3D1C15; --ok-bg: #0F3326; --info-bg: #0F3447;
-  --cal-today: #1C93C4; --cal-ph: #F08A75; --cal-ph-bg: #3D1C15;
+  --bg: #091823; --surface: #122431; --surface-2: #1E3343; --fg: #EFEBE2; --muted: #9EB1C0; --line: #2F4556;
+  --ink: #69B3EB; --ink-fg: #091823; --today: #7CC3DC; --rest: #311F1B; --ph: #ED8D7D; --ok: #90C986;
+  --warn: #DCB970; --danger: #ED8D7D; --dim: .2;
+  --warn-bg: #382C11; --danger-bg: #47211B; --ok-bg: #1F341C; --info-bg: #17364D;
+  --cal-today: #1778B4; --cal-ph: #ED8D7D; --cal-ph-bg: #47211B;
   --shadow: 0 8px 24px rgba(0, 0, 0, .5);
   color-scheme: dark;
 }
-/* a thin ridge line in the painting's colours above the page */
-:root[data-style="jiangshan"]:not([data-app="driver"]) body { border-top: 3px solid; border-image: linear-gradient(90deg, #0B7CAB, #1FA3B8 40%, #2FA38A 70%, #D9B45A) 1; }
+/* the ridge line above the page: azurite, water, malachite, silk, as sampled */
+:root[data-style="jiangshan"]:not([data-app="driver"]) body { border-top: 3px solid; border-image: linear-gradient(90deg, #2E5F8A, #437181 40%, #6F9469 70%, #977C45) 1; }
 
 /* Driver theme (§9.1): high-contrast light, readable in sunlight. The driver app sets
    document.documentElement.dataset.app = 'driver'. */

@@ -114,8 +114,8 @@ async function dragTo(page, from, to) {
   await page.waitForTimeout(400); // drop animation
 }
 
-const BLUE = 'rgb(11, 124, 171)'; // --cal-today (light theme, the default "jiangshan" look)
-const RED = 'rgb(184, 64, 45)'; // --cal-ph (light theme, the default "jiangshan" look)
+const BLUE = 'rgb(0, 105, 162)'; // --cal-today (light theme, the default "jiangshan" look)
+const RED = 'rgb(147, 63, 52)'; // --cal-ph (light theme, the default "jiangshan" look)
 const noOverflow = (page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 
 /** Month view checks (§9.2, Round 5). Leaves tomorrow's first regular route edited (only that date) and an
@@ -154,7 +154,7 @@ async function monthChecks(page, { today, tomorrow, workDay, ph }) {
     if (o.run_status === 'active') return r && r.total > 0 && (r.collected + r.missed) * 2 >= r.total ? 'late' : 'early';
     return 'idle';
   };
-  const TONE_BG = { idle: 'rgb(95, 116, 128)', early: 'rgb(168, 100, 42)', late: 'rgb(11, 124, 171)', done: 'rgb(27, 127, 91)', problem: 'rgb(184, 64, 45)' };
+  const TONE_BG = { idle: 'rgb(72, 102, 112)', early: 'rgb(125, 94, 19)', late: 'rgb(0, 105, 162)', done: 'rgb(59, 107, 52)', problem: 'rgb(147, 63, 52)' };
   const todayOcc = mcal.routes.filter((o) => o.date === today && o.status === 'scheduled');
   const shown = [];
   for (const o of todayOcc) {
@@ -166,14 +166,14 @@ async function monthChecks(page, { today, tomorrow, workDay, ph }) {
   // Two looks, switched in the header and remembered in this browser.
   const bodyBg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   const look = page.locator('[data-testid=style-switch] button');
-  check((await bodyBg()) === 'rgb(242, 248, 250)' && (await look.first().getAttribute('aria-pressed')) === 'true', 'the default look is the Jiangshan palette (pale blue ground)', await bodyBg());
+  check((await bodyBg()) === 'rgb(242, 248, 252)' && (await look.first().getAttribute('aria-pressed')) === 'true', 'the default look is the Jiangshan palette (pale blue ground)', await bodyBg());
   await look.nth(1).click();
   check((await bodyBg()) === 'rgb(245, 246, 248)' && (await lineOf(shown[0][0]).locator('.code').evaluate((e) => getComputedStyle(e).backgroundColor)) !== shown[0][3], 'the second button switches to the plain look (also the progress colours)', await bodyBg());
   await page.reload();
   await page.locator(`.month .mcell[data-date="${today}"] .mline`).first().waitFor();
   check((await bodyBg()) === 'rgb(245, 246, 248)', 'the look is remembered after a reload');
   await page.locator('[data-testid=style-switch] button').first().click();
-  check((await bodyBg()) === 'rgb(242, 248, 250)', 'and switches back');
+  check((await bodyBg()) === 'rgb(242, 248, 252)', 'and switches back');
   await page.getByRole('button', { name: /^Expand all/ }).click().catch(() => {});
   check((await lineOf('N1').locator('.tt').count()) === 0, 'a regular route line has no R tag');
   const todayCal = mcal.days.find((d) => d.date === today);
