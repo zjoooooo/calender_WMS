@@ -977,11 +977,16 @@ A submission can be made on any day (R17).
 
 ### 6.8 Submissions page (office, read only)
 - Navigation: **Submissions** (`/submissions?date=YYYY-MM-DD`; no date = today). The day drawer of today and of past days links to that day's page.
-- It lists the submissions of one operational day (`GET /api/submissions?date=`), every driver's, in the order the server received them. Deleted submissions are not listed.
+- It lists everything the drivers recorded on one operational day (`GET /api/submissions?date=`), every driver's, in the order the server received it:
+  - the **route records**: the result of each stop on that day's routes (REL and Recycling; regular, special and adhoc routes), collected or not collected (an undone stop is pending again and not listed);
+  - the **free submissions** (R17). Deleted submissions are not listed.
 - Head: [‹] [Today] [›], a date field (no future dates), the count and the totals per waste type of the rows shown.
-- Filters on the loaded day: waste type, driver, and customer (name or code).
-- Columns: time, type tag, customer (name and code), weight, ticket number, truck plate, driver, and photos / signature / flags (`LATE`).
-- [Details] opens a row: address, note, when the server received it, the photos and the signature (a click opens one full size), and the change history.
+- Filters on the loaded day: source (routes and no route / routes only / no route only), waste type, driver, and customer (name or code).
+- Columns: time, route (code and R / S / ⚡A tag, or "No route"), type tag, customer (name and code), weight (or "✗" and the reason for a stop that was not collected), ticket number, truck plate (a route record: the plate of the driver's hold), driver, and photos / signature / flags.
+- [Details] opens the record as a small document in a dialog over the dimmed page: date, time, route, type, customer, address, weight, ticket, truck, driver, note, flags, the photos and the signature (a click opens one full size), and the change history.
+  - [Print] prints that document alone (print styles hide the page behind it; black on white also from the dark theme).
+  - [Save] downloads it as one HTML file with the photos and the signature inside, so it opens in any browser with no server.
+  - Only [Close] closes it: there is no ✕, and Esc or a click outside does nothing.
 - The page has no create, edit or delete (R17). Today's page refetches every 30 s.
 
 ### 6.9 Customers
@@ -1531,8 +1536,12 @@ PUT /api/driver/submissions/{date}/{id}             (driver; id = a UUID v4 made
          | VEHICLE_REQUIRED | VEHICLE_UNKNOWN | WEIGHT_INVALID | WEIGHT_REQUIRED | TICKET_REQUIRED | FILE_MISSING
          | EDIT_WINDOW_CLOSED {"deadline"} | VALIDATION (outcome "missed"; a changed waste_type or customer_id)
 GET /api/submissions?date=2026-11-11                (office, admin; no date = today)
-  -> {"today":"2026-11-11","date":"2026-11-11","totals":{"OTC":300.0},"submissions":[Submission + "driver":"Ali" …]}
-     (every driver's, not deleted, with ops and history; there is no office write in this version)
+  -> {"today":"2026-11-11","date":"2026-11-11","totals":{"OTC":300.0},"submissions":[Submission + "driver":"Ali" …],
+      "visits":[Visit + {"id":"r5/12","date","job":"r5","route":{"code":"N1","type":"regular","name":"North 1"},
+                         "waste_type":"REL","vehicle_no":"GBA1234X","driver":"Ali"} …]}
+     (submissions: every driver's, not deleted, with ops and history; totals are theirs. visits: the results
+      recorded on that day's routes, collected and missed, with history; an undone stop is not listed.
+      There is no office write in this version)
 ```
 - Rules: R17 and R18. Submission: §4.8.
 - `/api/tasks…` no longer exists (404, R19).

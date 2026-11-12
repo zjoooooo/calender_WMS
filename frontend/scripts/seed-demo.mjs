@@ -12,11 +12,14 @@
 // - The admin password is --password, or WMS_PASSWORD, or read from <data-dir>/initial-admin.txt
 //   (--data-dir or WMS_DATA_DIR). When the account must change its password, it is changed to
 //   --new-password (default "demo-pass-2026") and the new one is printed.
-// - Drivers ali, bala, chong, devi, eko get the password "driver-pass-2026" (they must change it at the
+// - Drivers ali, bala, chong, devi, eko, faye get the password "driver-pass-2026" (they must change it at the
 //   first sign-in unless --with-runs already did).
 // - --with-runs (needs the runs/driver API, §10.8/§10.9): drivers claim some of today's routes, record a
 //   few results and submit an OTC and a COMPACTOR collection, so the calendar shows live statuses and
 //   totals. Skipped with a note when that API is missing.
+// - --specials-only: only the Sunday / PH routes are made (no regular or adhoc routes), and with --with-runs
+//   two drivers complete S1 and S2. scripts/demo-data.mjs runs it first on a clock set to the last Sunday, so
+//   the demo has a past day with special-route records; the normal run then adds the rest from today on.
 // Routes start today (plan dates before today are locked, R11), so days before today stay empty.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -142,7 +145,7 @@ async function main() {
   }
   const users = await must('GET', '/users');
   const drivers = [
-    ['ali', 'Ali'], ['bala', 'Bala'], ['chong', 'Chong'], ['devi', 'Devi'], ['eko', 'Eko'],
+    ['ali', 'Ali'], ['bala', 'Bala'], ['chong', 'Chong'], ['devi', 'Devi'], ['eko', 'Eko'], ['faye', 'Faye'],
   ];
   for (const [username, name] of drivers) {
     if (!users.some((u) => u.username === username)) {
@@ -196,8 +199,9 @@ async function main() {
   const routes = await must('GET', '/routes?ended=1');
   const haveCode = (code, date) => routes.some((x) => x.code === code && (!x.date || x.date === date));
   let created = 0;
+  const specialsOnly = flag('specials-only');
   for (const rt of ROUTES) {
-    if (haveCode(rt.code)) continue;
+    if (haveCode(rt.code) || (specialsOnly && rt.days)) continue;
     const waste_type = rt.waste ?? 'REL';
     const body = rt.days
       ? { waste_type, type: 'regular', code: rt.code, color: rt.color, name: rt.name, note: '', start: today, end: null, days: rt.days, stops: routeStops[rt.code] }
@@ -207,7 +211,7 @@ async function main() {
   }
   const adhoc = async (date, code, name, note, stops) => {
     const sug = await must('GET', `/routes/suggest-code?type=adhoc&date=${date}`);
-    if (sug.class !== 'work' || routes.some((x) => x.date === date && x.name === name)) return;
+    if (specialsOnly || sug.class !== 'work' || routes.some((x) => x.date === date && x.name === name)) return;
     await must('POST', '/routes', { type: 'adhoc', waste_type: 'REL', code: haveCode(code, date) ? sug.code : code, name, note, date, stops });
     created++;
   };
@@ -220,12 +224,12 @@ async function main() {
   console.log(`seeded: ${created} new routes, ${byCode.size} customers in total, trucks ok, drivers ok`);
 
   // 6. Optional live statuses (runs API, §10.9).
-  if (flag('with-runs')) await simulateRuns(today, { otc: abc, compactor: compactors[0] });
+  if (flag('with-runs')) await simulateRuns(today, specialsOnly ? null : { otc: abc, compactor: compactors[0] });
 }
 
 async function simulateRuns(today, cust) {
   const tokens = {};
-  for (const u of ['ali', 'bala', 'chong', 'devi']) {
+  for (const u of ['ali', 'bala', 'chong', 'devi', 'faye']) {
     let r = await call('POST', '/login', { username: u, password: DRIVER_PW });
     if (!r.ok) r = await call('POST', '/login', { username: u, password: DRIVER_PW + '!' });
     if (!r.ok) {
@@ -246,6 +250,12 @@ async function simulateRuns(today, cust) {
     ['bala', 'E1', 'SBA1234X', 3],
     ['chong', 'W1', 'SGX9021K', 1],
     ['devi', 'C1', 'SBB5678Z', 0],
+    // Recycling: R1 runs Mon / Wed / Fri and R2 Tue / Thu / Sat, so one of them is on today's list.
+    ['faye', 'R1', 'SGX9021K', 2],
+    ['faye', 'R2', 'SGX9021K', 2],
+    // A Sunday or a public holiday: the special routes (the regular routes above are not on the list then).
+    ['ali', 'S1', 'GBA1234X', 99],
+    ['bala', 'S2', 'SBA1234X', 99],
   ];
   for (const [u, code, plate, n] of plan) {
     const card = day.data.routes.find((x) => x.code === code);
@@ -265,6 +275,7 @@ async function simulateRuns(today, cust) {
     }
     console.log(`runs: ${u} took ${code} and recorded ${Math.min(n, job.stops.length)} stops`);
   }
+  if (!cust) return; // --specials-only: the route records only
   // Free submissions (no plan, no claim): Ali submits an OTC collection, Bala a COMPACTOR one. The ids are
   // fixed, so running the seed again changes nothing (a resend never makes a second record).
   const submit = async (u, id, waste_type, customer, plate, kg) => {

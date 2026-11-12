@@ -16,9 +16,11 @@ export interface DialogProps {
   closeOnScrim?: boolean;
   /** Hide the ✕ and ignore Esc (for a forced step). */
   noClose?: boolean;
+  /** Extra class on the panel (e.g. "print-doc": the dialog is what a print shows). */
+  className?: string;
 }
 
-export function Dialog({ open, title, onClose, children, footer, width, closeOnScrim, noClose }: DialogProps) {
+export function Dialog({ open, title, onClose, children, footer, width, closeOnScrim, noClose, className }: DialogProps) {
   const { t } = useI18n();
   const panel = useRef<HTMLDivElement>(null);
   useLayer(open, () => !noClose && onClose());
@@ -28,7 +30,7 @@ export function Dialog({ open, title, onClose, children, footer, width, closeOnS
   return createPortal(
     <>
       <div className="scrim" onClick={closeOnScrim && !noClose ? onClose : undefined} />
-      <div className="dialog" role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : undefined} ref={panel} tabIndex={-1} style={style}>
+      <div className={className ? `dialog ${className}` : 'dialog'} role="dialog" aria-modal="true" aria-label={typeof title === 'string' ? title : undefined} ref={panel} tabIndex={-1} style={style}>
         <div className="dialog-head">
           <h2>{title}</h2>
           {!noClose && (

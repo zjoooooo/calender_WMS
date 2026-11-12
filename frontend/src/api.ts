@@ -1131,11 +1131,25 @@ export interface DriverSubmissions {
   submissions: Submission[];
 }
 
+/** A result recorded on a route stop, as the office's records page lists it. */
+export interface RouteRecord extends Visit {
+  id: string; // '<job>/<customer id>'
+  date: IsoDate;
+  job: string;
+  route: { code: string; type: RouteType; name: string };
+  waste_type: string;
+  vehicle_no: string | null;
+  driver: string | null;
+}
+
 export interface OfficeSubmissions {
   today: IsoDate;
   date: IsoDate;
+  /** Totals of the free submissions. */
   totals: Record<string, number>;
   submissions: (Submission & { driver: string | null })[];
+  /** The results recorded on that day's routes (collected and not collected). */
+  visits: RouteRecord[];
 }
 
 export const driverCustomers = (opts?: RequestOptions): Promise<SubmitCustomer[]> => request('GET', '/driver/customers', undefined, opts);
@@ -1144,7 +1158,7 @@ export const driverSubmissions = (date?: IsoDate, opts?: RequestOptions): Promis
 /** 201 new | 200 changed, deleted or replayed; warning LATE. The id is made on the phone, so a resend never duplicates. */
 export const putDriverSubmission = (date: IsoDate, id: string, body: SubmissionWrite, opts?: RequestOptions): Promise<ApiResult<{ submission: Submission | null; replay: boolean }>> =>
   requestFull('PUT', `/driver/submissions/${date}/${id}`, body, opts);
-/** Office: every submission of one operational day (read only). */
+/** Office: what the drivers recorded on one operational day: free submissions and route stop results (read only). */
 export const listSubmissions = (date: IsoDate): Promise<OfficeSubmissions> => request('GET', '/submissions', undefined, { query: { date } });
 
 // ---------------------------------------------------------------------------------------------

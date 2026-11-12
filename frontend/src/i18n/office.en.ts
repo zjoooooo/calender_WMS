@@ -438,7 +438,7 @@ const office: { [K in keyof typeof zh]: string } = {
   'rf.wasteTypeHint': 'A route collects one waste type. It cannot change later.',
   'rf.wasteTypeFixed': 'The waste type of a route cannot change: create a new route instead.',
   'subs.title': 'Submissions',
-  'subs.hint': 'What drivers submitted on the phone for the waste types that are not on routes. These weights count in the calendar\'s day totals. This page is read only.',
+  'subs.hint': 'Everything drivers recorded on this day: the stops of the routes (REL, Recycling) and what they submitted on the phone for the waste types that are not on routes. This page is read only.',
   'subs.count': '{n} submissions',
   'subs.count_one': '{n} submission',
   'subs.colTime': 'Time',
@@ -456,6 +456,15 @@ const office: { [K in keyof typeof zh]: string } = {
   'subs.noneFiltered': 'No submission matches the filters',
   'subs.received': 'received {time}',
   'subs.deleted': 'deleted',
+  'subs.colRoute': 'Route',
+  'subs.noRoute': 'No route',
+  'subs.allSources': 'Routes and no route',
+  'subs.srcRoute': 'Routes only',
+  'subs.srcFree': 'No route only',
+  'subs.record': 'Collection record',
+  'subs.print': 'Print',
+  'subs.flags': 'Flags',
+  'subs.saveFailed': 'The file could not be made: a photo did not load',
 };
 
 export default office;

@@ -133,6 +133,9 @@ Run `build.bat` again after every frontend change.
   `node frontend/scripts/seed-demo.mjs --api http://127.0.0.1:8080 --data-dir backend/data [--with-runs]`.
   - It creates about 12 REL routes a day and two Recycling routes, customers (REL, Recycling, OTC,
     COMPACTOR, EROSE), trucks and drivers, like the approved mockup.
+  - `--with-runs` also records stops on a few REL routes and on today's Recycling route, and two free
+    submissions. `npm run demo:data` first runs it once on the last Sunday (`--specials-only`), so the demo
+    has a past day with special-route records too.
   - It is idempotent. It changes the first-start admin password to `demo-pass-2026` and prints it.
   - `--with-runs` also lets drivers claim a few of today's routes and submit an OTC and a COMPACTOR
     collection.
