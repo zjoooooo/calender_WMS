@@ -1,4 +1,4 @@
-// §13: the calendar's search and highlight filter, plus grouping, legend and polling decisions.
+// §13: the calendar's search and highlight filter, plus grouping and polling decisions.
 import { describe, expect, it } from 'vitest';
 import type { CalendarResponse, RouteOccurrence } from '../api';
 import {
@@ -6,7 +6,6 @@ import {
   ALL_TYPES,
   dispatchSort,
   groupDays,
-  legendItems,
   makeMatcher,
   MONTH_CELL_MAX,
   monthCellLines,
@@ -84,7 +83,7 @@ describe('search and highlight (§9.2)', () => {
   });
 });
 
-describe('grouping, filters and legend', () => {
+describe('grouping and filters', () => {
   it('splits a day into routes and the paused group, with unfiltered counts', () => {
     const [wed, thu] = groupDays(data, { types: ALL_TYPES });
     expect(wed.routes.map((o) => o.code)).toEqual(['A1', 'N1', 'E2']);
@@ -100,11 +99,6 @@ describe('grouping, filters and legend', () => {
     expect(wed.summary.routes).toBe(3);
     expect(thu.paused).toEqual([]);
     expect(thu.summary.paused).toBe(1);
-  });
-
-  it('legend: unique codes, sorted A, R, S then naturally; filtered by type', () => {
-    expect(legendItems(data, { types: ALL_TYPES }).map((l) => l.code)).toEqual(['A1', 'E2', 'N1', 'S1']);
-    expect(legendItems(data, { types: { regular: false, special: true, adhoc: true } }).map((l) => l.code)).toEqual(['A1', 'S1']);
   });
 });
 

@@ -1247,7 +1247,7 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
   8. `#FF9DA7`
   9. `#9C755F`
   10. `#17BECF`
-- **Office theme**: two looks, chosen with the switch in the header and kept in the browser (`localStorage` `wms.style`, `<html data-style>`): **Jiangshan** (default; silk ground, ink text, azurite and malachite accents, ochre and cinnabar for warnings, headings in a Song typeface) and **Plain** (neutral chrome). Both have a light and a dark variant; the driver app keeps its own high-contrast theme. The progress colours of route codes are tokens (`--st-idle`, `--st-early`, `--st-late`, `--st-done`, `--st-problem`) with white text. Codes are set in a monospace font. Light and dark themes come from CSS tokens.
+- **Office theme**: two looks, chosen with the switch in the header and kept in the browser (`localStorage` `wms.style`, `<html data-style>`): **Jiangshan** (default; the bright azurite blue of the painting leads, on a pale blue-white ground with dark ink-blue text; malachite green, ochre and cinnabar for states and warnings; headings in a Song typeface) and **Plain** (neutral chrome). Both have a light and a dark variant; the driver app keeps its own high-contrast theme. The progress colours of route codes are tokens (`--st-idle`, `--st-early`, `--st-late`, `--st-done`, `--st-problem`) with white text. Codes are set in a monospace font. Light and dark themes come from CSS tokens.
 - **Driver theme**: a high-contrast light theme, readable in sunlight.
 - **Fonts**: system fonts only, no external font CDN.
 
@@ -1267,9 +1267,9 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
   - type chips: `R`, `S` and `⚡A`;
   - [Clear highlight], shown while a highlight or search is active;
   - month view only: [Expand all / Collapse all] for the collapsed cells.
-- **Legend row**: every route code that appears in the visible range, as `▌CODE short-name`, sorted A, R, S and then by code. Clicking a code highlights it.
+- **Colour key**: one line under the filter bar that names the five progress colours. There is no list of route codes above the calendar (removed at the user's request, 2026-11-12).
 - **Highlight and search.**
-  - Clicking a code (in the legend, a row or a chip) highlights that code on every date. Everything else dims to 18% opacity.
+  - Clicking a code (in a week row) highlights that code on every date. Everything else dims to 18% opacity.
   - Clicking the same code again, or pressing Esc, clears the highlight.
   - Search dims everything that does not match. It covers routes (code, name, stop customers).
   - Highlight and search are exclusive: the last one used wins.
@@ -1738,7 +1738,7 @@ GET /api/files/{uuid}.{jpg|png} -> bytes (Cache-Control: private, max-age=315360
   src/env.d.ts                        __WMS_DEMO__: true only in the demo build
   src/i18n/  index.ts zh.ts en.ts
   src/ui/    tokens.css palette.ts Dialog.tsx Drawer.tsx Chip.tsx StatusGlyph.tsx photo.ts (resize; driver and office) uuid.ts (getRandomValues)
-  src/office/ CalendarPage (TopBar, FilterBar, Legend, WeekView, MonthView, DayColumn, RouteRow,
+  src/office/ CalendarPage (TopBar, FilterBar, colour key, WeekView, MonthView, DayColumn, RouteRow,
               RouteDrawer, StopList (dnd-kit sortable + ↑ ↓ + move to #; also used by RoutesPage),
               ScopeDialog, CopyDialog, RouteForm, UrgentDialog,
               ResultDialog, RunExistsDialog, AssignDialog), RoutesPage, SubmissionsPage, CustomersPage,
@@ -2173,7 +2173,7 @@ Round 6: GitHub Actions tests every commit and publishes a demo of the office ca
   - freeze;
   - `GET /api/calendar`;
   - week view with one-line rows and month view with code chips;
-  - legend, highlight, search and type filters;
+  - highlight, search and type filters;
   - the paused (PH) line;
   - the missing-holiday banner;
   - read-only past days;

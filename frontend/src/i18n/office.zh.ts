@@ -181,7 +181,6 @@ const office = {
   'cal.edited': '这一天单独改过',
   'cal.expandAll': '全部展开',
   'cal.highlightCode': '高亮 {code}（再点一次取消）',
-  'cal.legend': '路线编号，点一下高亮',
   'cal.toneKey': '编号颜色的含义',
   'cal.tone.idle': '未开始',
   'cal.tone.early': '进行中（不到一半）',

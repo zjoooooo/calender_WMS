@@ -206,31 +206,6 @@ export function routeTone(o: Pick<RouteOccurrence, 'status' | 'run_status' | 'ru
   return 'idle';
 }
 
-// ---- legend (§9.2) ---------------------------------------------------------------------------------
-
-export interface LegendItem {
-  code: string;
-  type: RouteType;
-  name: string;
-}
-
-const TYPE_RANK: Record<RouteType, number> = { adhoc: 0, regular: 1, special: 2 };
-
-/** "North 1 · Woodlands" -> "North 1". */
-export function shortName(name: string): string {
-  return name.split(' · ')[0];
-}
-
-/** Every route code in the visible range (after the type filter), sorted A, R, S and then by code. */
-export function legendItems(data: CalendarResponse | undefined, filters: Filters): LegendItem[] {
-  const seen = new Map<string, LegendItem>();
-  for (const o of data?.routes ?? []) {
-    if (filters.types[o.type] === false || seen.has(o.code)) continue;
-    seen.set(o.code, { code: o.code, type: o.type, name: o.name });
-  }
-  return [...seen.values()].sort((a, b) => TYPE_RANK[a.type] - TYPE_RANK[b.type] || naturalCompare(a.code, b.code));
-}
-
 // ---- misc --------------------------------------------------------------------------------------------
 
 /** Poll every 30 s only while the range contains today (R36). Uses the server's today. */

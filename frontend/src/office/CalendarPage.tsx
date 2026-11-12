@@ -1,5 +1,5 @@
 // Office calendar (§9.2, M3–M7 office side): top bar (big month title · ‹ Today › · Week | Month · ⚡ Urgent
-// pickup), filter bar (search, R / S / ⚡A chips, Clear highlight, Expand / Collapse all), legend, month (default) or week view, Sunday first, and every drawer and dialog, opened
+// pickup), filter bar (search, R / S / ⚡A chips, Clear highlight, Expand / Collapse all), the colour key, month (default) or week view, Sunday first, and every drawer and dialog, opened
 // through one `open()` (calendarContext).
 // - view and anchor live in the URL (?view=week&anchor=2026-12-25), so Holidays-page links work; no view = month.
 // - One query per view and anchor (week_start=sun); it polls every 30 s while the range contains today and on
@@ -14,7 +14,7 @@ import { Drawer } from '../ui/Drawer';
 import { ErrorBanner, Loading } from '../ui/Feedback';
 import { anyLayerOpen } from '../ui/layer';
 import { CalendarContext, type CalendarCtx, type Overlay } from './calendarContext';
-import { groupDays, legendItems, makeMatcher, monthCellLines, monthWeeks, rangeContainsToday, shortName, TONES, type Filters } from './calendarModel';
+import { groupDays, makeMatcher, monthCellLines, monthWeeks, rangeContainsToday, TONES, type Filters } from './calendarModel';
 import { DayColumn, MonthView, WeekView } from './CalendarViews';
 import { CopyDialog } from './CopyDialog';
 import { RouteDrawer } from './RouteDrawer';
@@ -80,7 +80,6 @@ export default function CalendarPage() {
 
   const matcher = useMemo(() => makeMatcher(data, hl, search), [data, hl, search]);
   const groups = useMemo(() => (data ? groupDays(data, filters) : []), [data, filters]);
-  const legend = useMemo(() => legendItems(data, filters), [data, filters]);
   // Month cells with more than 4 lines (after the filters): what Expand all / Collapse all acts on.
   const collapsible = useMemo(
     () => (view === 'month' ? monthWeeks(groups).flat().filter((g) => monthCellLines(g, false).collapsible).map((g) => g.day.date) : []),
@@ -216,28 +215,7 @@ export default function CalendarPage() {
         )}
       </div>
 
-      {legend.length > 0 && (
-        <div className="legend" aria-label={t('cal.legend')}>
-          {legend.map((l) => (
-            <button
-              key={l.code}
-              type="button"
-              className={['lchip', l.type === 'adhoc' ? 'adhoc' : '', hl === l.code ? 'on' : '', matcher.active && !matcher.code(l.code) ? 'dim' : ''].filter(Boolean).join(' ')}
-              title={l.name}
-              aria-pressed={hl === l.code}
-              data-code={l.code}
-              onClick={() => toggleHighlight(l.code)}
-            >
-              <span className="code">
-                {l.type === 'adhoc' ? '⚡' : ''}
-                {l.code}
-              </span>
-              <span className="ln">{shortName(l.name)}</span>
-            </button>
-          ))}
-        </div>
-      )}
-      {legend.length > 0 && (
+      {data && data.routes.length > 0 && (
         <div className="tonekey" data-testid="tone-key" aria-label={t('cal.toneKey')}>
           {TONES.map((k) => (
             <span key={k} data-tone={k}>
