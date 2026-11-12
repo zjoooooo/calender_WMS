@@ -63,3 +63,13 @@
   - Offered read-only / editable / connected to a server, the user chose an EDITABLE demo. It is the office calendar on GitHub Pages, with no login and sample routes. The real backend runs in the visitor's browser (php-wasm), so editing works exactly as in the real system. Changes stay only in that browser, and the visitor can reset them.
   - Offered a private link or GitHub Pages for a private repo (which needs a paid plan), the user chose to make the repository PUBLIC, so GitHub Pages works on the free plan.
   - No automatic deploy to a server for now (the user's choice). The production design of section 11.4 stays for later.
+## Round 7 (waste types and routes, replaces the task rules of rounds 2-4)
+- "这三个不tag to route erose,otc,compactor, rel/recycling 要tag to route." (EROSE, OTC and COMPACTOR are not on routes; REL and Recycling are.)
+- New waste types: EROSE (not on routes) and RECYCLING (on routes). "REL是general waste, Recycling 是另一种方式" (REL is general waste; Recycling is a separate type). REL keeps its name "REL".
+- "otc,compactor, erose 不要放入calender的计划." Asked what that means, the user chose: the system does not plan these three at all. No tasks, no task group on the calendar, no Tasks page, no task claims in the driver app.
+- "OCT,Compactor, erose 不用设置任务,可以随意提交.." (no tasks to set up; they can be submitted freely). The user chose:
+  - The DRIVER submits them on the phone at any time: pick the waste type, pick the customer, enter the weight (photo, signature, weighbridge ticket and truck plate as for route stops). No office set-up and no claiming.
+  - The customer is picked from the customer list; only customers registered with that waste type are listed.
+  - The office sees them on a records page (by date) and they COUNT in the calendar's daily totals per waste type. They are not shown one by one on the calendar.
+- One route collects ONE waste type (the user chose this over "both on one route"): REL or RECYCLING is picked when the route is made; only customers registered with that type can be added; on that route the driver enters only that type's weight.
+- The old task feature's CODE is removed (the user chose this). Stored task data in existing data files is left as it is, only no longer shown.
