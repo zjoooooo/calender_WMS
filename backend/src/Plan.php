@@ -254,9 +254,18 @@ final class Plan
         }
     }
 
-    /** R5 colour: the index used by the fewest routes whose period reaches today or later; ties -> lowest. */
-    public static function autoColor(array $plan, string $today): int
+    /**
+     * R5 colour: the colour of a live route whose code starts with the same character (N1, N2, N3 share one:
+     * the letter is the area); else the index used by the fewest routes whose period reaches today or later,
+     * ties -> lowest.
+     */
+    public static function autoColor(array $plan, string $today, string $code = ''): int
     {
+        foreach ($plan['routes'] ?? [] as $r) {
+            if ($code !== '' && ($r['code'][0] ?? '') === $code[0] && isset(self::PALETTE[(int) ($r['color'] ?? 0)]) && Usage::routeLive($r, $today)) {
+                return (int) $r['color'];
+            }
+        }
         $count = array_fill(1, count(self::PALETTE), 0);
         foreach ($plan['routes'] ?? [] as $r) {
             $k = (int) ($r['color'] ?? 0);
@@ -816,7 +825,7 @@ final class Plan
             $r = self::applyRecurring($r, $b, $c->today, true);
         }
         $r['stops'] = self::validateStops($plan, $b['stops'] ?? [], $wt['code']);
-        $r['color'] = self::given($b, 'color') ? V::int($b['color'], 'color', 1, count(self::PALETTE)) : self::autoColor($plan, $c->today);
+        $r['color'] = self::given($b, 'color') ? V::int($b['color'], 'color', 1, count(self::PALETTE)) : self::autoColor($plan, $c->today, $r['code']);
         $r['id'] = (int) ($plan['seq']['route'] ?? 0) + 1;
         $plan['seq']['route'] = $r['id'];
         if (!Usage::isOneOff($r)) {

@@ -83,28 +83,28 @@ const MWF = [1, 3, 5];
 const TTS = [2, 4, 6];
 const ALL = [1, 2, 3, 4, 5, 6];
 const ROUTES = [
-  { code: 'N1', name: 'North 1 · Woodlands', days: ALL, color: 1, area: 'Woodlands Ave' },
-  { code: 'N2', name: 'North 2 · Yishun', days: MWF, color: 2, area: 'Yishun Ring Rd' },
-  { code: 'N3', name: 'Sembawang', days: TTS, color: 2, area: 'Sembawang Dr' },
-  { code: 'E1', name: 'East 1 · Tampines', days: ALL, color: 3, area: 'Tampines St' },
-  { code: 'E2', name: 'East 2 · Bedok', days: MWF, color: 4, area: 'Bedok North Rd' },
-  { code: 'E3', name: 'Pasir Ris', days: TTS, color: 4, area: 'Pasir Ris Dr' },
-  { code: 'W1', name: 'West 1 · Jurong West', days: ALL, color: 5, area: 'Jurong West St' },
-  { code: 'W2', name: 'West 2 · Clementi', days: MWF, color: 6, area: 'Clementi Ave' },
-  { code: 'W3', name: 'Tuas Industrial', days: ALL, color: 7, area: 'Tuas South Ave' },
-  { code: 'C1', name: 'Central 1 · Toa Payoh', days: ALL, color: 8, area: 'Toa Payoh Lor' },
-  { code: 'C2', name: 'Central 2 · Bukit Merah', days: TTS, color: 9, area: 'Bukit Merah View' },
-  { code: 'C3', name: 'Chinatown', days: ALL, color: 10, area: 'Smith St' },
-  { code: 'K1', name: 'Kallang', days: MWF, color: 1, area: 'Kallang Bahru' },
-  { code: 'K2', name: 'Serangoon', days: TTS, color: 1, area: 'Serangoon Ave' },
-  { code: 'T1', name: 'Tampines Industrial', days: ALL, color: 3, area: 'Tampines Industrial Ave' },
-  { code: 'H1', name: 'Hospitals & clinics', days: ALL, color: 9, area: 'Outram Rd' },
-  { code: 'S1', name: 'Sunday market', sun: true, ph: true, color: 5, area: 'Geylang Serai' },
-  { code: 'S2', name: 'Holiday food & beverage', sun: true, ph: true, color: 7, area: 'Orchard Rd' },
-  { code: 'S3', name: 'PH hospital run', sun: false, ph: true, color: 10, area: 'Jalan Bukit Merah' },
+  { code: 'N1', name: 'North 1 · Woodlands', days: ALL, area: 'Woodlands Ave' },
+  { code: 'N2', name: 'North 2 · Yishun', days: MWF, area: 'Yishun Ring Rd' },
+  { code: 'N3', name: 'Sembawang', days: TTS, area: 'Sembawang Dr' },
+  { code: 'E1', name: 'East 1 · Tampines', days: ALL, area: 'Tampines St' },
+  { code: 'E2', name: 'East 2 · Bedok', days: MWF, area: 'Bedok North Rd' },
+  { code: 'E3', name: 'Pasir Ris', days: TTS, area: 'Pasir Ris Dr' },
+  { code: 'W1', name: 'West 1 · Jurong West', days: ALL, area: 'Jurong West St' },
+  { code: 'W2', name: 'West 2 · Clementi', days: MWF, area: 'Clementi Ave' },
+  { code: 'W3', name: 'Tuas Industrial', days: ALL, area: 'Tuas South Ave' },
+  { code: 'C1', name: 'Central 1 · Toa Payoh', days: ALL, area: 'Toa Payoh Lor' },
+  { code: 'C2', name: 'Central 2 · Bukit Merah', days: TTS, area: 'Bukit Merah View' },
+  { code: 'C3', name: 'Chinatown', days: ALL, area: 'Smith St' },
+  { code: 'K1', name: 'Kallang', days: MWF, area: 'Kallang Bahru' },
+  { code: 'K2', name: 'Serangoon', days: TTS, area: 'Serangoon Ave' },
+  { code: 'T1', name: 'Tampines Industrial', days: ALL, area: 'Tampines Industrial Ave' },
+  { code: 'H1', name: 'Hospitals & clinics', days: ALL, area: 'Outram Rd' },
+  { code: 'S1', name: 'Sunday market', sun: true, ph: true, area: 'Geylang Serai' },
+  { code: 'S2', name: 'Holiday food & beverage', sun: true, ph: true, area: 'Orchard Rd' },
+  { code: 'S3', name: 'PH hospital run', sun: false, ph: true, area: 'Jalan Bukit Merah' },
   // Recycling routes (kept last, so the customer codes of the routes above never change).
-  { code: 'R1', name: 'Recycling · North', days: MWF, color: 6, area: 'Admiralty Dr', waste: 'RECYCLING' },
-  { code: 'R2', name: 'Recycling · East', days: TTS, color: 6, area: 'Changi Rd', waste: 'RECYCLING' },
+  { code: 'R1', name: 'Recycling · North', days: MWF, area: 'Admiralty Dr', waste: 'RECYCLING' },
+  { code: 'R2', name: 'Recycling · East', days: TTS, area: 'Changi Rd', waste: 'RECYCLING' },
 ];
 const POOL = [
   'ABC Restaurant', 'Kopi Tiam 88', 'FairPrice Supermarket', 'Hawker 21 Food Court', 'Golden Bakery', 'Lucky Seafood',
@@ -204,8 +204,8 @@ async function main() {
     if (haveCode(rt.code) || (specialsOnly && rt.days)) continue;
     const waste_type = rt.waste ?? 'REL';
     const body = rt.days
-      ? { waste_type, type: 'regular', code: rt.code, color: rt.color, name: rt.name, note: '', start: today, end: null, days: rt.days, stops: routeStops[rt.code] }
-      : { waste_type, type: 'special', code: rt.code, color: rt.color, name: rt.name, note: '', start: today, end: null, sun: rt.sun, ph: rt.ph, stops: routeStops[rt.code] };
+      ? { waste_type, type: 'regular', code: rt.code, name: rt.name, note: '', start: today, end: null, days: rt.days, stops: routeStops[rt.code] }
+      : { waste_type, type: 'special', code: rt.code, name: rt.name, note: '', start: today, end: null, sun: rt.sun, ph: rt.ph, stops: routeStops[rt.code] };
     await must('POST', '/routes', body);
     created++;
   }

@@ -28,7 +28,16 @@ function driverName(o: RouteOccurrence): string | null {
   return r.driver?.name ?? (r.holders.length ? r.holders[r.holders.length - 1] : null);
 }
 
-/** The route's waste-type tag: the type's abbreviation (REL, RCY). */
+/** The tags of a route line: S / ⚡A (a regular route has none) and the waste type when it is not REL (RCY). */
+function LineTags({ o }: { o: RouteOccurrence }) {
+  return (
+    <>
+      {o.type !== 'regular' && <TypeTag type={o.type} />}
+      {o.waste_type !== 'REL' && <RouteWasteTag code={o.waste_type} />}
+    </>
+  );
+}
+
 function RouteWasteTag({ code }: { code: string }) {
   const { meta } = useSession();
   const wt = meta?.waste_types.find((w) => w.code === code);
@@ -179,8 +188,7 @@ export function RouteRow({ o, paused }: { o: RouteOccurrence; paused?: boolean }
       >
         {o.code}
       </button>
-      <TypeTag type={o.type} />
-      <RouteWasteTag code={o.waste_type} />
+      <LineTags o={o} />
       <span className="nm">{o.name}</span>
       {o.edited && !paused && (
         <span className="ed" title={t('cal.edited')} aria-label={t('cal.edited')}>
@@ -331,7 +339,7 @@ function MonthAdd({ day, right }: { day: CalendarDay; right: boolean }) {
   return <MenuButton className="madd" align={right ? 'right' : 'left'} label="+" title={t('cal.addOn', { date: fmtDay(day.date, lang) })} items={items} />;
 }
 
-/** One route line: colour bar, CODE, type tag, name (truncated first), short status (§8.3) at the right. */
+/** One route line: CODE on its colour, tags (S / ⚡A, RCY), name (truncated first), short status (§8.3) at the right. */
 function MonthRouteLine({ o }: { o: RouteOccurrence }) {
   const { t, lang } = useI18n();
   const { meta } = useSession();
@@ -362,8 +370,7 @@ function MonthRouteLine({ o }: { o: RouteOccurrence }) {
       onClick={() => open({ kind: 'route', key: o.key })}
     >
       <span className="code">{o.code}</span>
-      <TypeTag type={o.type} />
-      <RouteWasteTag code={o.waste_type} />
+      <LineTags o={o} />
       <span className="nm">{o.name}</span>
       <span className="st">{status}</span>
     </button>
