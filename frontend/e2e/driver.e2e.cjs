@@ -561,7 +561,8 @@ async function main() {
     check(left1 && left1[0].waste_type === 'OTC', 'deleted: it is gone from the office list');
     check((await calTotals()).COMPACTOR === undefined, 'and from the calendar totals', await calTotals());
     await until(async () => (await pageB.locator(`[data-submission="${s2.id}"]`).count()) === 0);
-    check((await pageB.locator(`[data-submission="${s2.id}"]`).count()) === 0 && (await pageB.locator(`[data-submission="${s1.id}"]`).count()) === 1, 'Today shows only the remaining submission');
+    check((await pageB.locator(`[data-submission="${s2.id}"]`).count()) === 0 && (await pageB.locator(`[data-submission="${s1.id}"]`).count()) === 1, 'Today shows only the remaining submission',
+      { url: pageB.url(), rows: await pageB.locator('[data-submission]').allInnerTexts(), pill: await pageB.locator('[data-testid=sync-pill]').innerText().catch(() => '') });
     await shot(pageB, '06b-submissions');
     // Another driver cannot change it; the office cannot write at all.
     const aliTok2 = (await call('POST', '/login', { username: 'ali', password: DRIVER_PW })).token;
