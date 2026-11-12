@@ -87,6 +87,8 @@ export function isApiError(e: unknown, code?: string): e is ApiError {
 
 const TOKEN_KEY = 'wms.token';
 let memoryToken: string | null = null;
+/** The demo build signs in by itself at every start (src/demo): its token stays in memory only. */
+const STORE_TOKEN = !__WMS_DEMO__;
 
 function lsGet(key: string): string | null {
   try {
@@ -105,12 +107,12 @@ function lsSet(key: string, value: string | null): void {
 }
 
 export function getToken(): string | null {
-  if (memoryToken === null && typeof window !== 'undefined') memoryToken = lsGet(TOKEN_KEY);
+  if (memoryToken === null && STORE_TOKEN && typeof window !== 'undefined') memoryToken = lsGet(TOKEN_KEY);
   return memoryToken;
 }
 export function setToken(token: string | null): void {
   memoryToken = token;
-  if (typeof window !== 'undefined') lsSet(TOKEN_KEY, token);
+  if (STORE_TOKEN && typeof window !== 'undefined') lsSet(TOKEN_KEY, token);
 }
 
 /** Small per-browser preferences (not secrets). */
@@ -179,6 +181,70 @@ export function buildUrl(path: string, query?: RequestOptions['query']): string 
   return url;
 }
 
+// The calendar demo build (`vite build --mode demo`, §11.5) has no server: the real backend runs in this
+// browser tab (php-wasm, started by src/demo/runtime.ts). Every API call then goes to PHP's request handler
+// in the same shape as over HTTP (method, path + query, headers with the token, JSON body), and its answer
+// comes back as a fetch Response, so everything below and the pages work unchanged. The normal build
+// never contains this path (__WMS_DEMO__ is false there).
+
+/** A request as php-wasm's PHPRequestHandler takes it. */
+export interface PhpRequest {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body?: Uint8Array;
+}
+/** The parts of php-wasm's PHPResponse that make the HTTP answer. */
+export interface PhpResponse {
+  httpStatusCode: number;
+  headers: Record<string, string[]>;
+  bytes: Uint8Array;
+}
+export type PhpHandler = (req: PhpRequest) => Promise<PhpResponse>;
+
+let inBrowserBackend: PhpHandler | null = null;
+
+/** Demo build: sends every API call to this handler instead of the network. */
+export function setInBrowserBackend(handler: PhpHandler | null): void {
+  inBrowserBackend = handler;
+}
+
+/** fetch(url, init) as a PHP request. Exported for tests. */
+export async function toPhpRequest(url: string, init: RequestInit = {}): Promise<PhpRequest> {
+  const headers: Record<string, string> = {};
+  new Headers(init.headers).forEach((value, name) => (headers[name] = value));
+  const b = init.body;
+  let body: Uint8Array | undefined;
+  if (typeof b === 'string') body = new TextEncoder().encode(b);
+  else if (b instanceof Uint8Array) body = b;
+  else if (b instanceof ArrayBuffer) body = new Uint8Array(b);
+  else if (b instanceof Blob) body = new Uint8Array(await b.arrayBuffer());
+  else if (b != null) throw new TypeError('Unsupported request body');
+  return { method: (init.method || 'GET').toUpperCase(), url, headers, ...(body ? { body } : {}) };
+}
+
+/** A PHP answer as the fetch Response the code below reads. Exported for tests. */
+export function fromPhpResponse(r: PhpResponse): Response {
+  const headers = new Headers();
+  for (const [name, values] of Object.entries(r.headers)) for (const v of values) headers.append(name, v);
+  const noBody = r.httpStatusCode === 204 || r.httpStatusCode === 205 || r.httpStatusCode === 304;
+  return new Response(noBody ? null : new Blob([r.bytes as Uint8Array<ArrayBuffer>]), { status: r.httpStatusCode, headers });
+}
+
+/** fetch() of the API: the network, or in the demo build the backend in this tab. */
+function send(url: string, init: RequestInit): Promise<Response> {
+  return __WMS_DEMO__ ? sendToPhp(url, init) : fetch(url, init);
+}
+
+async function sendToPhp(url: string, init: RequestInit): Promise<Response> {
+  const aborted = () => new DOMException('The request was aborted', 'AbortError');
+  if (!inBrowserBackend) throw new TypeError('The in-browser backend is not running');
+  if (init.signal?.aborted) throw aborted();
+  const res = fromPhpResponse(await inBrowserBackend(await toPhpRequest(url, init)));
+  if (init.signal?.aborted) throw aborted(); // PHP cannot stop half way: the caller just gets its abort
+  return res;
+}
+
 /**
  * Maps a parsed envelope (or its absence) to a result or an ApiError. Exported for tests.
  * A body that is not the API's envelope below 500 (a Wi-Fi captive portal or proxy page, often with
@@ -234,7 +300,7 @@ export async function requestFull<T>(method: string, path: string, body?: unknow
   let text = '';
   try {
     try {
-      res = await Promise.race([fetch(buildUrl(path, opts.query), { method, headers, body: payload, signal: ctrl.signal, cache: 'no-store' }), timeoutP]);
+      res = await Promise.race([send(buildUrl(path, opts.query), { method, headers, body: payload, signal: ctrl.signal, cache: 'no-store' }), timeoutP]);
       if (res.status !== 204) text = await Promise.race([res.text(), timeoutP]);
     } catch (e) {
       if (timedOut) throw new ApiError('TIMEOUT', 0, 'Request timed out');
@@ -552,6 +618,8 @@ export interface RouteOverride {
 /** A record of a route that an edit of it reaches (§6.5): its period, schedule and template list. */
 export interface RoutePart {
   id: number;
+  /** The server always sends it; a part the office only predicts (routeCarry) has none of its own. */
+  rev?: number;
   start: IsoDate;
   end: IsoDate | null;
   days: number[] | null; // regular
@@ -613,7 +681,15 @@ export interface RoutePatch {
   end?: IsoDate | null;
   date?: IsoDate;
   stops?: Stop[];
+  parts?: PartRev[];
   release_run?: boolean;
+}
+
+/** Additive (§6.5): the parts (RouteDetail.parts) a screen showed before the save what an edit does to; the
+ *  save is refused with 409 STALE_REVISION (field "parts") when one of them changed meanwhile. */
+export interface PartRev {
+  id: number;
+  rev: number;
 }
 
 export interface ChangeScheduleBody {
@@ -624,6 +700,7 @@ export interface ChangeScheduleBody {
   ph?: boolean;
   end?: IsoDate | null;
   stops?: Stop[];
+  parts?: PartRev[];
   release_run?: boolean;
 }
 
@@ -633,6 +710,7 @@ export interface RouteDatePut {
   stops?: Stop[];
   note?: string;
   cancelled?: boolean;
+  parts?: PartRev[];
   release_run?: boolean;
 }
 
@@ -1176,7 +1254,7 @@ export async function fetchFileBlob(pathOrName: string, opts: { signal?: AbortSi
   const token = getToken();
   let res: Response;
   try {
-    res = await fetch(buildUrl(`/files/${name}`), { headers: token ? { Authorization: 'Bearer ' + token } : {}, signal: opts.signal });
+    res = await send(buildUrl(`/files/${name}`), { headers: token ? { Authorization: 'Bearer ' + token } : {}, signal: opts.signal });
   } catch (e) {
     if (opts.signal?.aborted) throw e;
     throw new ApiError('NETWORK', 0, 'Network error');

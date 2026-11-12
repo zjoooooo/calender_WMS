@@ -402,6 +402,7 @@ const office: { [K in keyof typeof zh]: string } = {
   'run.result.open': '{what} needs a driver',
   'run.switchAndAssign': 'Give it back and assign',
   'run.switchQ': '{name} still has {code} ({n} left). Give {code} back and assign this job?',
+  'kept.changeCarried': 'Already planned: {when} this route runs {days}. This change, {old} to {neu} from {date}, applies to it too, so {after} it runs {result}.',
   'kept.days': 'Already planned: {when} this route runs {days}. That plan is kept.',
   'kept.daysCarried': 'Already planned: {when} this route runs {days}. That plan is kept; the weekdays you add or remove apply to it too, so {after} it runs {result}.',
   'kept.daysReplaced': 'Already planned: {when} this route runs {days}. From {date} it runs {result} instead, as set here.',

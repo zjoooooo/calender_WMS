@@ -21,6 +21,9 @@ Documents: the design spec [docs/Project.md](docs/Project.md) (section numbers s
 it), the user's decisions [docs/requirements.md](docs/requirements.md), and the approved
 [UI mockup](docs/mockup.html).
 
+**Try it:** an editable demo of the office calendar, with no sign-in and sample routes, runs on GitHub Pages
+at <https://zjoooooo.github.io/calender_WMS/> (section 4).
+
 | | Local (Windows PC) | Production (Linux VPS) |
 |---|---|---|
 | Used for | development, demos, trials on the office network | daily use from the office and from phones on 4G |
@@ -159,6 +162,7 @@ npm run e2e            # Playwright: login, password change, zh/en, customers, h
 npm run e2e:office     # Playwright at 1440x1000: calendar, drawer edits, drag and drop, tasks, runs
 npm run e2e:driver     # Playwright as two phones (Pixel 7): claim race, results with photo + signature,
                        # switch route, offline outbox (exactly once), task, leave, finish, office release
+npm run e2e:demo       # the calendar demo build (section 4) in Chromium, from a plain static server
 ```
 - The `e2e*` scripts need PHP 8.3 and `playwright` with Chromium. To install them:
   `npm install --no-save playwright && npx playwright install chromium`. The next `npm ci` removes it.
@@ -168,14 +172,93 @@ npm run e2e:driver     # Playwright as two phones (Pixel 7): claim race, results
   - `e2e:driver` uses ports 8282/5282 and `/tmp/wms-test-driver`. With `PWA=1` it also runs
     `npm run build` and checks that the built app opens with zero signal (service worker + cached Today).
 - Ports and the data folder can be changed with `BACKEND_PORT`, `FRONT_PORT` and `WMS_DATA_DIR`.
-  `E2E_SHOTS=<dir>` saves screenshots.
+  `E2E_SHOTS=<dir>` saves screenshots. `WMS_FAKE_NOW=2026-11-11T10:00:00+08:00` pins the server clock, as on
+  GitHub Actions; without it the suites run on the real date.
+- `e2e:demo` needs `npm run build:demo` first. It serves `dist-demo` on ports 5826 and 5827 (`DEMO_PORT`,
+  `DEMO_PORT2`) and needs no backend.
 
 **Deployment scripts:** `bash -n deploy/install.sh deploy/update.sh` and
 `shellcheck deploy/install.sh deploy/update.sh`.
 
+### Tests on GitHub Actions
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push (any branch), every pull request, a
+manual run (**Actions > CI > Run workflow**) and every Monday (§11.5):
+
+| Job | What it checks |
+|---|---|
+| Backend (PHP 8.3) and server scripts | `run.php`, `api_smoke.php`, `race.php`, `backup_test.php`; `bash -n` and shellcheck of `deploy/*.sh` |
+| Frontend | `tsc --noEmit`, vitest, the dev server's dependency scan (`vite optimize --force`), `npm run build`, and that the production build has no demo code |
+| Browser tests (shell, office, driver) | the three Playwright suites, with the server clock pinned (`WMS_FAKE_NOW`), so a run does not depend on the day; the driver suite with `PWA=1` |
+| Calendar demo | `npm run demo:data`, `npm run build:demo` and `e2e/demo.e2e.cjs`; the build is kept as the artifact `calendar-demo` |
+| Publish the calendar demo to GitHub Pages | `main` only, after all the others pass (section 4) |
+
+- The result shows on each commit and pull request (a green tick or a red cross). Open the run in the
+  **Actions** tab for the log of each step.
+- When a browser suite fails, its log and screenshots are attached to the run (Artifacts, kept 14 days).
+- A newer push to the same branch cancels the older run's tests.
+- Nothing is deployed to a server.
+
 ---
 
-## 4. Production on a Linux VPS (§11.4, §12)
+## 4. Calendar demo on GitHub Pages (§11.5)
+
+A demo of the office calendar that anyone can open: no sign-in, sample routes, customers, tasks and today's
+driver runs. It is **editable**. The real backend (the same PHP files as on a server) runs inside the
+visitor's browser, compiled to WebAssembly (WordPress Playground's php-wasm), so every rule behaves exactly as
+in the real system. Nothing is sent to a server.
+
+**Turn it on (once):**
+1. Make the repository **public**: **Settings > General > Danger Zone > Change visibility**. GitHub Pages for
+   a private repository needs a paid plan.
+2. Open **Settings > Pages**. Under **Build and deployment**, set **Source** to **GitHub Actions**.
+3. Push to `main`, or open **Actions > CI > Run workflow** on `main`. When every test passes, the job
+   "Publish the calendar demo to GitHub Pages" publishes it.
+
+**URL:** <https://zjoooooo.github.io/calender_WMS/> (in general `https://<owner>.github.io/<repository>/`).
+
+**How it updates:**
+- It is rebuilt and published by every push to `main`, every manual run on `main`, and every Monday morning
+  (Singapore time), so its sample runs stay recent.
+- Until Pages is turned on, that job ends green with a warning, and its summary says what to do.
+- Every run, also on other branches and pull requests, keeps the build as the artifact `calendar-demo`
+  (14 days).
+
+**What a visitor gets:**
+- The office app, signed in as the demo admin, on the month view of the visitor's own date.
+- Everything on the calendar can be changed: routes, tasks, the customers of a route (add, remove, drag),
+  "only this date" or "and all following", change schedule, copy, holidays. Routes, Tasks, Customers, Holidays
+  and Settings work too. Users, sign-out and the driver app are left out.
+- The first visit downloads the PHP runtime: 18 MB, about 7 MB when the host compresses it. A loading screen
+  shows the progress. Later visits use the browser's cache.
+- Tested in Chromium (Chrome, Edge), with both PHP runtimes the demo carries. Firefox and Safari should load
+  the second one (Asyncify), but they have not been tested yet. Any static web host and any sub-path work: no
+  special server settings are needed.
+
+**The data stays in the visitor's browser:**
+- Each change is saved in that browser only (IndexedDB) and is still there after a reload. Other visitors and
+  other browsers always start from the original sample data. Just opening the demo saves nothing.
+- **重置演示数据 / Reset demo data**, in the banner at the top, deletes the visitor's changes and restores the
+  original data.
+- Every new deploy, the weekly one too, brings new sample data. A visitor who changed nothing simply gets it.
+  Changes saved from an earlier deploy are reset, with a short notice.
+- With the demo open in two tabs, a tab never overwrites what the other one saved. When the demo changes in
+  another tab, the banner says so, stops saving in this tab and offers **Reload this page**.
+- In a browser that does not allow storage (some private windows), the demo still works; the banner says that
+  changes are lost on reload.
+
+**Build and try it locally** (in `frontend/`, with PHP 8.3 and Node.js 22):
+```
+npm run demo:data      # sample data made by the real backend (php -S on a free port + scripts/seed-demo.mjs)
+npm run build:demo     # -> frontend/dist-demo/ (makes the data first when demo-data/ is missing)
+npm run e2e:demo       # Chromium test of dist-demo under /calender_WMS/ and under a random prefix
+npm run dev:demo       # the demo with the Vite dev server
+```
+`dist-demo` is a static site. Open it through a web server (for example `npx vite preview --outDir dist-demo`),
+not as a file. `demo-data/` and `dist-demo/` are git-ignored.
+
+---
+
+## 5. Production on a Linux VPS (§11.4, §12)
 
 ### What runs on the server
 | Part | What it does |
@@ -383,7 +466,7 @@ Drivers then need to add the home-screen icon again.
 
 ---
 
-## 5. Public holidays 2027: please confirm
+## 6. Public holidays 2027: please confirm
 
 The Singapore 2027 list in `backend/seed/holidays-sg.json` was taken from **news coverage of the MOM
 announcement**. It was not checked against mom.gov.sg. Please compare it with the official list at

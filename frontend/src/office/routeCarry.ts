@@ -10,8 +10,9 @@
 //   about, and keptScheduleText / keptListText: the notices of Edit route / schedule, the scope dialog and
 //   the Routes page template editor.
 // backend/tests/fixtures/split_carry_cases.json is checked against the server and against this module, so a
-// notice says what the server then stores.
-import type { IsoDate, Lang, RoutePart, Stop } from '../api';
+// notice says what the server then stores. The save sends the parts the notices were computed on (partsRev),
+// and the server refuses it when one of them changed meanwhile, so a notice cannot go stale either.
+import type { IsoDate, Lang, PartRev, RoutePart, Stop } from '../api';
 import { fmtDay, weekdayList } from '../i18n/format';
 import { addDays } from './calendarModel';
 
@@ -108,16 +109,17 @@ type SchedFields = { days?: number[]; sun?: boolean | null; ph?: boolean | null 
 export type PartsPatch = SchedFields & { start?: IsoDate; end?: IsoDate | null; stops?: Stop[] };
 export type PartsSchedule = SchedFields & { from: IsoDate; end?: IsoDate | null; stops?: Stop[] | null };
 
-/** Plan::applyRecurring for the schedule fields sent. */
-function withSched(p: RoutePart, b: SchedFields): RoutePart {
+/** Plan::applyRecurring for the schedule fields sent; null when the server refuses the schedule (no weekday,
+ *  or neither Sunday nor PH), so nothing is predicted while the form has none. */
+function withSched(p: RoutePart, b: SchedFields): RoutePart | null {
   const r: RoutePart = { ...p };
   if (p.days) {
     if (b.days !== undefined) r.days = sortedDays(b.days);
-  } else {
-    if (b.sun !== undefined) r.sun = !!b.sun;
-    if (b.ph !== undefined) r.ph = !!b.ph;
+    return r.days?.length ? r : null;
   }
-  return r;
+  if (b.sun !== undefined) r.sun = !!b.sun;
+  if (b.ph !== undefined) r.ph = !!b.ph;
+  return r.sun || r.ph ? r : null;
 }
 
 /** Plan::setChainEnd on parts sorted by start: the last part that starts on or before the end gets it, the
@@ -138,12 +140,13 @@ function partOn<T extends { start: IsoDate }>(parts: readonly T[], d: IsoDate): 
  * PATCH /api/routes/{id} on a live record (Plan::patchRoute): weekdays or Sunday / PH and the template list
  * change on that record and are carried into every other part; a new start is the route's start (the first
  * part's, setChainStart) and a new end the route's end. Code, colour, name and note do not change what a part
- * runs or lists, so they are not mirrored.
+ * runs or lists, so they are not mirrored. null when the server refuses the schedule (withSched).
  */
-export function afterPatch(parts: readonly RoutePart[], id: number, body: PartsPatch): RoutePart[] {
+export function afterPatch(parts: readonly RoutePart[], id: number, body: PartsPatch): RoutePart[] | null {
   const old = parts.find((p) => p.id === id);
   if (!old) return [...parts];
   const r = withSched(old, body);
+  if (!r) return null;
   if (body.stops !== undefined) r.stops = cleanStops(body.stops);
   if (parts.length === 1 && body.end !== undefined) r.end = body.end;
   const out = parts.map((p) => (p.id === id ? r : carry(p, old, r, body.stops !== undefined)));
@@ -154,8 +157,8 @@ export function afterPatch(parts: readonly RoutePart[], id: number, body: PartsP
 /**
  * POST /api/routes/{id}/change-schedule (Plan::split, R14): the part that runs on `from` ends the day before
  * and continues from `from` with the schedule (and list) sent, or takes them when `from` is its first day;
- * the later parts get the same change (carry). null when the server refuses the date: today or earlier, not
- * after the route's start, after its end, or an end before `from`.
+ * the later parts get the same change (carry). null when the server refuses the date (today or earlier, not
+ * after the route's start, after its end, or an end before `from`) or the schedule (withSched).
  */
 export function afterSplit(parts: readonly RoutePart[], body: PartsSchedule, today: IsoDate): RoutePart[] | null {
   const { from } = body;
@@ -164,6 +167,7 @@ export function afterSplit(parts: readonly RoutePart[], body: PartsSchedule, tod
   const n = parts.indexOf(seg);
   if (seg.end !== null && from > seg.end) return null;
   const created = withSched(from === seg.start ? seg : { ...seg, id: 0, start: from }, body);
+  if (!created) return null;
   if (body.stops !== undefined && body.stops !== null) created.stops = cleanStops(body.stops);
   const later = new Set(parts.slice(n + 1).map((p) => p.id));
   let out = (from === seg.start ? parts.map((p, k) => (k === n ? created : p)) : [...parts.slice(0, n), { ...seg, end: addDays(from, -1) }, created, ...parts.slice(n + 1)]).map(
@@ -189,6 +193,12 @@ export function afterFollowing(parts: readonly RoutePart[], id: number, stops: r
   return parts.slice(k + 1).map((p) => carry(p, seg, neu, true));
 }
 
+/** The parts a screen computed its notices on, as the save sends them (`parts`): the server refuses the save
+ *  (409 STALE_REVISION) when another clerk changed one of them meanwhile. Undefined when there is nothing to send. */
+export function partsRev(parts: readonly RoutePart[] | null | undefined): PartRev[] | undefined {
+  return parts?.length && parts.every((p) => typeof p.rev === 'number') ? parts.map((p) => ({ id: p.id, rev: p.rev! })) : undefined;
+}
+
 // ---- what the clerk is told before the save ---------------------------------------------------------------
 
 type Sched = Pick<RoutePart, 'days' | 'sun' | 'ph'>;
@@ -201,6 +211,9 @@ export interface KeptSchedule {
   /** "Apply from" a date inside this part, which is not the part the form shows and has a schedule of its own:
    *  from that date the form's schedule replaces it (`after` is the part that runs from that date). */
   replacedFrom?: IsoDate;
+  /** The change reaches this part measured from another schedule than the form's own (that of the part that
+   *  runs on `date`, `old`, which becomes `neu`), so it is not just the weekdays the clerk added or removed. */
+  via?: { date: IsoDate; old: Sched; neu: Sched };
 }
 
 /**
@@ -217,10 +230,11 @@ export function keptSchedules(parts: readonly RoutePart[], after: readonly Route
   const out: KeptSchedule[] = [];
   const now = from === null ? undefined : partOn(after, from);
   if (from !== null && now && base.id !== opened.id && !sameSched(base, opened) && !sameSched(base, now)) out.push({ part: base, after: now, replacedFrom: from });
+  const via = from !== null && now && !sameSched(base, opened) ? { via: { date: from, old: base, neu: now } } : {};
   for (const p of parts) {
     if (p.id === base.id || (from !== null && p.start <= from)) continue;
     const a = after.find((x) => x.id === p.id);
-    if (a && !sameSched(p, base)) out.push({ part: p, after: a });
+    if (a && !sameSched(p, base)) out.push({ part: p, after: a, ...via });
   }
   return out;
 }
@@ -266,7 +280,7 @@ export function keptListsFollowing(parts: readonly RoutePart[], id: number, stop
  */
 export function keptListsTemplate(parts: readonly RoutePart[], openedId: number, stops: readonly Stop[], from: IsoDate | null, today: IsoDate): KeptList[] {
   if (from === null) {
-    const after = afterPatch(parts, openedId, { stops: [...stops] });
+    const after = afterPatch(parts, openedId, { stops: [...stops] }) ?? [];
     return parts.flatMap((p) => {
       const a = after.find((x) => x.id === p.id);
       return p.id !== openedId && a ? keptOf(p, a, a.stops, stops) : [];
@@ -304,11 +318,13 @@ function schedText(s: Sched, t: T, lang: Lang): string {
   return s.days ? weekdayList(s.days, lang) : [s.sun ? t('rule.everySun') : '', s.ph ? t('rule.everyPh') : ''].filter(Boolean).join(' + ');
 }
 
-/** "Already planned: from Mon 21 Dec this route runs Tue Thu. That plan is kept; …, so from Mon 21 Dec it runs Tue Thu Sat." */
+/** "Already planned: from Mon 21 Dec this route runs Tue Thu. That plan is kept; …, so from Mon 21 Dec it runs Tue Thu Sat."
+ *  With `via` the change is named as the server measures it: "This change, Tue Thu to Mon Wed Fri Sat from …". */
 export function keptScheduleText(k: KeptSchedule, today: IsoDate, t: T, lang: Lang): string {
   const vars = { when: partWhen(k.part, today, t, lang), days: schedText(k.part, t, lang), after: partWhen(k.after, today, t, lang), result: schedText(k.after, t, lang) };
   if (k.replacedFrom) return t('kept.daysReplaced', { ...vars, date: day(k.replacedFrom, lang) });
   if (sameSched(k.part, k.after)) return t('kept.days', vars);
+  if (k.via) return t('kept.changeCarried', { ...vars, date: day(k.via.date, lang), old: schedText(k.via.old, t, lang), neu: schedText(k.via.neu, t, lang) });
   return t(k.part.days ? 'kept.daysCarried' : 'kept.sunPhCarried', vars);
 }
 

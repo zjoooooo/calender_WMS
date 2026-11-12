@@ -8,3 +8,6 @@ backend/public/app.old/
 backend/config.local.php
 frontend/node_modules/
 frontend/dist/
+# calendar demo for GitHub Pages (§11.5): its data (npm run demo:data) and build (npm run build:demo)
+frontend/demo-data/
+frontend/dist-demo/

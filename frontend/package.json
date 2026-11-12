@@ -16,7 +16,11 @@
     "i18n:check": "vitest run src/i18n",
     "e2e": "node e2e/shell.e2e.cjs",
     "e2e:office": "node e2e/office.e2e.cjs",
-    "e2e:driver": "node e2e/driver.e2e.cjs"
+    "e2e:driver": "node e2e/driver.e2e.cjs",
+    "demo:data": "node scripts/demo-data.mjs",
+    "build:demo": "node scripts/demo-data.mjs --if-missing && tsc --noEmit && vite build --mode demo",
+    "dev:demo": "node scripts/demo-data.mjs --if-missing && vite --mode demo",
+    "e2e:demo": "node e2e/demo.e2e.cjs"
   },
   "dependencies": {
     "@dnd-kit/core": "6.3.1",
@@ -29,6 +33,8 @@
     "react-router-dom": "6.30.6"
   },
   "devDependencies": {
+    "@php-wasm/universal": "3.1.54",
+    "@php-wasm/web-8-3": "3.1.54",
     "@types/node": "22.20.5",
     "@types/react": "18.3.31",
     "@types/react-dom": "18.3.7",

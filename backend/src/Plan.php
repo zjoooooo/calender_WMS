@@ -81,6 +81,35 @@ final class Plan
         }
     }
 
+    /**
+     * R20 for the other parts of a split route (§6.5): an edit reaches every live record, and the office names
+     * before the save what each of them will keep. `parts` [{id, rev}] are the parts (GET /api/routes/{id})
+     * the screen showed that on; when one of them changed meanwhile, or a part was added or removed, the write
+     * is refused (409 STALE_REVISION, field "parts", {parts: the current [{id, rev}]}). Optional (additive).
+     */
+    private static function checkParts(array $plan, int $i, array $b, string $today): void
+    {
+        if (($b['parts'] ?? null) === null) {
+            return;
+        }
+        $sent = [];
+        foreach (V::list($b['parts'], 'parts') as $p) {
+            if (!is_array($p) || array_diff(array_keys($p), ['id', 'rev']) !== []) {
+                V::fail('parts', "'parts' must be a list of {id, rev}");
+            }
+            $sent[] = ['id' => V::id($p['id'] ?? null, 'parts'), 'rev' => V::int($p['rev'] ?? null, 'parts', 1)];
+        }
+        $current = array_map(static fn (int $k) => ['id' => (int) $plan['routes'][$k]['id'], 'rev' => (int) ($plan['routes'][$k]['rev'] ?? 1)],
+            self::liveChain($plan, $i, $today));
+        $byId = static function (array $l): array {
+            usort($l, static fn (array $a, array $b) => $a['id'] <=> $b['id']);
+            return $l;
+        };
+        if ($byId($sent) !== $byId($current)) {
+            throw new ApiError('STALE_REVISION', 409, 'parts', ['parts' => $current]);
+        }
+    }
+
     /** R11: a date a plan write sets must be >= today. */
     private static function notPast(string $date, string $today, string $field): void
     {
@@ -764,8 +793,8 @@ final class Plan
      * overrides are those of every live record (each names its route_id), so the scope dialog (§6.2) names
      * every later date that has its own list; route_next_date is the route's next date. "parts" are the records
      * an edit of this one reaches (liveChain: the live records sorted by start, or only this one when it has
-     * ended), each {id, start, end, days, sun, ph, stops}, so the office can show before a save what a later
-     * part keeps (carry(), §6.5); null for a one-off.
+     * ended), each {id, rev, start, end, days, sun, ph, stops}, so the office can show before a save what a later
+     * part keeps (carry(), §6.5) and send back the revs it showed that on (checkParts); null for a one-off.
      */
     public static function getRoute(Ctx $c): array
     {
@@ -775,7 +804,8 @@ final class Plan
         $live = self::liveChain($plan, $i, $c->today);
         $parts = Usage::isOneOff($r) ? null : array_map(static function (int $k) use ($plan): array {
             $o = self::routeOut($plan['routes'][$k]);
-            return ['id' => $o['id'], 'start' => $o['start'], 'end' => $o['end'], 'days' => $o['days'], 'sun' => $o['sun'], 'ph' => $o['ph'], 'stops' => $o['stops']];
+            return ['id' => $o['id'], 'rev' => $o['rev'], 'start' => $o['start'], 'end' => $o['end'], 'days' => $o['days'], 'sun' => $o['sun'], 'ph' => $o['ph'],
+                'stops' => $o['stops']];
         }, $live);
         $ids = array_flip(self::idsOf($plan, $live));
         $ix = Schedule::index($plan);
@@ -839,7 +869,7 @@ final class Plan
     }
 
     /**
-     * PATCH /api/routes/{id} {rev, code?, color?, name?, note?, days?, sun?, ph?, start?, end?, date?, stops?, release_run?}
+     * PATCH /api/routes/{id} {rev, code?, color?, name?, note?, days?, sun?, ph?, start?, end?, date?, stops?, parts?, release_run?}
      * An edit "from today". On a live record of a split route it applies to the whole route: code, colour,
      * name, note, weekdays and the template reach every live record (carry()); "end" is the route's end
      * (setChainEnd) and "start" its first start (setChainStart). Returns the record, or the record that now
@@ -848,11 +878,12 @@ final class Plan
     public static function patchRoute(Ctx $c): array
     {
         $b = $c->body;
-        V::only($b, ['rev', 'type', 'code', 'color', 'name', 'note', 'days', 'sun', 'ph', 'start', 'end', 'date', 'stops', 'release_run']);
+        V::only($b, ['rev', 'type', 'code', 'color', 'name', 'note', 'days', 'sun', 'ph', 'start', 'end', 'date', 'stops', 'parts', 'release_run']);
         $plan = $c->plan();
         $i = self::mustRoute($plan, $c->intParam('id'));
         $old = $plan['routes'][$i];
         self::checkRev($old, $b['rev'] ?? null);
+        self::checkParts($plan, $i, $b, $c->today);
         if (Usage::isOneOff($old)) {
             self::notPast($old['date'], $c->today, 'date'); // R11/R13: a one-off dated before today is frozen
         }
@@ -960,14 +991,15 @@ final class Plan
         return $c->noContent();
     }
 
-    /** POST /api/routes/{id}/change-schedule {rev, from, days?|sun?,ph?, end?, stops?, release_run?} -> {ended, created} */
+    /** POST /api/routes/{id}/change-schedule {rev, from, days?|sun?,ph?, end?, stops?, parts?, release_run?} -> {ended, created} */
     public static function changeSchedule(Ctx $c): array
     {
         $b = $c->body;
-        V::only($b, ['rev', 'from', 'days', 'sun', 'ph', 'end', 'stops', 'release_run']);
+        V::only($b, ['rev', 'from', 'days', 'sun', 'ph', 'end', 'stops', 'parts', 'release_run']);
         $plan = $c->plan();
         $i = self::mustRoute($plan, $c->intParam('id'));
         self::checkRev($plan['routes'][$i], $b['rev'] ?? null);
+        self::checkParts($plan, $i, $b, $c->today);
         $from = V::date($b['from'] ?? null, 'from');
         [$plan, $ended, $created] = self::split($plan, $i, $from, $b, $c->today);
         $c->savePlan($plan, ['release_run' => self::flag($b, 'release_run')]);
@@ -1081,18 +1113,19 @@ final class Plan
     }
 
     /**
-     * PUT /api/routes/{id}/dates/{date} {rev, scope, stops?, note?, cancelled?, release_run?}
+     * PUT /api/routes/{id}/dates/{date} {rev, scope, stops?, note?, cancelled?, parts?, release_run?}
      * -> {route, occurrence} (+ "ended" when "following" split the route, R12/R14).
      */
     public static function putRouteDate(Ctx $c): array
     {
         $b = $c->body;
-        V::only($b, ['rev', 'scope', 'stops', 'note', 'cancelled', 'release_run']);
+        V::only($b, ['rev', 'scope', 'stops', 'note', 'cancelled', 'parts', 'release_run']);
         $date = $c->dateParam('date');
         $plan = $c->plan();
         $i = self::mustRoute($plan, $c->intParam('id'));
         $route = $plan['routes'][$i];
         self::checkRev($route, $b['rev'] ?? null);
+        self::checkParts($plan, $i, $b, $c->today);
         $scope = V::enum($b['scope'] ?? 'this', 'scope', ['this', 'following']);
         self::notPast($date, $c->today, 'date');
         $hasStops = array_key_exists('stops', $b);

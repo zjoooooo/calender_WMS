@@ -558,9 +558,14 @@ async function keptPlanChecks(page, { today }) {
   await dr.locator(`.stop[data-cid="${B.id}"]`).getByRole('button', { name: /^Remove from route/ }).click();
   await dr.getByRole('button', { name: 'Save', exact: true }).click();
   const sc = page.locator('.dialog', { hasText: 'Apply this change to' });
+  // The notices belong to "and all following": they are not shown while "Only <date>" is selected.
+  await sc.locator('input[type=radio]').nth(1).check();
+  await notes(sc, 'kept-list');
+  await sc.locator('input[type=radio]').nth(0).check();
+  check(await poll(page, async () => (await sc.locator('[data-testid=kept-list]').count()) === 0), 'scope dialog: no kept-list notice while "Only <date>" is selected');
+  await sc.locator('input[type=radio]').nth(1).check();
   t = await notes(sc, 'kept-list');
   await shot(page, '41-kept-list-scope');
-  await sc.locator('input[type=radio]').nth(1).check();
   await sc.getByRole('button', { name: 'Save', exact: true }).click();
   await dr.waitFor({ state: 'detached' });
   stored = (await api('GET', `/routes/${q2.id}`)).parts.find((p) => p.id === q2.id);
@@ -589,6 +594,219 @@ async function keptPlanChecks(page, { today }) {
     `template editor: every other part's notice is what the server then stores (${expect4.length} parts)`,
     { t, expect4 },
   );
+  await page.keyboard.press('Escape').catch(() => {});
+
+  // 5. Routes page > "Change schedule from date…" on KP1's first part, from a date F2 inside the Tue Thu part:
+  // the form's schedule replaces that part's own from F2, and the notice says so (nothing before a date).
+  const F2 = addDays(D2, 7);
+  const own3 = (await api('GET', `/routes/${kp1.id}`)).parts.find((p) => p.id === p3.id);
+  await page.locator('input.search').fill('KP1');
+  await page.locator('table tbody tr[data-code="KP1"]').first().locator('td.actions button').click();
+  await page.getByRole('menuitem', { name: 'Change schedule from date…' }).click();
+  rf = page.locator('.dialog', { hasText: 'Edit route KP1' });
+  await rf.locator('form').waitFor();
+  check((await rf.locator('[data-testid=kept-plan]').count()) === 0, 'Change schedule from date…: no notice before a date is picked');
+  await rf.locator('input[aria-label="From date"]').fill(F2);
+  await rf.getByRole('button', { name: 'Thu', exact: true }).click();
+  t = await poll(page, async () => {
+    const x = await rf.locator('[data-testid=kept-plan]').allInnerTexts();
+    return x.length === 1 && /Thu Sat instead/.test(x[0]) ? x : null;
+  });
+  await shot(page, '43-kept-plan-replaced');
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  await rf.waitFor({ state: 'detached' });
+  parts = (await api('GET', `/routes/${kp1.id}`)).parts;
+  stored = parts.find((p) => p.start === F2);
+  check(
+    !!t && !!stored && t[0] === `Already planned: from ${long(D2)} this route runs ${daysText(own3.days)}. From ${long(F2)} it runs ${daysText(stored.days)} instead, as set here.` && daysText(stored.days) === 'Mon Wed Thu Sat',
+    `Change schedule from ${F2}: the notice names the replaced plan and what the server stored (${stored && daysText(stored.days)})`,
+    { t, stored: stored && stored.days },
+  );
+
+  // 6. The template editor on KP2's first part, from a date inside the next part (its own list): that list is
+  // replaced from then, and the part after it keeps its own customers. Compared with the parts before and after.
+  const before6 = (await api('GET', `/routes/${kp2.id}`)).parts;
+  const [r1, r2] = before6;
+  const F3 = addDays(r2.start, 2);
+  // A customer the next part has too, so the saved list differs from that part's own list.
+  const gone = [...r1.stops].reverse().find((s) => r2.stops.some((x) => x.customer_id === s.customer_id)) ?? r1.stops[0];
+  await page.locator('input.search').fill('KP2');
+  await page.locator('table tbody tr[data-code="KP2"]').first().click();
+  await poll(page, async () => (await te.locator('.stoplist .stop').count()) === r1.stops.length);
+  await te.locator(`.stop[data-cid="${gone.customer_id}"]`).getByRole('button', { name: /^Remove from route/ }).click();
+  await te.locator('input[type=radio]').nth(1).check();
+  await te.locator('input[aria-label="From date"]').fill(F3);
+  const saved6 = r1.stops.filter((s) => s.customer_id !== gone.customer_id).map((s) => s.customer_id);
+  const own2 = r2.stops.map((s) => s.customer_id);
+  const diff6 = (() => {
+    const also = own2.filter((x) => !saved6.includes(x)).map(nameOf).join(', ');
+    const lacks = saved6.filter((x) => !own2.includes(x)).map(nameOf).join(', ');
+    return also && lacks ? `It also has ${also} and does not have ${lacks}.` : also ? `It also has ${also}.` : `It does not have ${lacks}.`;
+  })();
+  t = await poll(page, async () => {
+    const x = await te.locator('[data-testid=kept-list]').allInnerTexts();
+    return x.some((s) => s.includes('replaces it')) ? x : null;
+  });
+  await shot(page, '44-kept-list-template-from');
+  await te.getByRole('button', { name: 'Save', exact: true }).click();
+  await te.waitFor({ state: 'detached' });
+  parts = (await api('GET', `/routes/${kp2.id}`)).parts;
+  const fromF3 = parts.find((p) => p.start === F3);
+  const expect6 = [
+    `Already planned ${when(r2)}: that part has its own list. ${diff6} From ${long(F3)} the list saved here replaces it.`,
+    ...parts.filter((p) => p.start > F3).map((p) => listNotice(p, saved6)).filter(Boolean),
+  ];
+  check(
+    !!fromF3 && JSON.stringify(fromF3.stops.map((s) => s.customer_id)) === JSON.stringify(saved6) && JSON.stringify(t) === JSON.stringify(expect6),
+    `template editor from ${F3}: the replaced list and the later part's are what the server then stores`,
+    { t, expect6, stored: fromF3 && fromF3.stops },
+  );
+
+  // 7. Apply from the first day of a later part with its own schedule (Tue Thu): the form's schedule replaces it,
+  // and the part after it (Tue Thu Sat) gets the change measured from Tue Thu, not only the Saturday the clerk
+  // ticked. Its notice names that change; it does not say that its plan is kept.
+  const G1 = nextDow(addDays(today, 21), [1]);
+  const G2 = addDays(G1, 15);
+  const kp3 = await api('POST', '/routes', { type: 'regular', code: 'KP3', name: 'Kept plan 3', start: today, days: [1, 3, 5], stops: S(A, B) });
+  const g1 = (await api('POST', `/routes/${kp3.id}/change-schedule`, { rev: kp3.rev, from: G1, days: [2, 4] })).created;
+  const g2 = (await api('POST', `/routes/${g1.id}/change-schedule`, { rev: g1.rev, from: G2, days: [2, 4, 6] })).created;
+  ({ dr, rf } = await openEdit('KP3', await scheduledOn('KP3', addDays(today, 1), G1)));
+  await rf.locator('input[type=radio]').nth(1).check();
+  await rf.locator('input[aria-label="From date"]').fill(G1);
+  await rf.getByRole('button', { name: 'Sat', exact: true }).click();
+  t = await poll(page, async () => {
+    const x = await rf.locator('[data-testid=kept-plan]').allInnerTexts();
+    return x.length === 2 && /Sat instead/.test(x[0]) ? x : null;
+  });
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  await rf.waitFor({ state: 'detached' });
+  await closeAll(dr);
+  stored = (await api('GET', `/routes/${kp3.id}`)).parts.find((p) => p.id === g2.id);
+  check(
+    !!t &&
+      t[1] === `Already planned: from ${long(G2)} this route runs Tue Thu Sat. This change, Tue Thu to Mon Wed Fri Sat from ${long(G1)}, applies to it too, so from ${long(G2)} it runs ${daysText(stored.days)}.` &&
+      daysText(stored.days) === 'Mon Wed Fri Sat',
+    `Apply from ${G1}, a part with its own Tue Thu: the next part's notice names the change from Tue Thu and what the server stored`,
+    { t, stored: stored.days },
+  );
+
+  // 8. Another clerk changes a later part while a notice is on screen (R20 for the other parts). The save is
+  // refused (STALE_REVISION), the notice is computed again on the parts loaded after that answer, and the second
+  // save stores what it then says: the template editor, the scope dialog and Edit route / schedule.
+  const H1 = nextDow(addDays(today, 21), [1]);
+  const kp4 = await api('POST', '/routes', { type: 'regular', code: 'KP4', name: 'Kept plan 4', start: today, days: [1, 3, 5], stops: S(A, B) });
+  const h1 = (await api('POST', `/routes/${kp4.id}/change-schedule`, { rev: kp4.rev, from: H1, days: [2, 4], stops: S(A, B, C) })).created;
+  const otherClerk = async (body) => {
+    const cur = await api('GET', `/routes/${h1.id}`);
+    await api('POST', `/routes/${h1.id}/change-schedule`, { rev: cur.rev, from: H1, ...body });
+  };
+  const refused = (loc) => poll(page, async () => (await loc.locator('.form-error').allInnerTexts()).some((x) => /Someone else changed this/.test(x)));
+  /** The one notice `id` in `loc`, once it reads as `ok` says. */
+  const notesLike = (loc, id, ok) =>
+    poll(page, async () => {
+      const x = await loc.locator(`[data-testid=${id}]`).allInnerTexts();
+      return x.length === 1 && ok(x[0]) ? x : null;
+    });
+  // 8a. the template editor (from today): the part from H1 loses B meanwhile
+  await page.goto(BASE + '/routes');
+  await page.locator('table tbody tr').first().waitFor();
+  await page.locator('input.search').fill('KP4');
+  await page.locator('table tbody tr[data-code="KP4"]').first().click();
+  await poll(page, async () => (await te.locator('.stoplist .stop').count()) === 2);
+  await te.getByRole('button', { name: /Add customer/ }).click();
+  await te.locator('.picker input[type=search]').fill(D.code);
+  await te.locator('.picker-item', { hasText: D.code }).first().click();
+  const t8a = await notes(te, 'kept-list');
+  await otherClerk({ stops: S(A, C) });
+  await te.getByRole('button', { name: 'Save', exact: true }).click();
+  const r8a = await refused(te);
+  t = await notesLike(te, 'kept-list', (x) => x.includes('does not have'));
+  await te.getByRole('button', { name: 'Save', exact: true }).click();
+  await te.waitFor({ state: 'detached' });
+  parts = (await api('GET', `/routes/${kp4.id}`)).parts;
+  let saved8 = parts[0].stops.map((s) => s.customer_id);
+  check(
+    !!r8a && !!t && JSON.stringify(t8a) === JSON.stringify([`Already planned from ${long(H1)}: that part keeps its own list. It also has ${C.name}.`]) &&
+      t[0] === listNotice(parts[1], saved8) && t[0] === `Already planned from ${long(H1)}: that part keeps its own list. It also has ${C.name} and does not have ${B.name}.`,
+    'template editor: a later part changed meanwhile, the save is refused and the new notice is what the server then stores',
+    { r8a, t8a, t, stored: parts[1].stops },
+  );
+  // 8b. the scope dialog's "and all following": the part from H1 loses D meanwhile
+  dr = await openDrawer('KP4', await scheduledOn('KP4', addDays(today, 1), H1));
+  await dr.locator(`.stop[data-cid="${B.id}"]`).getByRole('button', { name: /^Remove from route/ }).click();
+  await dr.getByRole('button', { name: 'Save', exact: true }).click();
+  await sc.locator('input[type=radio]').nth(1).check();
+  const t8b = await notes(sc, 'kept-list');
+  await otherClerk({ stops: S(A, C) });
+  await sc.getByRole('button', { name: 'Save', exact: true }).click();
+  await sc.waitFor({ state: 'detached' });
+  const r8b = await refused(dr);
+  await dr.getByRole('button', { name: 'Save', exact: true }).click();
+  await sc.locator('input[type=radio]').nth(1).check();
+  t = await notesLike(sc, 'kept-list', (x) => x.includes(`does not have ${D.name}`));
+  await sc.getByRole('button', { name: 'Save', exact: true }).click();
+  await dr.waitFor({ state: 'detached' });
+  parts = (await api('GET', `/routes/${kp4.id}`)).parts;
+  saved8 = saved8.filter((x) => x !== B.id);
+  check(
+    !!r8b && !!t && JSON.stringify(t8b) === JSON.stringify([`Already planned from ${long(H1)}: that part keeps its own list. It also has ${C.name}.`]) &&
+      t[0] === listNotice(parts[parts.length - 1], saved8) && t[0] === `Already planned from ${long(H1)}: that part keeps its own list. It also has ${C.name} and does not have ${D.name}.`,
+    'scope dialog: a later part changed meanwhile, the save is refused and the new notice is what the server then stores',
+    { r8b, t8b, t, stored: parts.map((p) => p.stops) },
+  );
+  // 8c. Edit route / schedule from today, Saturday ticked: the part from H1 gets Friday meanwhile
+  const h1Now = (await api('GET', `/routes/${kp4.id}`)).parts.find((p) => p.start === H1);
+  ({ dr, rf } = await openEdit('KP4', await scheduledOn('KP4', addDays(today, 1), H1)));
+  await rf.getByRole('button', { name: 'Sat', exact: true }).click();
+  const t8c = await notesLike(rf, 'kept-plan', (x) => x.endsWith('it runs Tue Thu Sat.'));
+  await otherClerk({ days: [2, 4, 5] });
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  const r8c = await refused(rf);
+  t = await notesLike(rf, 'kept-plan', (x) => x.includes('runs Tue Thu Fri.'));
+  await rf.getByRole('button', { name: 'Save', exact: true }).click();
+  await rf.waitFor({ state: 'detached' });
+  await closeAll(dr);
+  stored = (await api('GET', `/routes/${kp4.id}`)).parts.find((p) => p.id === h1Now.id);
+  check(
+    !!r8c && !!t8c && !!t &&
+      t[0] === `Already planned: from ${long(H1)} this route runs Tue Thu Fri. That plan is kept; the weekdays you add or remove apply to it too, so from ${long(H1)} it runs ${daysText(stored.days)}.` &&
+      daysText(stored.days) === 'Tue Thu Fri Sat',
+    'Edit route: a later part changed meanwhile, the save is refused and the new notice is what the server then stores',
+    { r8c, t8c, t, stored: stored.days },
+  );
+
+  // 9. The template editor at 1280x800 with five later parts that have lists of their own: the notices scroll in
+  // a capped area above Save, so the stop list and Save stay on screen.
+  const L1 = nextDow(addDays(today, 7), [1]);
+  let kp5 = await api('POST', '/routes', { type: 'regular', code: 'KP5', name: 'Kept plan 5', start: today, days: [1, 3, 5], stops: S(...custs.slice(0, 6)) });
+  for (let k = 0, cur = kp5; k < 5; k++) {
+    cur = (await api('POST', `/routes/${cur.id}/change-schedule`, { rev: cur.rev, from: addDays(L1, 7 * k), stops: S(...custs.slice(0, 4), custs[10 + 2 * k], custs[11 + 2 * k]) })).created;
+  }
+  await page.setViewportSize({ width: 1280, height: 800 });
+  try {
+    await page.goto(BASE + '/routes');
+    await page.locator('table tbody tr').first().waitFor();
+    await page.locator('input.search').fill('KP5');
+    await page.locator('table tbody tr[data-code="KP5"]').first().click();
+    await poll(page, async () => (await te.locator('.stoplist .stop').count()) === 6);
+    await te.locator('.stoplist .stop').first().getByRole('button', { name: /^Remove from route/ }).click();
+    const n9 = await poll(page, async () => ((await te.locator('[data-testid=kept-list]').count()) === 5 ? 5 : 0));
+    const m = await page.evaluate(() => {
+      const d = document.querySelector('.drawer');
+      const body = d.querySelector('.drawer-body').getBoundingClientRect();
+      const rows = [...d.querySelectorAll('.stoplist .stop')].map((r) => r.getBoundingClientRect());
+      const save = [...d.querySelectorAll('.drawer-foot .acts .btn')].find((b) => b.textContent === 'Save').getBoundingClientRect();
+      const box = d.querySelector('.kept-notes');
+      return { vh: innerHeight, saveBottom: save.bottom, rowsShown: rows.filter((r) => r.bottom <= body.bottom).length, notesH: box.clientHeight, scrolls: box.scrollHeight > box.clientHeight };
+    });
+    await shot(page, '45-kept-list-template-many');
+    check(n9 === 5 && m.saveBottom <= m.vh && m.rowsShown >= 2 && m.notesH <= 0.3 * m.vh && m.scrolls, 'template editor at 1280x800, 5 notices: they scroll in a capped area, the list and Save stay on screen', m);
+    await te.getByRole('button', { name: 'Discard changes', exact: true }).click();
+    await te.getByRole('button', { name: 'Close', exact: true }).last().click();
+    await te.waitFor({ state: 'detached' });
+  } finally {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+  }
 }
 
 async function main() {
@@ -858,9 +1076,14 @@ async function main() {
     const custAll = await api('GET', '/customers');
     const mei = custAll.find((c) => c.waste_types.includes('REL') && c.active !== false && !n2now.stops.some((x) => x.customer_id === c.id));
     await api('PUT', `/routes/${n2now.route_id}/dates/${workDay}`, { rev: n2now.rev, scope: 'this', stops: [...n2now.stops.map((x) => ({ customer_id: x.customer_id, note: x.note })), { customer_id: mei.id, note: '' }] });
-    const refetched = page.waitForResponse((r) => r.url().includes('/api/calendar') && r.status() === 200, { timeout: 40000 });
-    await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
-    await refetched;
+    // A focus refetches the calendar only once its data is stale (10 s), and the 30 s poll runs only on a range
+    // with today in it (workDay can be in the next week): signal a focus until the calendar is fetched again.
+    let refetched = false;
+    for (let i = 0; i < 20 && !refetched; i++) {
+      const got = page.waitForResponse((r) => r.url().includes('/api/calendar') && r.status() === 200, { timeout: 2000 }).then(() => true, () => false);
+      await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+      refetched = await got;
+    }
     await page.waitForTimeout(400);
     const meanwhile = dr.locator('[data-testid=changed-meanwhile]');
     check((await meanwhile.count()) === 1 && (await meanwhile.innerText()).includes(mei.name), 'the drawer says someone else saved meanwhile and names the added customer', (await meanwhile.count()) && (await meanwhile.innerText()));

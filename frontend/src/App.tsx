@@ -1,7 +1,10 @@
 // App routes (§11.2): /login, /password, the office pages under / and the driver app at /driver/*
 // (a lazy chunk). Drivers who open / are sent to /driver (§11.3).
+// The calendar demo build (__WMS_DEMO__, §11.5) signs in by itself and has only the office pages, without
+// Users: no /login, /password, /users or /driver. Its routes live in the URL's #hash (HashRouter), so it
+// runs from any sub-path of a static host that knows nothing of them.
 import { lazy, Suspense, type ReactNode } from 'react';
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { BrowserRouter, HashRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ApiError } from './api';
 import { I18nProvider } from './i18n';
@@ -19,7 +22,8 @@ import HolidaysPage from './office/HolidaysPage';
 import SettingsPage from './office/SettingsPage';
 import UsersPage from './office/UsersPage';
 
-const DriverApp = lazy(() => import('./driver/DriverApp'));
+const DriverApp = __WMS_DEMO__ ? null : lazy(() => import('./driver/DriverApp'));
+const Router = __WMS_DEMO__ ? HashRouter : BrowserRouter;
 
 export function makeQueryClient(): QueryClient {
   return new QueryClient({
@@ -40,6 +44,7 @@ const queryClient = makeQueryClient();
 export function RequireUser({ children }: { children: ReactNode }) {
   const s = useSession();
   const loc = useLocation();
+  if (!s.token && __WMS_DEMO__) return <div className="center-screen"><Loading /></div>; // the demo signs in again
   if (!s.token) return <Navigate to="/login" replace state={{ from: loc.pathname + loc.search }} />;
   if (!s.me) {
     return (
@@ -66,16 +71,18 @@ function RequireAdmin({ children }: { children: ReactNode }) {
 export function AppRoutes() {
   return (
     <Routes>
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/password" element={<ChangePasswordPage />} />
-      <Route
-        path="/driver/*"
-        element={
-          <Suspense fallback={<div className="center-screen"><Loading /></div>}>
-            <DriverApp />
-          </Suspense>
-        }
-      />
+      {!__WMS_DEMO__ && <Route path="/login" element={<LoginPage />} />}
+      {!__WMS_DEMO__ && <Route path="/password" element={<ChangePasswordPage />} />}
+      {DriverApp && (
+        <Route
+          path="/driver/*"
+          element={
+            <Suspense fallback={<div className="center-screen"><Loading /></div>}>
+              <DriverApp />
+            </Suspense>
+          }
+        />
+      )}
       <Route
         path="/"
         element={
@@ -92,30 +99,34 @@ export function AppRoutes() {
         <Route path="customers" element={<CustomersPage />} />
         <Route path="holidays" element={<HolidaysPage />} />
         <Route path="settings" element={<SettingsPage />} />
-        <Route
-          path="users"
-          element={
-            <RequireAdmin>
-              <UsersPage />
-            </RequireAdmin>
-          }
-        />
+        {!__WMS_DEMO__ && (
+          <Route
+            path="users"
+            element={
+              <RequireAdmin>
+                <UsersPage />
+              </RequireAdmin>
+            }
+          />
+        )}
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }
 
-export default function App() {
+/** `top`: shown above every page (the demo's banner). */
+export default function App({ top }: { top?: ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       <I18nProvider>
         <ToastProvider>
-          <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
             <SessionProvider>
+              {top}
               <AppRoutes />
             </SessionProvider>
-          </BrowserRouter>
+          </Router>
         </ToastProvider>
       </I18nProvider>
     </QueryClientProvider>

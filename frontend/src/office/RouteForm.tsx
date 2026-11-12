@@ -16,9 +16,11 @@
 // Round 6: on a split route, a later part that has a schedule of its own keeps it; only the weekdays (or
 // Sunday / PH) the clerk adds or removes reach it. Before the save the form names each such part and what it
 // will run, computed with the server's rule (routeCarry) from the writes the form would send, live while the
-// clerk ticks weekdays or picks the date.
+// clerk ticks weekdays or picks the date. The first write sends the parts those notices were computed on, so
+// the save is refused (STALE_REVISION) when another clerk changed one of them meanwhile, and the notices are
+// recomputed on the parts loaded after that answer.
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   changeRouteSchedule,
   createRoute,
@@ -41,7 +43,7 @@ import { useToast } from '../ui/Toast';
 import type { CreateKind } from './calendarContext';
 import { addDays } from './calendarModel';
 import { useGuardedWrite } from './officeShared';
-import { afterPatch, afterSplit, keptSchedules, keptScheduleText } from './routeCarry';
+import { afterPatch, afterSplit, keptSchedules, keptScheduleText, partsRev } from './routeCarry';
 import { useAllRoutes } from './routeChain';
 import { afterStep, mergeServer, planEdit, snapOf, type Field, type FormVals, type Snap } from './routeFormModel';
 
@@ -113,7 +115,9 @@ export function RouteForm(props: Props) {
     if (edit && server) takeServer(server, false);
   }, [serverSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  /** On STALE_REVISION the latest version is loaded and merged; the next Save sends only the clerk's changes. */
+  /** On STALE_REVISION the latest version is loaded and merged; the next Save sends only the clerk's changes.
+   *  The route query takes that version too, so the notices and the parts the next Save sends are its own. */
+  const qc = useQueryClient();
   const staleGuard =
     <R,>(fn: (rel: boolean) => Promise<R>) =>
     async (rel: boolean): Promise<R> => {
@@ -123,6 +127,7 @@ export function RouteForm(props: Props) {
         if (isApiError(e, 'STALE_REVISION') && props.mode === 'edit') {
           try {
             const [r, all] = await Promise.all([getRoute(props.routeId), listRoutes({ ended: true })]);
+            qc.setQueryData(['route', props.routeId], r);
             takeServer(snapOf(r, all, today), true);
           } catch {
             /* the refetch after the error shows the latest version */
@@ -181,6 +186,8 @@ export function RouteForm(props: Props) {
     if (!route || !form.base) return;
     if (apply === 'from' && !oneOff && !fromDate) return w.setError(t('err.required_field', { field: t('rf.fromDate') }));
     const steps = planEdit(vals, form.base, { type: route.type, oneOff, apply, fromDate });
+    // The parts the notices above were computed on (the first write checks them; the later ones follow it).
+    const parts = partsRev(route.parts);
     const done = () => {
       toast(t('common.saved'));
       props.onSaved?.();
@@ -193,7 +200,7 @@ export function RouteForm(props: Props) {
       staleGuard(async (rel) => {
         for (let i = progress.done; i < steps.length; i++) {
           const s = steps[i];
-          const extra = { rev: progress.rev.get(s.id) ?? s.body.rev, ...(rel ? { release_run: true } : {}) };
+          const extra = { rev: progress.rev.get(s.id) ?? s.body.rev, ...(i === 0 && parts ? { parts } : {}), ...(rel ? { release_run: true } : {}) };
           const rev = s.kind === 'patch' ? (await patchRoute(s.id, { ...s.body, ...extra })).data.rev : (await changeRouteSchedule(s.id, { ...s.body, ...extra })).data.ended.rev;
           progress.rev.set(s.id, rev);
           progress.done = i + 1;

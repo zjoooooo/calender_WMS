@@ -1,5 +1,6 @@
 // Office layout (§9.2): brand, navigation (Users for admins only), today's op_date from /api/meta,
 // the language switch and the user menu (change password, sign out, sign out everywhere).
+// The calendar demo build (__WMS_DEMO__, §11.5) has no Users page and no user menu.
 import { useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useI18n, fmtTime } from '../i18n';
@@ -42,7 +43,7 @@ export default function OfficeLayout() {
       <header className="top">
         <div className="brand">{t('app.name')}</div>
         <nav className="tabs" aria-label="Main">
-          {NAV.filter((n) => !n.admin || s.isAdmin).map((n) => (
+          {NAV.filter((n) => !n.admin || (s.isAdmin && !__WMS_DEMO__)).map((n) => (
             <NavLink key={n.to} to={n.to} end={n.to === '/'} className={({ isActive }) => (isActive ? 'active' : undefined)}>
               {t(n.key)}
             </NavLink>
@@ -51,7 +52,7 @@ export default function OfficeLayout() {
         <span className="spacer" />
         {todayText && <span className="who num">{todayText}</span>}
         <LangSwitch />
-        <UserMenu />
+        {!__WMS_DEMO__ && <UserMenu />}
       </header>
       <main className="stack">
         <Outlet />

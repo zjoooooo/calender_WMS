@@ -6,14 +6,16 @@
 //     (R14, same code, so the calendar looks the same). Dates that already have their own list are listed
 //     as "Not changed". For today's container with a run it adds the driver impact, computed client-side.
 // Round 6: a later part of a split route keeps its own list; only the clerk's change reaches it (routeCarry).
-// Each later part whose customers after the save differ from the list being saved is named, with the
-// customers it also has and the ones it does not have (an order of its own is not named).
+// With "and all following" selected, each later part whose customers after the save differ from the list
+// being saved is named, with the customers it also has and the ones it does not have (an order of its own is
+// not named). That save sends the parts the notices were computed on, so it is refused (STALE_REVISION) if
+// another clerk changed one of them meanwhile.
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { getRoute, listCustomers, type RouteOccurrence, type Stop } from '../api';
+import { getRoute, listCustomers, type PartRev, type RouteOccurrence, type Stop } from '../api';
 import { fmtDay, useI18n } from '../i18n';
 import { Dialog } from '../ui/Dialog';
-import { keptListsFollowing, keptListText } from './routeCarry';
+import { keptListsFollowing, keptListText, partsRev } from './routeCarry';
 
 export type Scope = 'this' | 'following';
 
@@ -32,7 +34,8 @@ export function ScopeDialog(props: {
   removed: number;
   busy?: boolean;
   error?: string | null;
-  onSave: (scope: Scope) => void;
+  /** `parts`: with "and all following", the parts its notices were computed on (sent with the save). */
+  onSave: (scope: Scope, parts?: PartRev[]) => void;
   onClose: () => void;
 }) {
   const { t, lang } = useI18n();
@@ -66,7 +69,13 @@ export function ScopeDialog(props: {
           <button type="button" className="btn" onClick={props.onClose}>
             {t('common.cancel')}
           </button>
-          <button type="button" className="btn primary" disabled={props.busy} onClick={() => props.onSave(scope)} data-autofocus>
+          <button
+            type="button"
+            className="btn primary"
+            disabled={props.busy}
+            onClick={() => props.onSave(scope, scope === 'following' ? partsRev(routeQ.data?.parts) : undefined)}
+            data-autofocus
+          >
             {t('common.save')}
           </button>
         </>
@@ -87,7 +96,8 @@ export function ScopeDialog(props: {
         </label>
       </div>
       {own.length > 0 && <div className="note">{t('scope.notChanged', { dates: own.join(', ') })}</div>}
-      {named &&
+      {scope === 'following' &&
+        named &&
         kept.map((k) => (
           <div key={k.part.id} className="banner info" data-testid="kept-list">
             {keptListText(k, props.today, t, lang, nameOf)}

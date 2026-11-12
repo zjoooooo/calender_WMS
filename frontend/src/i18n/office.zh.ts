@@ -400,6 +400,7 @@ const office = {
   'run.result.open': '{what} 待接手',
   'run.switchAndAssign': '让他交回并指派',
   'run.switchQ': '{name} 还在跑 {code}（剩 {n} 站）。让他交回 {code} 并接这项工作？',
+  'kept.changeCarried': '已有安排：{when}这条路线是 {days}。这次的修改（从{date}起由 {old} 改为 {neu}）也会同样改到它上面，所以{after}是 {result}。',
   'kept.days': '已有安排：{when}这条路线是 {days}。这个安排会保留。',
   'kept.daysCarried': '已有安排：{when}这条路线是 {days}。这个安排会保留；你加上或去掉的星期也会同样改到它上面，所以{after}是 {result}。',
   'kept.daysReplaced': '已有安排：{when}这条路线是 {days}。按这里的设置，从{date}起改成 {result}。',

@@ -303,14 +303,14 @@ return (static function (): array {
             T::eq([21], array_column($route($e, $a)['stops'], 'customer_id'));
             T::eq([21], array_column($route($e, $b)['stops'], 'customer_id'));
         },
-        'SPLIT-10 (Round 6): GET /api/routes/{id} returns the parts an edit reaches, with their schedule and list' => function () use ($env, $create, $put, $cs, $stops) {
+        'SPLIT-10 (Round 6): GET /api/routes/{id} returns the parts an edit reaches, with their schedule and list' => function () use ($env, $create, $put, $cs, $stops, $rev) {
             $e = $env();
             $a = $create($e, 'P1', '2026-11-11', [1, 3, 5], [12, 40]);
             $b = T::ok($put($e, $a, '2026-12-02', ['scope' => 'following', 'stops' => $stops(12, 40, 21)]))['route']['id'];
             $c = T::ok($cs($e, $b, ['from' => '2026-12-21', 'days' => [2, 4]]))['created']['id'];
             T::ok($put($e, $b, '2026-12-09', ['scope' => 'this', 'stops' => $stops(21)])); // an override is not a part
-            $part = static fn (int $id, string $start, ?string $end, array $days, array $cids) => ['id' => $id, 'start' => $start, 'end' => $end,
-                'days' => $days, 'sun' => null, 'ph' => null, 'stops' => $stops(...$cids)];
+            $part = static fn (int $id, string $start, ?string $end, array $days, array $cids) => ['id' => $id, 'rev' => $rev($e, $id), 'start' => $start,
+                'end' => $end, 'days' => $days, 'sun' => null, 'ph' => null, 'stops' => $stops(...$cids)];
             $parts = [$part($a, '2026-11-11', '2026-12-01', [1, 3, 5], [12, 40]), $part($b, '2026-12-02', '2026-12-20', [1, 3, 5], [12, 40, 21]),
                 $part($c, '2026-12-21', null, [2, 4], [12, 40, 21])];
             foreach ([$a, $b, $c] as $id) {
@@ -318,7 +318,7 @@ return (static function (): array {
             }
             // special parts carry Sunday / PH; a one-off has none
             $s = T::ok($e->call('POST', '/api/routes', ['type' => 'special', 'code' => 'PS', 'name' => 'Sun', 'start' => '2026-11-15', 'sun' => true, 'ph' => false, 'stops' => $stops(21)], 'mei'), 201);
-            T::eq([['id' => $s['id'], 'start' => '2026-11-15', 'end' => null, 'days' => null, 'sun' => true, 'ph' => false, 'stops' => $stops(21)]],
+            T::eq([['id' => $s['id'], 'rev' => 1, 'start' => '2026-11-15', 'end' => null, 'days' => null, 'sun' => true, 'ph' => false, 'stops' => $stops(21)]],
                 T::ok($e->call('GET', "/api/routes/{$s['id']}", null, 'mei'))['parts']);
             T::eq(null, T::ok($e->call('GET', '/api/routes/41', null, 'mei'))['parts']);
             // once the first part has ended, an edit of it stays on it: its parts are itself only
@@ -352,9 +352,48 @@ return (static function (): array {
                 $got = T::ok($e->call('GET', "/api/routes/{$case['parts'][0]['id']}", null, 'mei'))['parts'];
                 foreach ($got as $k => $p) {
                     $got[$k]['id'] = isset($known[$p['id']]) ? $p['id'] : 0; // a part the call created
+                    unset($got[$k]['rev']); // the office does not predict revs (SPLIT-12 checks them)
                 }
                 T::eq($case['after'], $got, $case['name']);
             }
+        },
+        'SPLIT-12 (Round 6): a write that sends the parts it was shown on is refused when another part changed meanwhile' => function () use ($env, $create, $put, $cs, $patch, $stops, $rev, $route) {
+            // The office names before the save what each other part keeps (§6.5), computed on GET's parts; a
+            // concurrent save on another part (its rev unchanged on the opened one) must not make that stale.
+            $e = $env();
+            $a = $create($e, 'PR', '2026-11-11', [1, 3, 5], [12, 40]);
+            $b = T::ok($cs($e, $a, ['from' => '2026-12-07', 'days' => [2, 4]]))['created']['id'];
+            $shown = static fn (int $id) => array_map(static fn ($p) => ['id' => $p['id'], 'rev' => $p['rev']],
+                T::ok($e->call('GET', "/api/routes/$id", null, 'mei'))['parts']);
+            $seen = $shown($a);
+            T::eq([$a, $b], array_column($seen, 'id'));
+            // another clerk changes the part from 7 Dec: a PATCH, a change-schedule and a "following" save on the
+            // first part are refused, with the current parts; nothing is written
+            T::ok($cs($e, $b, ['from' => '2026-12-07', 'days' => [2, 4, 5]]));
+            $before = $e->doc('plan');
+            $err = T::err($patch($e, $a, ['days' => [1, 3, 5, 6], 'parts' => $seen]), 409, 'STALE_REVISION');
+            T::eq('parts', $err['field']);
+            T::eq(['parts' => $shown($a)], $err['details']);
+            T::err($cs($e, $a, ['from' => '2026-11-20', 'days' => [1, 3], 'parts' => $seen]), 409, 'STALE_REVISION');
+            T::err($put($e, $a, '2026-11-13', ['scope' => 'following', 'stops' => $stops(12), 'parts' => $seen]), 409, 'STALE_REVISION');
+            T::eq($before, $e->doc('plan'), 'nothing written');
+            // in any order, the parts shown now are accepted; without "parts" there is no such check (additive)
+            T::ok($patch($e, $a, ['days' => [1, 3, 5, 6], 'parts' => array_reverse($shown($a))]));
+            T::eq([2, 4, 5, 6], $route($e, $b)['days']);
+            T::ok($put($e, $a, '2026-11-13', ['scope' => 'following', 'stops' => $stops(12, 21), 'parts' => $shown($b)]));
+            T::ok($cs($e, $a, ['from' => '2026-11-20', 'days' => [1, 3]]));
+            // a part added or removed meanwhile is a change too
+            $seen = $shown($a);
+            $c = T::ok($cs($e, $b, ['from' => '2026-12-21', 'days' => [2, 4]]))['created']['id'];
+            T::err($patch($e, $a, ['name' => 'X', 'parts' => $seen]), 409, 'STALE_REVISION');
+            T::true(in_array($c, array_column($shown($a), 'id'), true), 'the new part is listed');
+            T::ok($patch($e, $a, ['end' => '2026-12-20', 'parts' => $shown($a)]));
+            T::err($patch($e, $a, ['name' => 'X', 'parts' => $seen]), 409, 'STALE_REVISION');
+            // malformed
+            foreach ([['x'], [['id' => $a]], [['id' => $a, 'rev' => 1, 'start' => '2026-11-11']], 'all', [['id' => 0, 'rev' => 1]]] as $bad) {
+                T::eq('parts', T::err($patch($e, $a, ['name' => 'Y', 'parts' => $bad]), 422, 'VALIDATION')['field']);
+            }
+            T::eq($rev($e, $a), $shown($a)[0]['rev']);
         },
         'a record stored without `series` is its own route: membership is never guessed from code and dates' => function () use ($env, $stops, $route, $dates, $wd) {
             // 46 ended 30 Nov and 47 starts 1 Dec with the same code: an "End route + new route" pair looks exactly

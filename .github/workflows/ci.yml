@@ -1,11 +1,13 @@
-# WMS route & task calendar: tests and deployment with GitHub Actions (docs/Project.md section 11.5,
-# README.md "Automatic deployment with GitHub Actions").
+# WMS route & task calendar: tests, and the calendar demo on GitHub Pages, with GitHub Actions
+# (docs/Project.md section 11.5; README.md "Tests on GitHub Actions" and "Calendar demo on GitHub Pages").
 # - Every push (any branch), every pull request and a manual run ("Run workflow") test the commit: the backend
-#   (PHP 8.3), the frontend (types, unit tests, build) and the three browser suites (Playwright).
-# - A push to main, or a manual run on main, that passes ALL of them deploys exactly that commit to the VPS over
-#   SSH: deploy/update.sh <sha>, through the restricted login that deploy/setup-ci-deploy.sh sets up.
-# - Until the server's secrets are added, the deploy job only says what to add (a warning and the job summary)
-#   and stays green.
+#   (PHP 8.3), the frontend (types, unit tests, build), the three browser suites (Playwright) and the calendar
+#   demo (its data made by the real backend, the php-wasm build, its own browser test; the build is kept as the
+#   run's "calendar-demo" artifact).
+# - A push to main, a manual run on main and the weekly run (Mondays, so the demo's sample runs stay recent) that
+#   pass ALL of them publish that demo build to GitHub Pages. Until Pages is turned on for this repository
+#   (Settings > Pages > Build and deployment > Source: GitHub Actions), that job only says what to do (a warning
+#   and the job summary) and stays green.
 # Values from ${{ }} reach the run: scripts only through env:, never pasted into the script text.
 name: CI
 
@@ -14,6 +16,8 @@ on:
     branches: ['**']
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: '17 1 * * 1' # Mondays 01:17 UTC = 09:17 in Singapore: the demo is rebuilt with that day's runs
 
 permissions:
   contents: read
@@ -24,11 +28,11 @@ defaults:
 
 jobs:
   backend:
-    name: Backend (PHP 8.3) and deploy scripts
+    name: Backend (PHP 8.3) and server scripts
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    # A newer push to the same branch (or pull request) cancels the test jobs of this run. The deploy job has
-    # its own group and is never cancelled.
+    # A newer push to the same branch (or pull request) cancels the test jobs of this run. The Pages job has its
+    # own group and is never cancelled.
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}-backend
       cancel-in-progress: true
@@ -39,7 +43,7 @@ jobs:
         with:
           php-version: '8.3'
           # No shared extension except curl, which only the tests use (api_smoke.php, race.php). The app needs
-          # nothing beyond PHP's core (section 11.1, no mbstring); the server has php8.3-cli, -fpm and -opcache.
+          # nothing beyond PHP's core (section 11.1, no mbstring).
           extensions: none, curl
           coverage: none
           tools: none
@@ -53,7 +57,7 @@ jobs:
         run: php backend/tests/race.php 8182 "$RUNNER_TEMP/wms-race"
       - name: Backup test (backup_test.php)
         run: php backend/tests/backup_test.php
-      - name: Deploy scripts (bash -n, shellcheck)
+      - name: Server scripts in deploy/ (bash -n, shellcheck)
         run: |
           command -v shellcheck >/dev/null || { sudo apt-get update && sudo apt-get install -y shellcheck; }
           shellcheck --version | sed -n 2p
@@ -85,8 +89,19 @@ jobs:
         run: npx tsc --noEmit
       - name: Unit tests (vitest)
         run: npx vitest run
+      # The dev server's dependency scan from a cold cache, as on a fresh clone (npm run dev): it must not
+      # follow the demo-only code (vite.config.ts). It exits non-zero when an import cannot be resolved.
+      - name: Dev server dependency scan (vite optimize --force)
+        run: npx vite optimize --force
       - name: Production build (npm run build)
         run: npm run build
+      - name: The production build has no demo code
+        run: |
+          if grep -l -e 'php-wasm' -e 'wms-demo' -e 'setInBrowserBackend' -e '\.wasm' ../backend/public/app/assets/*.js; then
+            echo "::error title=Demo code in the production build::The files above contain demo-only code (section 11.5)."
+            exit 1
+          fi
+          ls -l ../backend/public/app/assets
 
   e2e:
     name: Browser tests (${{ matrix.suite }})
@@ -112,7 +127,7 @@ jobs:
       - name: Set up PHP 8.3
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.3' # the runner's usual extensions, OPcache included, as under PHP-FPM on the server
+          php-version: '8.3' # the runner's usual extensions, OPcache included
           coverage: none
           tools: none
       - name: Set up Node.js (frontend/.nvmrc)
@@ -123,7 +138,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: npm ci
         run: npm ci --no-audit --no-fund
-      # Playwright is not in package.json on purpose: the VPS runs npm ci and never needs a browser.
+      # Playwright is not in package.json on purpose: npm ci on a PC or a server never needs a browser.
       - name: Install Playwright 1.63.0 and Chromium (CI only)
         run: |
           npm install --no-save --no-audit --no-fund playwright@1.63.0
@@ -149,162 +164,152 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-  deploy:
-    name: Deploy to the VPS
-    needs: [backend, frontend, e2e]
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+  demo:
+    name: Calendar demo (php-wasm build and browser test)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    # Settings > Environments > production: add required reviewers there to approve each deploy by hand.
-    environment:
-      name: production
-      url: ${{ steps.settings.outputs.url }}
-    # One deploy at a time, and a running deploy is never cancelled: a newer one waits for it (when several
-    # wait, only the newest stays queued; it contains the others, since main only moves forward).
+    timeout-minutes: 20
     concurrency:
-      group: deploy-production
+      group: ${{ github.workflow }}-${{ github.ref }}-demo
+      cancel-in-progress: true
+    defaults:
+      run:
+        shell: bash
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up PHP 8.3 (the demo data is made by the real backend)
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+          tools: none
+      - name: Set up Node.js (frontend/.nvmrc)
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm ci
+        run: npm ci --no-audit --no-fund
+      - name: Install Playwright 1.63.0 and Chromium (CI only)
+        run: |
+          npm install --no-save --no-audit --no-fund playwright@1.63.0
+          npx playwright install --with-deps chromium
+      - name: Demo data (php -S, tools/init.php, scripts/seed-demo.mjs with today's runs)
+        run: npm run demo:data
+      - name: Build the demo (npm run build:demo -> frontend/dist-demo)
+        run: npm run build:demo
+      - name: Sizes
+        run: |
+          {
+            echo "### Calendar demo build"
+            echo
+            echo "| File | Bytes | gzip |"
+            echo "|---|---:|---:|"
+            find dist-demo -type f | sort | while read -r f; do
+              echo "| \`${f#dist-demo/}\` | $(wc -c < "$f") | $(gzip -9c "$f" | wc -c) |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Run e2e/demo.e2e.cjs (served under a sub-path and a random prefix, no special headers)
+        env:
+          E2E_SHOTS: ${{ runner.temp }}/e2e/screenshots
+        run: |
+          mkdir -p "$RUNNER_TEMP/e2e"
+          node e2e/demo.e2e.cjs 2>&1 | tee "$RUNNER_TEMP/e2e/demo.log"
+      - name: Keep the demo build (artifact calendar-demo)
+        uses: actions/upload-artifact@v5
+        with:
+          name: calendar-demo
+          path: frontend/dist-demo/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload the log and screenshots
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: e2e-demo-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/e2e/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  pages:
+    name: Publish the calendar demo to GitHub Pages
+    needs: [backend, frontend, e2e, demo]
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    # One publish at a time, and a running one is never cancelled: a newer one waits for it.
+    concurrency:
+      group: pages
       cancel-in-progress: false
     steps:
-      - name: Check the deploy settings
-        id: settings
+      - name: Check that GitHub Pages is on, with Source "GitHub Actions"
+        id: check
         env:
-          WMS_SSH_HOST: ${{ secrets.WMS_SSH_HOST }}
-          WMS_SSH_PORT: ${{ secrets.WMS_SSH_PORT }}
-          WMS_SSH_USER: ${{ secrets.WMS_SSH_USER }}
-          WMS_SSH_KEY: ${{ secrets.WMS_SSH_KEY }}
-          WMS_SSH_KNOWN_HOSTS: ${{ secrets.WMS_SSH_KNOWN_HOSTS }}
-          WMS_DOMAIN: ${{ vars.WMS_DOMAIN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          status() { if [ -n "${!1}" ]; then echo set; else echo "${2:-**missing**}"; fi; }
-          missing=()
-          for name in WMS_SSH_HOST WMS_SSH_USER WMS_SSH_KEY WMS_SSH_KNOWN_HOSTS WMS_DOMAIN; do
-            if [ -z "${!name}" ]; then missing+=("$name"); fi
-          done
-          if [ "${#missing[@]}" -gt 0 ]; then
-            list=$(printf '%s, ' "${missing[@]}")
-            list=${list%, }
-            echo "::warning title=Deployment skipped::All tests passed, but nothing was deployed: ${list} not set. Add them in Settings > Environments > production (the job summary lists them; README.md, Automatic deployment with GitHub Actions)."
-            {
-              echo "## Deployment skipped: the server is not set up for GitHub Actions yet"
-              echo
-              echo "All tests passed for commit \`$GITHUB_SHA\`, but nothing was deployed, because these settings are missing: **${list}**."
-              echo
-              echo "| Name | Kind | Now | What to put in it |"
-              echo "|---|---|---|---|"
-              echo "| \`WMS_SSH_HOST\` | secret | $(status WMS_SSH_HOST) | the server's host name (normally the domain) or IP address |"
-              echo "| \`WMS_SSH_PORT\` | secret, optional | $(status WMS_SSH_PORT 'not set (22)') | the SSH port; leave it out for 22 |"
-              echo "| \`WMS_SSH_USER\` | secret | $(status WMS_SSH_USER) | \`wmsdeploy\` |"
-              echo "| \`WMS_SSH_KEY\` | secret | $(status WMS_SSH_KEY) | the private key printed by the setup script, from \`-----BEGIN\` to \`-----END\` |"
-              echo "| \`WMS_SSH_KNOWN_HOSTS\` | secret | $(status WMS_SSH_KNOWN_HOSTS) | the known_hosts lines printed by the setup script |"
-              echo "| \`WMS_DOMAIN\` | variable | $(status WMS_DOMAIN) | the site's domain, for example \`wms.example.com.sg\` (no https://) |"
-              echo
-              echo "1. On the server, after \`deploy/install.sh\`, run \`sudo bash /opt/wms/deploy/setup-ci-deploy.sh\`. It prints every value above."
-              echo "2. In this repository open **Settings > Environments > production**. Add the secrets under **Environment secrets** (\`WMS_SSH_PORT\` only when the port is not 22) and \`WMS_DOMAIN\` under **Environment variables**. (Repository-level secrets and variables under **Settings > Secrets and variables > Actions** work too.)"
-              echo "3. Push to \`main\` again, or open **Actions > CI > Run workflow** on \`main\`."
-              echo
-              echo "Step by step: README.md, section \"Automatic deployment with GitHub Actions\"."
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "ready=false" >> "$GITHUB_OUTPUT"
+          set +e
+          answer=$(gh api "repos/$GITHUB_REPOSITORY/pages" --jq .build_type 2>&1)
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ] && [ "$answer" = workflow ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
-          errors=()
-          port=${WMS_SSH_PORT:-22}
-          if ! [[ $port =~ ^[0-9]{1,5}$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
-            errors+=("WMS_SSH_PORT is not a port number (leave it out for 22)")
-          fi
-          if ! [[ $WMS_SSH_HOST =~ ^[A-Za-z0-9]([A-Za-z0-9.:-]*[A-Za-z0-9])?$ ]]; then
-            errors+=("WMS_SSH_HOST is not a host name or IP address (no ssh://, no user@, no port)")
-          fi
-          if ! [[ $WMS_SSH_USER =~ ^[a-z_][a-z0-9_-]*$ ]]; then
-            errors+=("WMS_SSH_USER is not a user name (it is normally wmsdeploy)")
-          fi
-          domain_re='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}$'
-          if ! [[ $WMS_DOMAIN =~ $domain_re ]]; then
-            errors+=("WMS_DOMAIN '$WMS_DOMAIN' is not a domain name (for example wms.example.com.sg: lower case, no https://, no path)")
-          fi
-          if [ "${#errors[@]}" -gt 0 ]; then
-            for e in "${errors[@]}"; do echo "::error title=Deploy settings::$e"; done
+          if [ "$rc" -eq 0 ]; then
+            why="GitHub Pages is on, but it publishes from a branch (build type \"$answer\"), not from GitHub Actions."
+          elif grep -q 'HTTP 404' <<<"$answer"; then
+            why="GitHub Pages is not turned on for this repository yet."
+          else
+            echo "::error title=GitHub Pages check failed::$answer"
             exit 1
           fi
-          echo "ready=true" >> "$GITHUB_OUTPUT"
-          echo "url=https://$WMS_DOMAIN/" >> "$GITHUB_OUTPUT"
-          echo "Deploy settings are complete."
-
-      - name: Deploy this commit with deploy/update.sh over SSH
-        if: steps.settings.outputs.ready == 'true'
+          echo "::warning title=Calendar demo not published::All tests passed, but nothing was published: $why Open Settings > Pages > Build and deployment and set Source to GitHub Actions, then run this workflow again on main (the job summary has the steps)."
+          {
+            echo "## Calendar demo not published: GitHub Pages is not set up yet"
+            echo
+            echo "All tests passed for commit \`$GITHUB_SHA\` and the demo was built (artifact **calendar-demo** of this run), but it was not published. $why"
+            echo
+            echo "1. The repository must be **public** (GitHub Pages of a private repository needs a paid plan)."
+            echo "2. Open **Settings > Pages**. Under **Build and deployment**, set **Source** to **GitHub Actions**."
+            echo "3. Open **Actions > CI > Run workflow** on \`main\` (or push to \`main\`). The demo then appears at \`https://<owner>.github.io/<repository>/\`."
+            echo
+            echo "Step by step: README.md, section \"Calendar demo on GitHub Pages\"."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+      - name: Get the demo build of this run
+        if: steps.check.outputs.ready == 'true'
+        uses: actions/download-artifact@v5
+        with:
+          name: calendar-demo
+          path: dist-demo
+      - name: Configure GitHub Pages
+        if: steps.check.outputs.ready == 'true'
+        uses: actions/configure-pages@v5
+      - name: Upload the site
+        if: steps.check.outputs.ready == 'true'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist-demo
+      - name: Publish
+        id: deployment
+        if: steps.check.outputs.ready == 'true'
+        uses: actions/deploy-pages@v4
+      - name: Summary
+        if: steps.check.outputs.ready == 'true'
         env:
-          WMS_SSH_HOST: ${{ secrets.WMS_SSH_HOST }}
-          WMS_SSH_PORT: ${{ secrets.WMS_SSH_PORT }}
-          WMS_SSH_USER: ${{ secrets.WMS_SSH_USER }}
-          WMS_SSH_KEY: ${{ secrets.WMS_SSH_KEY }}
-          WMS_SSH_KNOWN_HOSTS: ${{ secrets.WMS_SSH_KNOWN_HOSTS }}
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
         run: |
-          ssh_dir="$RUNNER_TEMP/wms-ssh"
-          rm -rf "$ssh_dir"
-          install -d -m 700 "$ssh_dir"
-          trap 'rm -rf "$ssh_dir"' EXIT
-          # Secrets pasted on Windows may carry CR characters; OpenSSH wants a final newline.
-          printf '%s\n' "$WMS_SSH_KEY" | tr -d '\r' > "$ssh_dir/key"
-          chmod 600 "$ssh_dir/key"
-          printf '%s\n' "$WMS_SSH_KNOWN_HOSTS" | tr -d '\r' > "$ssh_dir/known_hosts"
-          port=${WMS_SSH_PORT:-22}
-          if [ "$port" = 22 ]; then pattern=$WMS_SSH_HOST; else pattern="[$WMS_SSH_HOST]:$port"; fi
-
-          # The server's host key must already be known (no trust on first use, no ssh-keyscan).
-          if ! ssh-keygen -F "$pattern" -f "$ssh_dir/known_hosts" >/dev/null; then
-            echo "::error title=Host key missing::WMS_SSH_KNOWN_HOSTS has no line for the host in WMS_SSH_HOST (port $port). Its lines must start with that host name ([host]:port when the port is not 22). Copy them from the output of deploy/setup-ci-deploy.sh."
-            exit 1
-          fi
-          if ! ssh-keygen -y -P '' -f "$ssh_dir/key" >/dev/null 2>&1; then
-            echo "::error title=Bad private key::WMS_SSH_KEY is not an SSH private key without a passphrase. Paste the whole key printed by deploy/setup-ci-deploy.sh, from -----BEGIN to -----END."
-            exit 1
-          fi
-
-          # The server's forced command takes only the commit SHA, runs update.sh <sha> and finally prints
-          # WMS_SERVER_COMMIT=<the commit the server is on>.
-          echo "Deploying $GITHUB_SHA"
-          set +e
-          ssh -n -i "$ssh_dir/key" -p "$port" \
-            -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none \
-            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$ssh_dir/known_hosts" -o GlobalKnownHostsFile=/dev/null \
-            -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=10 \
-            -- "$WMS_SSH_USER@$WMS_SSH_HOST" "$GITHUB_SHA" 2>&1 | tee "$ssh_dir/output.log"
-          rc=${PIPESTATUS[0]}
-          set -e
-          server=$(sed -n 's/^WMS_SERVER_COMMIT=\([0-9a-f]\{40\}\|unknown\)$/\1/p' "$ssh_dir/output.log" | tail -n 1)
-
-          case $rc in
-            0) ;;
-            255) echo "::error title=SSH failed::Could not connect or log in (exit 255). Check WMS_SSH_HOST, WMS_SSH_PORT, WMS_SSH_USER, that WMS_SSH_KEY is the key installed by deploy/setup-ci-deploy.sh, that WMS_SSH_KNOWN_HOSTS matches the server, and that the provider firewall lets GitHub reach the SSH port." ;;
-            2) echo "::error title=Refused by the server::The server's forced command refused the request (exit 2). See the log above." ;;
-            *) echo "::error title=update.sh failed::deploy/update.sh stopped on the server (exit $rc); see the log above. The live app is only replaced in its step 5; it says what to fix." ;;
-          esac
-          if [ "$server" != "$GITHUB_SHA" ]; then
-            echo "::error title=Wrong commit on the server::The server is at ${server:-an unknown commit}, not at $GITHUB_SHA."
-            exit 1
-          fi
-          [ "$rc" -eq 0 ] || exit "$rc"
-          echo "The server is at $GITHUB_SHA"
-
-      - name: Check https://<domain>/api/health
-        if: steps.settings.outputs.ready == 'true'
-        env:
-          WMS_DOMAIN: ${{ vars.WMS_DOMAIN }}
-        run: |
-          url="https://$WMS_DOMAIN/api/health"
-          for i in $(seq 1 12); do
-            if body=$(curl -fsS --max-time 10 "$url" 2>&1) && grep -q '"ok":true' <<<"$body"; then
-              echo "OK: $url answers $body"
-              {
-                echo "## Deployed"
-                echo
-                echo "Commit \`$GITHUB_SHA\` is live on https://$WMS_DOMAIN/: the server reports this commit and \`/api/health\` answers."
-              } >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-            echo "Attempt $i of 12: ${body:-no answer}"
-            sleep 5
-          done
-          echo "::error title=Health check failed::$url did not answer after the update. On the server: journalctl -u caddy --since -10min and journalctl -u php8.3-fpm --since -10min."
-          exit 1
+          {
+            echo "## Calendar demo published"
+            echo
+            echo "Commit \`$GITHUB_SHA\` is live at $PAGE_URL"
+          } >> "$GITHUB_STEP_SUMMARY"

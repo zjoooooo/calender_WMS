@@ -7,7 +7,9 @@
 // to the part that runs on that date). Each part has its own customer list: the template editor's note
 // names the other parts' dates and says whether a change from today reaches them (SPLIT-UI-08). Round 6:
 // before a save, each other part whose customers after it differ from the list being saved is named, with
-// the customers it also has and the ones it does not have (routeCarry, the server's rule).
+// the customers it also has and the ones it does not have (routeCarry, the server's rule). The notices
+// scroll in a capped area above Save, so the list and Save stay on screen however many parts are named, and
+// the save sends the parts they were computed on (refused with STALE_REVISION if one changed meanwhile).
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -33,7 +35,7 @@ import { addDays } from './calendarModel';
 import { EndDialog } from './CopyDialog';
 import { CustomerPicker, type PickedCustomer } from './CustomerPicker';
 import { MenuButton, routeRuleText, useGuardedWrite } from './officeShared';
-import { keptListsTemplate, keptListText } from './routeCarry';
+import { keptListsTemplate, keptListText, partsRev } from './routeCarry';
 import { chainPeriod, endTarget, liveChain, routeChain, segmentLive, segmentOn, segmentPeriods, useAllRoutes } from './routeChain';
 import { RouteForm } from './RouteForm';
 import { StopList } from './StopList';
@@ -300,13 +302,15 @@ function TemplateEditor({ id, onClose }: { id: number; onClose: () => void }) {
 
   const save = () => {
     if (!route) return;
+    // The parts the notices were computed on (§6.5): the server refuses the save if one changed meanwhile.
+    const parts = partsRev(route.parts);
     if (route.recurring && apply === 'from') {
       if (!fromDate) return w.setError(t('err.required_field', { field: t('rf.fromDate') }));
       // A split route: the schedule change goes to the part that runs on D.
       const seg = segmentOn(live, fromDate);
       const target = seg && seg.id !== route.id ? { id: seg.id, rev: seg.rev } : { id: route.id, rev: route.rev };
       return w.run(
-        (rel) => changeRouteSchedule(target.id, { rev: target.rev, from: fromDate, stops: draft.stops, ...(rel ? { release_run: true } : {}) }),
+        (rel) => changeRouteSchedule(target.id, { rev: target.rev, from: fromDate, stops: draft.stops, ...(parts ? { parts } : {}), ...(rel ? { release_run: true } : {}) }),
         (r) => {
           for (const x of r.warnings) toast(t(`warn.${x.code}`), 'warn');
           toast(t('rd.savedFollowing', { date: fmtDay(fromDate, lang) }));
@@ -315,7 +319,7 @@ function TemplateEditor({ id, onClose }: { id: number; onClose: () => void }) {
       );
     }
     return w.run(
-      (rel) => patchRoute(route.id, { rev: route.rev, stops: draft.stops, ...(rel ? { release_run: true } : {}) }),
+      (rel) => patchRoute(route.id, { rev: route.rev, stops: draft.stops, ...(parts ? { parts } : {}), ...(rel ? { release_run: true } : {}) }),
       (r) => {
         for (const x of r.warnings) toast(t(`warn.${x.code}`), 'warn');
         toast(t('common.saved'));
@@ -378,11 +382,15 @@ function TemplateEditor({ id, onClose }: { id: number; onClose: () => void }) {
               </label>
             </div>
           )}
-          {kept.map((k) => (
-            <div key={k.part.id} className="banner info" data-testid="kept-list">
-              {keptListText(k, today, t, lang, (cid) => custOf(cid)?.name ?? `#${cid}`)}
+          {kept.length > 0 && (
+            <div className="kept-notes">
+              {kept.map((k) => (
+                <div key={k.part.id} className="banner info" data-testid="kept-list">
+                  {keptListText(k, today, t, lang, (cid) => custOf(cid)?.name ?? `#${cid}`)}
+                </div>
+              ))}
             </div>
-          ))}
+          )}
           <div className="acts">
             {dirty && <span className="tag warn">{t('common.unsaved')}</span>}
             <button type="button" className="btn primary" disabled={!dirty || w.busy} onClick={() => void save()}>

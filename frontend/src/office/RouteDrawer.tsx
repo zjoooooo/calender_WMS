@@ -15,7 +15,7 @@
 // names every part it removes, and "End route from D" goes to the part that runs on D (routeChain).
 // The End and Delete dialogs show their own error; it is cleared when a dialog opens or closes.
 import { useEffect, useMemo, useState } from 'react';
-import { deleteRoute, isApiError, patchRoute, putRouteDate, resetRouteDate, type RouteOccurrence, type Stop } from '../api';
+import { deleteRoute, isApiError, patchRoute, putRouteDate, resetRouteDate, type PartRev, type RouteOccurrence, type Stop } from '../api';
 import { fmtDay, fmtWeight, useI18n } from '../i18n';
 import { useSession } from '../session';
 import { TypeTag } from '../ui/Chip';
@@ -168,10 +168,11 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
   };
 
   // ---- writes ----
-  // Only what this draft changed is sent, with the rev it is based on (R20).
+  // Only what this draft changed is sent, with the rev it is based on (R20), and with "and all following" the
+  // parts the scope dialog's notices were computed on (§6.5).
   const stopsChanged = !sameStops(draft.stops, base.stops);
   const noteChanged = draft.note !== base.note;
-  const save = (scope: Scope) =>
+  const save = (scope: Scope, parts?: PartRev[]) =>
     w.run(
       async (rel) => {
         try {
@@ -180,6 +181,7 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
             scope,
             ...(stopsChanged ? { stops: draft.stops } : {}),
             ...(noteChanged ? { note: draft.note } : {}),
+            ...(parts ? { parts } : {}),
             ...(rel ? { release_run: true } : {}),
           });
         } catch (e) {
@@ -437,7 +439,7 @@ export function RouteDrawer({ occ, onClose }: { occ: RouteOccurrence; onClose: (
           removed={diff.removed.length}
           busy={w.busy}
           error={w.error}
-          onSave={(s) => void save(s)}
+          onSave={(s, parts) => void save(s, parts)}
           onClose={() => setScopeOpen(false)}
         />
       )}

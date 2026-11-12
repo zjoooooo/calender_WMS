@@ -17,6 +17,7 @@ import {
   keptSchedules,
   keptScheduleText,
   mergeStops,
+  partsRev,
 } from './routeCarry';
 
 interface Case {
@@ -76,6 +77,15 @@ describe('Plan::carry rules', () => {
     expect(afterSplit(parts, { from: '2027-01-04', days: [1] }, today)).toBeNull();
     expect(afterSplit(parts, { from: '2026-12-07', days: [1], end: '2026-12-01' }, today)).toBeNull();
   });
+  it('a schedule the server refuses (no weekday, neither Sunday nor PH) predicts nothing', () => {
+    const parts = [R(1, '2026-11-11', '2026-11-30', [1, 3, 5], S(12)), R(2, '2026-12-01', null, [1, 3], S(12))];
+    expect(afterPatch(parts, 1, { days: [] })).toBeNull();
+    expect(afterSplit(parts, { from: '2026-11-20', days: [] }, today)).toBeNull();
+    expect(keptSchedules(parts, afterPatch(parts, 1, { days: [] }), 1, null)).toEqual([]);
+    const sp: RoutePart[] = [{ id: 3, start: '2026-11-15', end: null, days: null, sun: true, ph: false, stops: S(21) }];
+    expect(afterPatch(sp, 3, { sun: false })).toBeNull();
+    expect(afterPatch(sp, 3, { sun: false, ph: true })).toEqual([{ ...sp[0], sun: false, ph: true }]);
+  });
 });
 
 // T2: Mon/Wed/Fri now (opened), Mon/Wed/Fri from 2 Dec (its own list), Tue/Thu from 21 Dec.
@@ -115,6 +125,28 @@ describe('Edit route / schedule: the notice names what a later part keeps', () =
     // ticking that part's own days replaces nothing
     expect(keptSchedules(T2, afterSplit(T2, { from: '2026-12-28', days: [2, 4] }, today), 101, '2026-12-28')).toEqual([]);
   });
+  it('from the first day of a part with its own schedule: the part after it gets the change measured from the replaced one, and is told so', () => {
+    // the shared case "from the first day of a later part with its own schedule" (the server stores the same)
+    const parts = [R(211, '2026-11-11', '2026-12-06', [1, 3, 5], S(12, 40)), R(212, '2026-12-07', '2026-12-21', [2, 4], S(12, 40)), R(213, '2026-12-22', null, [2, 4, 6], S(12, 40))];
+    const k = keptSchedules(parts, afterSplit(parts, { from: '2026-12-07', days: [1, 3, 5, 6] }, today), 211, '2026-12-07');
+    expect(k.map((x) => [x.part.id, x.after.days, x.replacedFrom ?? null, x.via ? [x.via.old.days, x.via.neu.days] : null])).toEqual([
+      [212, [1, 3, 5, 6], '2026-12-07', null],
+      [213, [1, 3, 5, 6], null, [[2, 4], [1, 3, 5, 6]]],
+    ]);
+    // Tue and Thu leave the 22 Dec part although the clerk did not untick them: it does not say "kept" or "you add or remove"
+    expect(keptScheduleText(k[1], today, en, 'en')).toBe(
+      'Already planned: from Tue 22 Dec this route runs Tue Thu Sat. This change, Tue Thu to Mon Wed Fri Sat from Mon 7 Dec, applies to it too, so from Tue 22 Dec it runs Mon Wed Fri Sat.',
+    );
+    expect(keptScheduleText(k[1], today, zh, 'zh')).toBe(
+      '已有安排：12月22日起这条路线是 周二、周四、周六。这次的修改（从12月7日起由 周二、周四 改为 周一、周三、周五、周六）也会同样改到它上面，所以12月22日起是 周一、周三、周五、周六。',
+    );
+    // a later part the change does not reach is only said to be kept
+    const k2 = keptSchedules(parts, afterSplit(parts, { from: '2026-12-07', days: [2, 4, 6] }, today), 211, '2026-12-07');
+    expect(k2.map((x) => keptScheduleText(x, today, en, 'en'))).toEqual([
+      'Already planned: from Mon 7 Dec to Mon 21 Dec this route runs Tue Thu. From Mon 7 Dec it runs Tue Thu Sat instead, as set here.',
+      'Already planned: from Tue 22 Dec this route runs Tue Thu Sat. That plan is kept.',
+    ]);
+  });
   it('from a date inside a later part with the same schedule (split only by its list): nothing is said about it', () => {
     const k = keptSchedules(T2, afterSplit(T2, { from: '2026-12-09', days: [1, 3] }, today), 101, '2026-12-09');
     expect(k.map((x) => [x.part.id, x.after.days, x.replacedFrom ?? null])).toEqual([[103, [2, 4], null]]);
@@ -137,6 +169,20 @@ describe('Edit route / schedule: the notice names what a later part keeps', () =
 
 // T5: the 2 Dec part has its own customer 21; the drawer saves "this date and following".
 const T5 = [R(131, '2026-11-11', '2026-12-01', [1, 3, 5], S(12, 40)), R(132, '2026-12-02', '2026-12-20', [1, 3, 5], S(12, 40, 21)), R(133, '2026-12-21', null, [2, 4], S(12, 40, 21))];
+
+describe('the save sends the parts its notices were computed on', () => {
+  it('ids and revs as the server gave them; nothing when a part has no rev (an older server)', () => {
+    const parts = [{ ...T2[0], rev: 4 }, { ...T2[1], rev: 2 }, { ...T2[2], rev: 1 }];
+    expect(partsRev(parts)).toEqual([
+      { id: 101, rev: 4 },
+      { id: 102, rev: 2 },
+      { id: 103, rev: 1 },
+    ]);
+    expect(partsRev(T2)).toBeUndefined();
+    expect(partsRev(null)).toBeUndefined();
+    expect(partsRev([])).toBeUndefined();
+  });
+});
 
 describe('stop lists: the notice names what a later part also has or does not have', () => {
   it('T5: list [70] from 25 Nov: 2 Dec = [21, 70]; named per part', () => {

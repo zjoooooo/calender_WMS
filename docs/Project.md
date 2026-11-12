@@ -319,6 +319,7 @@ Edits to `days`, `sun`, `ph`, `start`, `end`, `name`, `note`, `code` and `color`
 **R20 OFFICE CONCURRENCY.**
 - Routes and tasks each carry a `rev`. Every write to the item or to its overrides bumps it, and every such write must send the rev it is based on.
 - A mismatch returns 409 `STALE_REVISION` {current}. The UI refetches and keeps the draft on screen.
+- An edit of a split route reaches its other records too (§6.5), and the office says before the save what each of them will keep. Such a save may also send `parts`: the records `[{id, rev}]` the screen showed that on. When one of them changed meanwhile, or a record was added or removed, the save returns 409 `STALE_REVISION` (field `parts`) {parts: the current list}, and the screen shows the notices again on the records as they are now.
 - Writes to customers, holidays, waste types, trucks and users are last-write-wins.
 
 ### Jobs, runs and drivers
@@ -895,7 +896,7 @@ for t in plan.tasks:
 - "Only this date" is pre-selected, except when the date inherits an empty list (a route just created, before its first customers): then "and all following" is pre-selected, so the first customers become the route's list on every date it runs.
 - On a route that was already split (§6.5), "and all following" also reaches its later records: the customers added, removed, moved or re-noted on D are applied to their lists too. A later record that already had its own changes (for example a customer added from 2 Dec) keeps them: a list equal to the one the clerk started from becomes the new list, any other list gets only the clerk's changes.
 - The dialog lists "Not changed: Mon 23 Nov, Fri 27 Nov (they have their own list)". `GET /api/routes/{id}` returns the overrides of every live record of a split route, so these dates are named whichever record the drawer was opened on.
-- Next to that list it names, before the save, every later record whose customers after an "and all following" save would differ from the list being saved (§6.5, "Said before the save"): "Already planned from Wed 2 Dec: that part keeps its own list. It also has Lim Trading and does not have Tan Hardware." A record that differs only in order is not named.
+- Next to that list, while "and all following" is selected, it names before the save every later record whose customers after that save would differ from the list being saved (§6.5, "Said before the save"). With "Only <D>" selected nothing is named, because that save does not reach them: "Already planned from Wed 2 Dec: that part keeps its own list. It also has Lim Trading and does not have Tan Hardware." A record that differs only in order is not named.
 - For today's container with a run, it adds the driver impact, computed client-side from the loaded payload. Example: "N1 (Ali, 3/8) will get 1 new stop".
 
 ### 6.3 Skip / restore / reset / delete
@@ -938,10 +939,11 @@ for t in plan.tasks:
   - **Delete route** deletes every live record. An ended record is history: an edit or delete of it stays on it. The Routes page offers no "Edit route" on an ended part of a route that still runs; over the API, moving such a part's end into a later part is refused (422 VALIDATION, field `end`), not reported as CODE_IN_USE against the route's own record.
   - API payloads carry `series` and the route's real period, `route_start` / `route_end` (the first record's start, the last record's end), next to the record's own `start` / `end`, so the drawer header, Edit route and the Routes page can show one route.
 - **Said before the save** (Round 6, option A). A later record that has its own planned change keeps it, and the clerk is told so before saving. Every screen that makes such an edit names, in English and Chinese, each other record whose result is not simply the clerk's version, and what it will be:
-  - **Edit route / schedule**, Apply from today or from date D (also reached from the Routes page, "Change schedule from date…"). The change starts from the opened record's schedule (from today) or from the schedule of the record that runs on D (from D), and reaches every other record (from today) or the records after D (from D). Each of them whose weekdays (or Sunday / PH) differ from the schedule the change starts from gets a notice that updates while the clerk ticks weekdays or picks the date: "Already planned: from Mon 21 Dec this route runs Tue Thu. That plan is kept; the weekdays you add or remove apply to it too, so from Mon 21 Dec it runs Tue Thu Sat." / "已有安排：12月21日起这条路线是 周二、周四。这个安排会保留；你加上或去掉的星期也会同样改到它上面，所以12月21日起是 周二、周四、周六。" When nothing the clerk changed reaches it, the notice only says that it is kept. A record that runs now is named "until Sun 20 Dec". A record that the new end removes is not named.
-  - With Apply from D, when D falls in another record than the opened one and that record has a schedule of its own, the form's schedule replaces it from D, and the notice says so: "Already planned: from Mon 21 Dec this route runs Tue Thu. From Mon 28 Dec it runs Mon Wed Fri instead, as set here."
-  - **Customer lists**: the scope dialog's "and all following" (§6.2) and the Routes page template editor (from today: every other record; from D: the records after D). Each record whose customers after the save differ from the list being saved is named with the customers it also has and the ones it does not have: "Already planned from Wed 2 Dec: that part keeps its own list. It also has Lim Trading and does not have Tan Hardware." Order differences are not named. When the template editor's D falls in another record than the opened one and that record has customers of its own, its list is replaced from D: "Already planned from Wed 2 Dec to Sun 20 Dec: that part has its own list. It also has Lim Trading. From Mon 7 Dec the list saved here replaces it."
-  - **Exact by construction.** `GET /api/routes/{id}` returns `parts`: the records an edit of this one reaches (the live records, sorted by start; only this one when it has ended), each with `start`, `end`, `days` / `sun`, `ph` and its template `stops`. `frontend/src/office/routeCarry.ts` mirrors `Plan::carry()` and `Plan::mergeStops()` one to one, and what PATCH, change-schedule and PUT … scope=following leave in the parts. Edit route / schedule runs that mirror on the writes the form would send (`planEdit`). The shared cases in `backend/tests/fixtures/split_carry_cases.json` (T2, E2, C2, T5, T6 and more) are run against the server (`plan_split_chain_test.php`) and against the mirror (`routeCarry.test.ts`), and the office e2e compares each notice with what the server stored. Customer names come from the customer list.
+  - **Edit route / schedule**, Apply from today or from date D (also reached from the Routes page, "Change schedule from date…"). The change starts from the opened record's schedule (from today) or from the schedule of the record that runs on D (from D), and reaches every other record (from today) or the records after D (from D). Each of them whose weekdays (or Sunday / PH) differ from the schedule the change starts from gets a notice that updates while the clerk ticks weekdays or picks the date: "Already planned: from Mon 21 Dec this route runs Tue Thu. That plan is kept; the weekdays you add or remove apply to it too, so from Mon 21 Dec it runs Tue Thu Sat." / "已有安排：12月21日起这条路线是 周二、周四。这个安排会保留；你加上或去掉的星期也会同样改到它上面，所以12月21日起是 周二、周四、周六。" When nothing the clerk changed reaches it, the notice only says that it is kept. A record that runs now is named "until Sun 20 Dec". A record that the new end removes is not named. While the form holds a change the server would refuse (no weekday ticked, neither Sunday nor PH, a date D that is not after today or not inside the route), no notice is shown: there is no result to name.
+  - With Apply from D, when D falls in another record than the opened one and that record has a schedule of its own, the form's schedule replaces it from D, and the notice says so: "Already planned: from Mon 21 Dec this route runs Tue Thu. From Mon 28 Dec it runs Mon Wed Fri instead, as set here." The records after it then get the change measured from that replaced schedule, not only the weekdays the clerk ticked, so their notice names that change instead of saying that the plan is kept: "Already planned: from Tue 22 Dec this route runs Tue Thu Sat. This change, Tue Thu to Mon Wed Fri Sat from Mon 7 Dec, applies to it too, so from Tue 22 Dec it runs Mon Wed Fri Sat." / "已有安排：12月22日起这条路线是 周二、周四、周六。这次的修改（从12月7日起由 周二、周四 改为 周一、周三、周五、周六）也会同样改到它上面，所以12月22日起是 周一、周三、周五、周六。"
+  - **Customer lists**: the scope dialog's "and all following" (§6.2) and the Routes page template editor (from today: every other record; from D: the records after D). Each record whose customers after the save differ from the list being saved is named with the customers it also has and the ones it does not have: "Already planned from Wed 2 Dec: that part keeps its own list. It also has Lim Trading and does not have Tan Hardware." Order differences are not named. When the template editor's D falls in another record than the opened one and that record has customers of its own, its list is replaced from D: "Already planned from Wed 2 Dec to Sun 20 Dec: that part has its own list. It also has Lim Trading. From Mon 7 Dec the list saved here replaces it." In the template editor the notices sit above Save in an area capped at about a quarter of the screen's height, which scrolls, so the stop list and Save stay on screen however many records are named.
+  - **Never stale.** The notices are computed on `parts`, and the save sends their `[{id, rev}]` (R20). When another clerk changed one of those records meanwhile (even with the opened record unchanged), the save is refused with `STALE_REVISION`, the screen loads the parts again and shows the notices as they are now, and the clerk saves again: what was on screen at the Save is what the server does.
+  - **Exact by construction.** `GET /api/routes/{id}` returns `parts`: the records an edit of this one reaches (the live records, sorted by start; only this one when it has ended), each with its `rev`, `start`, `end`, `days` / `sun`, `ph` and its template `stops`. `frontend/src/office/routeCarry.ts` mirrors `Plan::carry()` and `Plan::mergeStops()` one to one, and what PATCH, change-schedule and PUT … scope=following leave in the parts. Edit route / schedule runs that mirror on the writes the form would send (`planEdit`). The shared cases in `backend/tests/fixtures/split_carry_cases.json` (T2, E2, C2, T5, T6 and more) are run against the server (`plan_split_chain_test.php`) and against the mirror (`routeCarry.test.ts`), and the office e2e (`frontend/e2e/office.e2e.cjs`) makes each change through the screens (Edit route from today and from D, D on the first day of a record with its own schedule, the Routes page's "Change schedule from date…", the scope dialog, the template editor from today and from D, and each of Edit route, the scope dialog and the template editor with another record changed meanwhile) and compares each notice with what the server then stored, read back over the API. Customer names come from the customer list.
 
 ### 6.6 "+ Route" in a day cell (only `can_create`)
 - **Work day**: [Regular · repeats weekly] or [⚡ Adhoc · this date only].
@@ -1297,7 +1299,7 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
   - The End and Delete dialogs show their own error. It is cleared when a dialog opens or closes, and the drawer footer does not repeat it.
 - **Job taken back by the office**: when the office released or reassigned a job (`released_by_office`), the status detail (drawer, tooltips) reads "Needs driver · taken back by office · 3/10" / "待接手 · 办公室已收回 · 3/10", as "left by Bala" does after a driver leaves.
 - **Dialogs**:
-  - Scope: below "Not changed", one notice per later part whose customers after an "and all following" save differ from the list being saved (§6.2).
+  - Scope: below "Not changed", while "and all following" is selected, one notice per later part whose customers after that save differ from the list being saved (§6.2).
   - Copy to date
   - Edit route / schedule:
     - Start and End are the whole route's (the first part's start and the route's end), also when the form is opened from a later part of a split route. Only the fields the clerk changed are sent. A changed end goes to the part that runs on that date, and a changed start to the first part that still runs. Code, colour, name, note and weekdays go to the opened record, and the server carries them to the other parts. "From date D" goes to the part that runs on D.
@@ -1318,7 +1320,7 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
   - Its header shows the whole route's period.
   - For a part of a split route, the note names the other parts' dates. When the server links the parts (`series`), "Change the list from today" reaches every part: "The route's default list. It applies from today to every part of E2 (11 Nov – 19 Nov, from 20 Nov); …". Without it, the note says which dates keep their own list: "This list is used 11 Nov – 19 Nov; … E2 has a separate list on its other dates (from 20 Nov): this change does not reach them."
   - "From date D" goes to the part that runs on D.
-  - Before the save, below the Apply choice, one notice per other part whose customers after the save differ from the list being saved, naming the customers it also has and the ones it does not have (§6.5, "Said before the save").
+  - Before the save, below the Apply choice, one notice per other part whose customers after the save differ from the list being saved, naming the customers it also has and the ones it does not have (§6.5, "Said before the save"). The notices scroll in an area capped at about a quarter of the screen's height, so the stop list and Save stay on screen.
 - Actions: [Change schedule from date…], [End], [Delete]. On a split route they act on the whole route: [Delete] names every part it removes, and [End] goes to the part that runs on the chosen date.
 
 **Tasks page.**
@@ -1478,7 +1480,7 @@ GET    /api/routes?ended=0      -> [{"id","code","color","type","name","days"|"s
                                      "stop_count","next_date","route_next_date","today_status","rev"}]
        (one row per route record; the records of a split route share "series" and route_next_date is the route's next date)
 GET    /api/routes/{id}         -> Route + "overrides":[override dated >= today, of every live record of a split route] + "next_date","route_next_date"
-                                   + "parts":[{"id","start","end","days","sun","ph","stops"}]
+                                   + "parts":[{"id","rev","start","end","days","sun","ph","stops"}]
        (parts: the records an edit of this one reaches, sorted by start: the live records of a split route, or only
         this one when it has ended; null for a one-off. The office predicts from them what a later part keeps, §6.5)
 POST   /api/routes
@@ -1487,19 +1489,22 @@ POST   /api/routes
   {"type":"special","code":"S2","name":"PH run","date":"2026-12-25","stops":[…]}
   {"type":"adhoc","code":"A1","name":"Adhoc 12 Nov","note":"Call 11 Nov: overflow","date":"2026-11-12","stops":[…]}
   -> 201 Route (color auto-assigned when null) ; warning EMPTY_ROUTE
-PATCH  /api/routes/{id} {"rev":4,"code"?,"color"?,"name"?,"note"?,"days"?,"sun"?,"ph"?,"start"?,"end"?,"date"?,"stops"?,"release_run"?} -> Route
+PATCH  /api/routes/{id} {"rev":4,"code"?,"color"?,"name"?,"note"?,"days"?,"sun"?,"ph"?,"start"?,"end"?,"date"?,"stops"?,"parts"?,"release_run"?} -> Route
        (stops = the full template list. On a live record of a split route the edit reaches every live record, "end" is the
         route's end and "start" its first start (§6.5); the result is the record, or the record that now holds the end
         when the end deleted the opened one)
-POST   /api/routes/{id}/change-schedule {"rev":4,"from":"2026-12-01","days":[2,4],"end"?:null,"stops"?:[…]} -> {"ended":Route,"created":Route}
+POST   /api/routes/{id}/change-schedule {"rev":4,"from":"2026-12-01","days":[2,4],"end"?:null,"stops"?:[…],"parts"?:[…]} -> {"ended":Route,"created":Route}
        (schedule fields and stops are optional; the "following" save of R12 sends only stops. "from" may be in any live
         record of a split route; when it is a record's first day, "created" is that record with the new schedule and
         "ended" the record before it. "end" is the route's end, ignored when equal to the route's current end)
 DELETE /api/routes/{id}?rev=4[&release_run=1] -> 204   (a split route: every live record)
 PUT    /api/routes/{id}/dates/{date}
-       {"rev":4,"scope":"this"|"following","stops":[{"customer_id":40,"note":""}]?,"note":"use small truck"?,"cancelled":false?,"release_run":false?}
+       {"rev":4,"scope":"this"|"following","stops":[{"customer_id":40,"note":""}]?,"note":"use small truck"?,"cancelled":false?,"parts":[…]?,"release_run":false?}
        -> {"route":Route,"occurrence":RouteOccurrence}   (scope ignored for one-offs; cancelled only with scope "this";
           when "following" splits the route (R12/R14), "route" is the new route and "ended" carries the old one)
+       (PATCH, change-schedule and PUT …/dates/{date} take an optional "parts":[{"id":12,"rev":3},…]: the parts of
+        GET /api/routes/{id} that the office showed its notices on (§6.5). When they are not the live records with
+        those revs any more: 409 STALE_REVISION, field "parts", details {"parts":[{"id","rev"}…]} (R20))
 DELETE /api/routes/{id}/dates/{date}?rev=4 -> reset to route default (deletes the override)
 POST   /api/routes/{id}/dates/{date}/copy {"rev":4,"to":"2026-12-26","code":"N1-26","name":"…","skip_source":false,"release_run"?:false} -> 201 {"created":Route}
        (release_run only with skip_source = true and src = today, R26)
@@ -1708,8 +1713,12 @@ GET /api/files/{uuid}.{jpg|png} -> bytes (Cache-Control: private, max-age=315360
   config.local.php        git-ignored local overrides (data_dir, fake_now for demos on a .demo copy)
 /frontend
   index.html  package.json  vite.config.ts  tsconfig.json
+  vite.demo.ts                        the demo build's Vite plugin (§11.5): backend PHP + demo data -> one JSON asset
   src/main.tsx  src/App.tsx           routes: /login /, /routes, /tasks, /customers, /holidays, /settings, /users, /driver/*
-  src/api.ts                          the ONLY file that knows the backend JSON (types, fetch, token, error mapping)
+                                      (the demo build: only the office pages without Users, in the URL's #hash)
+  src/api.ts                          the ONLY file that knows the backend JSON (types, fetch, token, error mapping),
+                                      and the demo build's transport to the backend in the browser tab (§11.5)
+  src/env.d.ts                        __WMS_DEMO__: true only in the demo build
   src/i18n/  index.ts zh.ts en.ts
   src/ui/    tokens.css palette.ts Dialog.tsx Drawer.tsx Chip.tsx StatusGlyph.tsx photo.ts (resize; driver and office) uuid.ts (getRandomValues)
   src/office/ CalendarPage (TopBar, FilterBar, Legend, WeekView, MonthView, DayColumn, RouteRow, TaskRow,
@@ -1719,6 +1728,13 @@ GET /api/files/{uuid}.{jpg|png} -> bytes (Cache-Control: private, max-age=315360
               HolidaysPage, SettingsPage, UsersPage, LoginPage
   src/driver/ DriverApp, Login, Today, RoutePreview, TaskPreview, Run, ResultForm, LeaveSheet, Done, NotSent,
               outbox.ts, cache.ts, SignaturePad.tsx
+  src/demo/   the calendar demo build only (§11.5): DemoApp (loading screen, start, sign-in), DemoBar (banner,
+              reset), runtime.ts (php-wasm), storage.ts (IndexedDB copy), texts.ts (zh/en), demo.css, modules.d.ts
+  scripts/seed-demo.mjs               demo data through the API (routes, customers, tasks; --with-runs: today's runs)
+  scripts/demo-data.mjs               the demo's data, made by the real backend (php -S + seed-demo.mjs) -> demo-data/
+  e2e/        shell, office, driver and demo .e2e.cjs (Playwright, §13)
+  demo-data/  dist-demo/              git-ignored: the demo's data and its build (npm run demo:data, npm run build:demo)
+/.github/workflows/ci.yml  tests on every push and pull request; publishes the calendar demo to GitHub Pages (§11.5)
 /deploy                   production on the Linux VPS (§11.4)
   install.sh              one-shot, idempotent setup of a fresh Ubuntu 24.04 LTS server
   update.sh               backup, git pull, build the frontend beside the live one and swap it in, reload PHP-FPM
@@ -1728,7 +1744,8 @@ GET /api/files/{uuid}.{jpg|png} -> bytes (Cache-Control: private, max-age=315360
 start-backend.bat  start-frontend.bat  start.bat  build.bat      local development and trials on Windows (§11.3)
 .gitattributes            *.sh, deploy/* and *.php text eol=lf; *.bat text eol=crlf (the repo is edited on Windows
                           and cloned on Linux: a CRLF install.sh would fail with "bash\r: not found")
-README.md                 local dev, VPS install, update, backup and restore
+README.md                 local dev, tests (also on GitHub Actions), the calendar demo on GitHub Pages, VPS install,
+                          update, backup and restore
 ```
 
 ### 11.3 Run scripts (Windows .bat, local development and trials)
@@ -1926,6 +1943,49 @@ WantedBy=timers.target
 - Logs: `journalctl -u caddy` (requests, and PHP errors through `capture_stderr`), `journalctl -u php8.3-fpm` (the FPM master only), `systemctl status wms-backup`, and the audit log in `backend/data/audit/`.
 
 **Capacity.** Each request takes milliseconds under the flock. 25 phones polling every 30 s plus office PCs is under 2 requests per second, well within 1 vCPU. If load ever grows, the Store moves to SQLite or MySQL (§4.1) with no change to the deployment shape.
+
+### 11.5 Tests on GitHub Actions and the calendar demo on GitHub Pages
+Round 6: GitHub Actions tests every commit and publishes a demo of the office calendar to GitHub Pages. Nothing is deployed to a server; the production design of §11.4 stays for later.
+
+**Workflow** (`.github/workflows/ci.yml`; linted with actionlint, which also runs shellcheck on its scripts):
+
+| Job | Runs on | What it does |
+|---|---|---|
+| `backend` | every push (any branch), every pull request, a manual run, the weekly run | `run.php`, `api_smoke.php`, `race.php` and `backup_test.php` on PHP 8.3 with no shared extension but curl; `bash -n` and shellcheck of `deploy/*.sh` |
+| `frontend` | the same | `npm ci`, `tsc --noEmit`, vitest, the dev server's dependency scan from a cold cache (`vite optimize --force`, which fails when an import cannot be resolved), `npm run build`, and a check that the production build has no demo code |
+| `e2e` (shell, office, driver) | the same | the three Playwright suites (Chromium, installed in CI only; the driver suite with `PWA=1`). `WMS_FAKE_NOW=2026-11-11T10:00:00+08:00` pins the server clock (on a `.demo` data dir, R1), so the result does not depend on the day or the hour. The suites take their dates from the server, so they also pass on the real clock. A failed suite keeps its log and screenshots as an artifact. |
+| `demo` | the same | `npm run demo:data`, `npm run build:demo`, `e2e/demo.e2e.cjs`. It keeps `frontend/dist-demo` as the artifact `calendar-demo` for 14 days. |
+| `pages` | a push to `main`, a manual run on `main`, and every Monday at 01:17 UTC (09:17 in Singapore, so the demo's runs are recent); only after the four jobs above pass | `actions/configure-pages`, `actions/upload-pages-artifact`, `actions/deploy-pages`, with only `pages: write` and `id-token: write`, in the environment `github-pages`. It has its own concurrency group, and a running publish is never cancelled. When Pages is off, or not set to "GitHub Actions", the job ends green with a warning and the steps in its summary. |
+
+- A newer push to the same branch or pull request cancels the test jobs of the older run.
+- `${{ }}` values reach scripts only through `env:`.
+
+**The demo.** The user chose an editable demo with no sign-in, of the calendar part only, on the free GitHub Pages of a public repository (docs/requirements.md, Round 6).
+- **What visitors get.** The office app at `https://<owner>.github.io/<repository>/` (here `https://zjoooooo.github.io/calender_WMS/`).
+  - It signs in by itself as the demo admin and opens on the month view of the visitor's date.
+  - Everything on the calendar works and writes for real: routes and tasks, customers in a route (add, remove, drag, reorder), "this date" or "and all following", change schedule, copy, holidays and so on. Routes, Tasks, Customers, Holidays and Settings work too.
+  - Not in the demo: Users, change password, sign out and the driver app.
+  - A plain banner (zh/en) says it is a demo with sample data and that changes stay only in this browser. It holds the action **重置演示数据 / Reset demo data**.
+- **The real backend runs in the browser.** `vite build --mode demo` (`npm run build:demo`) writes `frontend/dist-demo/`:
+  - `__WMS_DEMO__` is true. `base` is `'./'`, and the routes are in the URL's `#hash` (HashRouter), so the demo runs from any sub-path on a host that knows nothing of the app's routes. There is no PWA plugin and no service worker.
+  - PHP 8.3 comes from WordPress Playground's php-wasm: the devDependencies `@php-wasm/universal` and `@php-wasm/web-8-3`, pinned at 3.1.54. Later releases require Node 24, and `frontend/.npmrc` sets `engine-strict` for Node 22. Only the PHP 8.3 package is used (`@php-wasm/web` would bundle every PHP version).
+  - The browser runs JSPI where it has it (Chrome, Edge), and Asyncify otherwise (Safari, Firefox). Neither needs SharedArrayBuffer, so a plain static host works, with no COOP/COEP headers. Tested in Chromium only, both builds (Asyncify with JSPI hidden); Safari and Firefox are untested.
+  - The first page is the normal app bundle and a loading screen (about 165 kB gzip). php-wasm's loader and its `.wasm` file (18 MB, about 7 MB gzip) load after it. The loading screen shows the size and the progress in zh/en, and an error screen has Retry.
+  - `vite.demo.ts` packs one JSON asset with the backend (`bootstrap.php`, `config.php`, `public/index.php`, `src/`, `seed/`) and the demo data. The data is made at build time by the real backend: `scripts/demo-data.mjs` runs `tools/init.php`, then `php -S` on a free port and `scripts/seed-demo.mjs --with-runs`, which adds today's runs, so statuses and REL totals show.
+  - At the start, `src/demo/runtime.ts` writes the PHP files and the data into php-wasm's in-memory filesystem (`/wms/backend`, `/wms/data`). A virtual `backend/config.local.php` (§11.2) sets `data_dir` and the visitor's time zone. No backend file changes.
+  - FileStore works there as on a server: flock, temp file + rename, `random_bytes`, `password_hash`. The backend's own tests pass under php-wasm (221 of 222; the one left needs `proc_open` to start a second PHP process).
+  - `src/api.ts` sends each API call to PHP's request handler instead of `fetch`, with the method, path and query, headers (with the token) and JSON body, and turns the answer back into a `Response`. The rest of the app does not change. Calls run one at a time, and none goes to the network.
+  - The 30 s calendar poll stays: a month request takes about 35 ms in the page.
+- **Today** is the visitor's date, in the visitor's time zone (the backend's own rollover, R1, still applies). The zone is the name the browser reports, also an older alias that PHP knows (Chrome reports `Asia/Calcutta`, `Europe/Kiev`); PHP checks it against `timezone_identifiers_list(DateTimeZone::ALL_WITH_BC)`. The data's days before the build day are frozen (R13). West of Singapore, in the first hours after a deploy, the visitor's date can still be before that, and the backend answers 503 `CLOCK_BEHIND_FREEZE`. The demo then uses Asia/Singapore for that visit.
+- **The visitor's copy of the data.**
+  - After every request of the visitor that changed the data folder, the whole folder (about 0.3 MB) is saved in the browser's IndexedDB (database `wms-demo`), so a reload keeps the edits. The demo's own writes at the start (the sign-in) are not saved: a visitor who only looked has no saved copy.
+  - Reset drops the saved copy and reloads the page, which starts again from the original data.
+  - The copy carries a version: a hash of the backend source and the demo data in the bundle. Every deploy makes new data, the weekly one too, so after a deploy an old copy is dropped, with a notice, and returning visitors get the recent runs.
+  - Several tabs: each tab runs its own backend on its own copy. Each save carries a new mark (`rev`), and a tab writes only while the stored copy is the one it started from or last saved itself (checked in the same IndexedDB transaction). When another tab saved or reset (also told at once over a BroadcastChannel), the tab stops saving, and its banner says so and offers "Reload this page". Nothing is overwritten silently.
+  - A saved copy that can no longer sign in is replaced by the original data, also with a notice.
+  - Where the browser blocks storage, the demo still works and says that changes are lost on reload.
+- **The normal build does not change.** With `__WMS_DEMO__` false it has none of this: BrowserRouter, the sign-in, the PWA. The `frontend` job checks the bundle.
+- **Tests.** `e2e/demo.e2e.cjs` serves `dist-demo` with a tiny static server (no special headers) under `/calender_WMS/` and under a random prefix. It covers: no sign-in, collapse and expand, the week view, a real edit round trip (a new route with two customers, a drag "and all following" that splits it, a removal, a delete), reload, Reset, a backend update, zh/en, no `/api` request, no console errors and the layout. It also runs a visitor west of Singapore, blocked storage, a browser without JSPI, two tabs, a browser that reports an older zone name, and the error screen when the demo's own code does not load; and it checks that opening the demo saves nothing. `src/api.php.test.ts` tests the transport's mapping, `src/demo/storage.test.ts` the saving with several tabs, and `src/demo/bundle.test.ts` the version.
 
 ---
 
