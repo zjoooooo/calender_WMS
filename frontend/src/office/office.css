@@ -9,7 +9,7 @@
 .menu button.danger { color: var(--danger); }
 .menu button:disabled { opacity: .45; cursor: not-allowed; background: transparent; }
 
-/* ---- top bar, filters, legend ------------------------------------------------------------------- */
+/* ---- top bar, filters, key ---------------------------------------------------------------------- */
 .cal-bar { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; }
 .cal-bar .search { width: 300px; }
 .cal-bar .range { font-family: var(--font-head); font-weight: 700; font-size: 16px; min-width: 0; }
@@ -23,9 +23,7 @@
 .cal-bar .expall { margin-left: auto; }
 .tchip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 4px 10px; font-size: 12.5px; display: inline-flex; gap: 6px; align-items: center; }
 .tchip[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
-.legend { display: flex; flex-wrap: wrap; gap: 6px; }
-.lchip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 3px 8px; font-size: 12px; overflow: hidden; max-width: 220px; }
-/* the route code sits on its progress colour (calendarModel routeTone); the legend's codes have none */
+/* the route code sits on its progress colour (calendarModel routeTone); a cancelled or paused one has none */
 .occ .code, .mline .code { border-radius: 4px; padding: 0 5px; flex: none; background: none; color: var(--fg); }
 [data-tone] > .code, .tonekey i { color: #fff; background: var(--st-idle); }
 [data-tone="early"] > .code, .tonekey [data-tone="early"] i { background: var(--st-early); }
@@ -35,10 +33,6 @@
 .tonekey { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); }
 .tonekey span { display: inline-flex; align-items: center; gap: 5px; }
 .tonekey i { width: 12px; height: 12px; border-radius: 3px; flex: none; }
-.lchip .code { font-size: 12px; }
-.lchip .ln { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
-.lchip.on { border-color: var(--fg); box-shadow: 0 0 0 1px var(--fg); }
-.lchip.adhoc { border-style: dashed; border-color: var(--warn); }
 .dim { opacity: var(--dim); }
 
 /* ---- week grid ---------------------------------------------------------------------------------- */

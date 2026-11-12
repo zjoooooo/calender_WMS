@@ -169,7 +169,7 @@ async function main() {
     const meta = await api(page, 'GET', '/meta');
     check(meta.me.role === 'admin' && meta.timezone === 'Asia/Singapore', 'signed in as the demo admin, in the visitor\'s time zone', [meta.me.role, meta.timezone]);
     const todayNum = page.locator(`.month .mcell[data-date="${meta.today}"] .dnum`);
-    check((await todayNum.evaluate((e) => getComputedStyle(e).backgroundColor)) === 'rgb(30, 90, 140)', `today (${meta.today}) has the blue circle`);
+    check((await todayNum.evaluate((e) => getComputedStyle(e).backgroundColor)) === 'rgb(11, 124, 171)', `today (${meta.today}) has the blue circle`);
     if (meta.today === builtToday) {
       const tot = page.locator(`.month .mcell[data-date="${meta.today}"] [data-testid=month-totals]`);
       check((await tot.count()) === 1 && /REL [\d,.]+ kg/.test(await tot.innerText()), "today's seeded runs: the cell shows REL totals", (await tot.count()) && (await tot.innerText()));

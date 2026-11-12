@@ -114,7 +114,7 @@ async function dragTo(page, from, to) {
   await page.waitForTimeout(400); // drop animation
 }
 
-const BLUE = 'rgb(30, 90, 140)'; // --cal-today (light theme, the default "jiangshan" look)
+const BLUE = 'rgb(11, 124, 171)'; // --cal-today (light theme, the default "jiangshan" look)
 const RED = 'rgb(184, 64, 45)'; // --cal-ph (light theme, the default "jiangshan" look)
 const noOverflow = (page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
 
@@ -154,7 +154,7 @@ async function monthChecks(page, { today, tomorrow, workDay, ph }) {
     if (o.run_status === 'active') return r && r.total > 0 && (r.collected + r.missed) * 2 >= r.total ? 'late' : 'early';
     return 'idle';
   };
-  const TONE_BG = { idle: 'rgb(107, 101, 88)', early: 'rgb(168, 100, 42)', late: 'rgb(31, 95, 139)', done: 'rgb(39, 121, 95)', problem: 'rgb(184, 64, 45)' };
+  const TONE_BG = { idle: 'rgb(95, 116, 128)', early: 'rgb(168, 100, 42)', late: 'rgb(11, 124, 171)', done: 'rgb(27, 127, 91)', problem: 'rgb(184, 64, 45)' };
   const todayOcc = mcal.routes.filter((o) => o.date === today && o.status === 'scheduled');
   const shown = [];
   for (const o of todayOcc) {
@@ -162,18 +162,18 @@ async function monthChecks(page, { today, tomorrow, workDay, ph }) {
   }
   check(shown.length >= 8 && shown.every(([, want, tone, bg]) => tone === want && bg === TONE_BG[want]), "the code's colour is the route's progress, the same for every route in that state", shown.filter(([, want, tone, bg]) => tone !== want || bg !== TONE_BG[want]));
   check(new Set(shown.map((x) => x[1])).size >= 2, 'today shows at least two different states', [...new Set(shown.map((x) => x[1]))]);
-  check((await page.locator('[data-testid=tone-key] span').count()) === 5 && (await page.locator('.legend .lchip .code').first().evaluate((e) => getComputedStyle(e).backgroundColor)) === 'rgba(0, 0, 0, 0)', 'a key explains the five colours; the legend codes have no colour');
+  check((await page.locator('[data-testid=tone-key] span').count()) === 5 && (await page.locator('.legend, .lchip').count()) === 0, 'a key explains the five colours; there is no list of route codes above the calendar');
   // Two looks, switched in the header and remembered in this browser.
   const bodyBg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   const look = page.locator('[data-testid=style-switch] button');
-  check((await bodyBg()) === 'rgb(239, 230, 208)' && (await look.first().getAttribute('aria-pressed')) === 'true', 'the default look is the Jiangshan palette (silk ground)', await bodyBg());
+  check((await bodyBg()) === 'rgb(242, 248, 250)' && (await look.first().getAttribute('aria-pressed')) === 'true', 'the default look is the Jiangshan palette (pale blue ground)', await bodyBg());
   await look.nth(1).click();
   check((await bodyBg()) === 'rgb(245, 246, 248)' && (await lineOf(shown[0][0]).locator('.code').evaluate((e) => getComputedStyle(e).backgroundColor)) !== shown[0][3], 'the second button switches to the plain look (also the progress colours)', await bodyBg());
   await page.reload();
   await page.locator(`.month .mcell[data-date="${today}"] .mline`).first().waitFor();
   check((await bodyBg()) === 'rgb(245, 246, 248)', 'the look is remembered after a reload');
   await page.locator('[data-testid=style-switch] button').first().click();
-  check((await bodyBg()) === 'rgb(239, 230, 208)', 'and switches back');
+  check((await bodyBg()) === 'rgb(242, 248, 250)', 'and switches back');
   await page.getByRole('button', { name: /^Expand all/ }).click().catch(() => {});
   check((await lineOf('N1').locator('.tt').count()) === 0, 'a regular route line has no R tag');
   const todayCal = mcal.days.find((d) => d.date === today);
@@ -957,7 +957,6 @@ async function main() {
     // OFF-8: in a 1440 px week every row keeps a readable part of its name (the status word moves to the tooltip).
     const nmW = await page.locator('.week .day .occ .nm').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().width)));
     check(nmW.length > 0 && Math.min(...nmW) >= 30, `week rows: every name keeps >= 30 px (min ${Math.min(...nmW)} px)`, nmW.slice(0, 12));
-    check((await page.locator('.legend .lchip').count()) >= 12, 'legend lists the route codes in range');
     if (nToday > 0) {
       const n1 = todayCol.locator('.occ[data-code="N1"]');
       check(/Ali/.test(await n1.innerText()), 'today N1 shows the driver status (✓ Ali …)', await n1.innerText());
@@ -967,17 +966,16 @@ async function main() {
     check((await adhocRow.count()) === 1 && /⚡A/.test(await adhocRow.innerText()), 'adhoc row has the ⚡A tag and the dashed class');
     await shot(page, '01-week');
 
-    // 2. Highlight from the legend dims everything else; clicking again clears it. Search by customer.
+    // 2. Highlight (click a code in a row) dims everything else; clicking again clears it. Search by customer.
     console.log('highlight and search');
-    await page.locator('.legend .lchip[data-code="E1"]').click();
+    await page.locator('.week .occ[data-code="E1"] button.code').first().click();
     const e1Rows = page.locator('.week .occ[data-code="E1"]');
     const dimE1 = await e1Rows.evaluateAll((els) => els.filter((e) => e.classList.contains('dim')).length);
     const others = page.locator('.week .occ:not([data-code="E1"])');
     const dimOthers = await others.evaluateAll((els) => els.every((e) => e.classList.contains('dim')));
     check((await e1Rows.count()) > 0 && dimE1 === 0 && dimOthers, 'highlight E1: E1 rows stay, every other row dims');
-    check(await page.locator('.legend .lchip.on[data-code="E1"]').count() === 1, 'the legend chip shows it is on');
     await shot(page, '02-highlight');
-    await page.locator('.legend .lchip[data-code="E1"]').click();
+    await page.locator('.week .occ[data-code="E1"] button.code').first().click();
     check((await page.locator('.week .occ.dim').count()) === 0, 'clicking the code again clears the highlight');
     await page.locator('.week .occ[data-code="W2"] button.code').first().click();
     check((await page.locator('.week .occ.dim').count()) > 0 && (await page.locator('.week .occ[data-code="W2"].dim').count()) === 0, 'clicking a code in a row highlights it');

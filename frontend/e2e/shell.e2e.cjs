@@ -264,7 +264,7 @@ async function main() {
     check((await page.locator('.month .mh').allInnerTexts()).join(' ') === '周日 周一 周二 周三 周四 周五 周六', 'calendar opens in the month view, 周日 first');
     check(/^\d{4}年\d{1,2}月$/.test((await page.locator('.cal-title').innerText()).trim()), 'month title "YYYY年M月"', await page.locator('.cal-title').innerText());
     const todayNum = page.locator('.month .dnum.today');
-    check((await todayNum.count()) === 1 && (await todayNum.evaluate((e) => getComputedStyle(e).backgroundColor)) === 'rgb(30, 90, 140)', "today's number has the blue circle");
+    check((await todayNum.count()) === 1 && (await todayNum.evaluate((e) => getComputedStyle(e).backgroundColor)) === 'rgb(11, 124, 171)', "today's number has the blue circle");
     await page.goto(BASE + '/?anchor=' + NEW_HOL);
     const phCell = page.locator(`.month .mcell[data-date="${NEW_HOL}"]`);
     await phCell.locator('.mph').waitFor();

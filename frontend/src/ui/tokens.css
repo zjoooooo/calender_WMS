@@ -44,40 +44,40 @@
   color-scheme: dark;
 }
 /* The "jiangshan" look (src/ui/style.ts): the palette of the Song blue-green landscape "A Thousand Li of
-   Rivers and Mountains": silk ground, ink text, azurite (石青) and malachite (石绿), ochre (赭石) and
-   cinnabar (朱砂) for warnings; headings in a Song typeface. Without data-style the neutral look above applies. */
+   Rivers and Mountains": the bright azurite blue (石青) of its peaks leads, on a pale blue-white ground, with
+   malachite green (石绿), ochre (赭石) and cinnabar (朱砂) for states and warnings; headings in a Song typeface. Without data-style the neutral look above applies. */
 :root[data-style="jiangshan"]:not([data-app="driver"]) {
-  --bg: #EFE6D0; --surface: #FAF4E4; --surface-2: #E6DBC0; --fg: #1F2A2E; --muted: #5E6459; --line: #CFC2A2;
-  --ink: #1E4E79; --ink-fg: #FAF4E4; --today: #1F6F5C; --rest: #F3E3D3; --ph: #B03A2E; --ok: #2A7A5E;
-  --warn: #9A5B1E; --danger: #A8321F; --dim: .18;
-  --warn-bg: #F3E0B8; --danger-bg: #F2D5C8; --ok-bg: #D5E8D8; --info-bg: #D3E3EC;
-  --cal-today: #1E5A8C; --cal-ph: #B8402D; --cal-ph-bg: #F2D9CC;
-  --shadow: 0 8px 24px rgba(60, 45, 20, .22);
-  --st-idle: #6B6558; --st-early: #A8642A; --st-late: #1F5F8B; --st-done: #27795F; --st-problem: #B8402D;
+  --bg: #F2F8FA; --surface: #FFFFFF; --surface-2: #E1EFF4; --fg: #12303F; --muted: #4F6B78; --line: #C5DCE5;
+  --ink: #0B7CAB; --ink-fg: #FFFFFF; --today: #0A7F8F; --rest: #FBEFEA; --ph: #B8402D; --ok: #1B7F5B;
+  --warn: #9A5B1E; --danger: #B03A26; --dim: .18;
+  --warn-bg: #FBEBC8; --danger-bg: #F8DAD2; --ok-bg: #D3EEE0; --info-bg: #D5ECF5;
+  --cal-today: #0B7CAB; --cal-ph: #B8402D; --cal-ph-bg: #F8DCD3;
+  --shadow: 0 8px 24px rgba(11, 60, 85, .2);
+  --st-idle: #5F7480; --st-early: #A8642A; --st-late: #0B7CAB; --st-done: #1B7F5B; --st-problem: #B8402D;
   --font-head: "Songti SC", "Noto Serif SC", "Source Han Serif SC", "STSong", "SimSun", Georgia, serif;
 }
 @media (prefers-color-scheme: dark) {
   :root[data-style="jiangshan"]:not([data-theme="light"]):not([data-app="driver"]) {
-    --bg: #0F1B24; --surface: #15252F; --surface-2: #1D323E; --fg: #EDE4CC; --muted: #A3A892; --line: #2C4450;
-    --ink: #EDE4CC; --ink-fg: #0F1B24; --today: #5FC2A0; --rest: #2A2018; --ph: #E8806C; --ok: #6CCB9F;
-    --warn: #E0A458; --danger: #EC8573; --dim: .2;
-    --warn-bg: #3A2B12; --danger-bg: #3D1C15; --ok-bg: #123024; --info-bg: #12303F;
-    --cal-today: #3F8CC4; --cal-ph: #EC8573; --cal-ph-bg: #3D1C15;
+    --bg: #0B1E2B; --surface: #102A3A; --surface-2: #173A4E; --fg: #E6F3F7; --muted: #9BB8C4; --line: #25495C;
+    --ink: #3DB8E0; --ink-fg: #06202C; --today: #4FD1C5; --rest: #2B1D1A; --ph: #F08A75; --ok: #5FD3A4;
+    --warn: #E8B45F; --danger: #F08A75; --dim: .2;
+    --warn-bg: #3A2B12; --danger-bg: #3D1C15; --ok-bg: #0F3326; --info-bg: #0F3447;
+    --cal-today: #1C93C4; --cal-ph: #F08A75; --cal-ph-bg: #3D1C15;
     --shadow: 0 8px 24px rgba(0, 0, 0, .5);
     color-scheme: dark;
   }
 }
 :root[data-style="jiangshan"][data-theme="dark"]:not([data-app="driver"]) {
-  --bg: #0F1B24; --surface: #15252F; --surface-2: #1D323E; --fg: #EDE4CC; --muted: #A3A892; --line: #2C4450;
-  --ink: #EDE4CC; --ink-fg: #0F1B24; --today: #5FC2A0; --rest: #2A2018; --ph: #E8806C; --ok: #6CCB9F;
-  --warn: #E0A458; --danger: #EC8573; --dim: .2;
-  --warn-bg: #3A2B12; --danger-bg: #3D1C15; --ok-bg: #123024; --info-bg: #12303F;
-  --cal-today: #3F8CC4; --cal-ph: #EC8573; --cal-ph-bg: #3D1C15;
+  --bg: #0B1E2B; --surface: #102A3A; --surface-2: #173A4E; --fg: #E6F3F7; --muted: #9BB8C4; --line: #25495C;
+  --ink: #3DB8E0; --ink-fg: #06202C; --today: #4FD1C5; --rest: #2B1D1A; --ph: #F08A75; --ok: #5FD3A4;
+  --warn: #E8B45F; --danger: #F08A75; --dim: .2;
+  --warn-bg: #3A2B12; --danger-bg: #3D1C15; --ok-bg: #0F3326; --info-bg: #0F3447;
+  --cal-today: #1C93C4; --cal-ph: #F08A75; --cal-ph-bg: #3D1C15;
   --shadow: 0 8px 24px rgba(0, 0, 0, .5);
   color-scheme: dark;
 }
 /* a thin ridge line in the painting's colours above the page */
-:root[data-style="jiangshan"]:not([data-app="driver"]) body { border-top: 3px solid; border-image: linear-gradient(90deg, #1F5F8B, #27795F 45%, #C9A45C 75%, #A8642A) 1; }
+:root[data-style="jiangshan"]:not([data-app="driver"]) body { border-top: 3px solid; border-image: linear-gradient(90deg, #0B7CAB, #1FA3B8 40%, #2FA38A 70%, #D9B45A) 1; }
 
 /* Driver theme (§9.1): high-contrast light, readable in sunlight. The driver app sets
    document.documentElement.dataset.app = 'driver'. */

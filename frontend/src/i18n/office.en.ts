@@ -183,7 +183,6 @@ const office: { [K in keyof typeof zh]: string } = {
   'cal.edited': 'Changed for this date',
   'cal.expandAll': 'Expand all',
   'cal.highlightCode': 'Highlight {code} (click again to clear)',
-  'cal.legend': 'Route codes: click to highlight',
   'cal.toneKey': 'What the code colours mean',
   'cal.tone.idle': 'Not started',
   'cal.tone.early': 'Under way (less than half)',
