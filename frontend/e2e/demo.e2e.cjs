@@ -421,9 +421,15 @@ async function main() {
     await boot(t2, BASE);
     const cust = (code) => ({ code, name: 'Tab test ' + code, address: '1 Tab Rd', phone: '', note: '', waste_types: ['REL'] });
     const has = async (p, code) => (await api(p, 'GET', '/customers?q=' + code)).some((c) => c.code === code);
+    // A tab that is not being typed in follows the other tab by itself: it loads the new data.
+    await Promise.all([t2.waitForEvent('load', { timeout: 20000 }), api(t1, 'POST', '/customers', cust('TAB0'))]);
+    await t2.locator('.month .mline').first().waitFor({ timeout: 60000 });
+    check((await has(t2, 'TAB0')) && (await saveState(t2)) === 'saved', 'tab 2 loads the change of tab 1 by itself (no click), and saves again');
+    // While the visitor types in tab 2 it does not reload: it is told, and keeps its hands off the saved copy.
+    await t2.locator('input[type=search]').focus();
     await api(t1, 'POST', '/customers', cust('TABA'));
     check(await saved(t1), 'tab 1: a change is saved');
-    check(await poll(async () => (await saveState(t2)) === 'otherTab'), 'tab 2 is told at once that the demo changed in another tab', await saveState(t2));
+    check(await poll(async () => (await saveState(t2)) === 'otherTab'), 'tab 2 (typing) is told at once that the demo changed in another tab', await saveState(t2));
     check(/changed in another tab/.test(await t2.locator('.demo-bar').innerText()) && (await t2.getByRole('button', { name: 'Reload this page' }).count()) === 1, 'tab 2: the banner says so, with "Reload this page"', await t2.locator('.demo-bar').innerText());
     await api(t2, 'POST', '/customers', cust('TABB'));
     await t2.waitForTimeout(300);
@@ -432,6 +438,7 @@ async function main() {
     await Promise.all([t2.waitForEvent('load'), t2.getByRole('button', { name: 'Reload this page' }).click()]);
     await t2.locator('.month .mline').first().waitFor({ timeout: 60000 });
     check((await has(t2, 'TABA')) && (await saveState(t2)) === 'saved', 'tab 2 after "Reload this page": the latest data, saving again');
+    await t2.locator('input[type=search]').focus();
     await t1.getByRole('button', { name: 'Reset demo data' }).click();
     await Promise.all([t1.waitForEvent('load'), t1.locator('.dialog').getByRole('button', { name: 'Reset demo data' }).click()]);
     await t1.locator('.month .mline').first().waitFor({ timeout: 60000 });

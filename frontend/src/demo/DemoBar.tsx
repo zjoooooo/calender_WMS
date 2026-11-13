@@ -40,6 +40,20 @@ export function DemoBar({ control }: { control: DemoControl }) {
     };
   }, [token, signIn, control]);
 
+  // Another tab changed the demo (the driver page saved a stop, the office page a route): this tab's own
+  // backend still has the old data. Load the new data by itself, so the two pages follow each other like
+  // the real app's two screens; wait while the visitor is typing or has a dialog or a stop form open (the
+  // notice and its button stay until then).
+  useEffect(() => {
+    if (save !== 'otherTab') return;
+    const busy = () =>
+      /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName ?? '') || !!document.querySelector('.dialog, [data-testid="result-form"]');
+    const go = () => !busy() && location.reload();
+    go();
+    const timer = setInterval(go, 1500);
+    return () => clearInterval(timer);
+  }, [save]);
+
   const t = (k: DemoKey) => demoText(lang, k);
   const notices =
     save === 'off' ? [...control.notices, 'notice.noStorage' as const]
