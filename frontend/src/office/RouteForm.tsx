@@ -28,6 +28,7 @@ import {
   createRoute,
   getRoute,
   isApiError,
+  listCustomers,
   listRoutes,
   patchRoute,
   suggestRouteCode,
@@ -44,7 +45,7 @@ import { useToast } from '../ui/Toast';
 import type { CreateKind } from './calendarContext';
 import { addDays } from './calendarModel';
 import { useGuardedWrite } from './officeShared';
-import { afterPatch, afterSplit, keptSchedules, keptScheduleText, partsRev } from './routeCarry';
+import { afterPatch, afterSplit, daysReset, keptSchedules, keptScheduleText, partsRev } from './routeCarry';
 import { useAllRoutes } from './routeChain';
 import { afterStep, mergeServer, planEdit, snapOf, type Field, type FormVals, type Snap } from './routeFormModel';
 
@@ -155,16 +156,26 @@ export function RouteForm(props: Props) {
 
   const first = useMemo(() => (type === 'regular' && !oneOff ? firstRun(start, days) : null), [type, oneOff, start, days]);
 
-  // The other parts of a split route with a schedule of their own, and what each runs after this save.
-  const kept = useMemo(() => {
+  // The route's parts as this save leaves them (null: not known, or the save is refused).
+  const after = useMemo(() => {
     const parts = route?.parts;
-    if (!route || !form.base?.linked || oneOff || !parts || parts.length < 2 || (apply === 'from' && !fromDate)) return [];
+    if (!route || !form.base || oneOff || !parts?.length || (apply === 'from' && !fromDate)) return null;
     let after: RoutePart[] | null = parts;
     for (const s of planEdit(vals, form.base, { type: route.type, oneOff, apply, fromDate })) {
       if (after) after = s.kind === 'patch' ? afterPatch(after, s.id, s.body) : afterSplit(after, s.body, today);
     }
-    return keptSchedules(parts, after, route.id, apply === 'from' ? fromDate : null);
+    return after;
   }, [route, form.base, oneOff, apply, fromDate, vals, today]);
+  // The other parts of a split route with a schedule of their own, and what each runs after this save.
+  const kept = useMemo(() => {
+    const parts = route?.parts;
+    if (!route || !form.base?.linked || oneOff || !parts || parts.length < 2 || (apply === 'from' && !fromDate)) return [];
+    return keptSchedules(parts, after, route.id, apply === 'from' ? fromDate : null);
+  }, [route, form.base, oneOff, apply, fromDate, after]);
+  // Customers whose own collection weekdays are no longer route days after this save: they will be collected
+  // on every day the route runs, and the clerk is told by name before saving.
+  const reset = useMemo(() => daysReset(route?.parts ?? [], after), [route, after]);
+  const custQ = useQuery({ queryKey: ['customers', { archived: 'all' }], queryFn: () => listCustomers({ archived: 'all' }), staleTime: 60_000, enabled: reset.length > 0 });
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -194,8 +205,11 @@ export function RouteForm(props: Props) {
     const steps = planEdit(vals, form.base, { type: route.type, oneOff, apply, fromDate });
     // The parts the notices above were computed on (the first write checks them; the later ones follow it).
     const parts = partsRev(route.parts);
+    const warned = new Set<string>();
     const done = () => {
-      toast(t('common.saved'));
+      // one toast is shown at a time: a warning takes the place of "Saved"
+      for (const c of warned) toast(t(`warn.${c}`), 'warn');
+      if (!warned.size) toast(t('common.saved'));
       props.onSaved?.();
       props.onClose();
     };
@@ -207,7 +221,9 @@ export function RouteForm(props: Props) {
         for (let i = progress.done; i < steps.length; i++) {
           const s = steps[i];
           const extra = { rev: progress.rev.get(s.id) ?? s.body.rev, ...(i === 0 && parts ? { parts } : {}), ...(rel ? { release_run: true } : {}) };
-          const rev = s.kind === 'patch' ? (await patchRoute(s.id, { ...s.body, ...extra })).data.rev : (await changeRouteSchedule(s.id, { ...s.body, ...extra })).data.ended.rev;
+          const res = s.kind === 'patch' ? await patchRoute(s.id, { ...s.body, ...extra }) : await changeRouteSchedule(s.id, { ...s.body, ...extra });
+          for (const x of res.warnings) warned.add(x.code);
+          const rev = 'ended' in res.data ? res.data.ended.rev : res.data.rev;
           progress.rev.set(s.id, rev);
           progress.done = i + 1;
           setForm((f) => (f.base ? { ...f, base: afterStep(f.base, f.vals, s, rev) } : f));
@@ -347,6 +363,11 @@ export function RouteForm(props: Props) {
                         {keptScheduleText(k, today, t, lang)}
                       </div>
                     ))}
+                    {reset.length > 0 && !custQ.isPending && (
+                      <div className="banner warn" data-testid="days-reset">
+                        {t('rf.daysReset', { names: reset.map((id) => custQ.data?.find((c) => c.id === id)?.name ?? `#${id}`).join(lang === 'zh' ? '、' : ', ') })}
+                      </div>
+                    )}
                   </div>
                 )}
               </>

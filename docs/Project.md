@@ -1,6 +1,6 @@
 # WMS Route Calendar: v1 Design
 
-- Version: v1 final, 2026-11-11, updated with the Round 4 decisions (Linux VPS hosting, night shifts with a 04:00 day rollover, drag-and-drop stop reordering) and the Round 7 decisions (2026-11-12: the waste types Recycling and EROSE, one waste type per route, free driver submissions instead of tasks). Today in every example is Wed 2026-11-11.
+- Version: v1 final, 2026-11-11, updated with the Round 4 decisions (Linux VPS hosting, night shifts with a 04:00 day rollover, drag-and-drop stop reordering) and the Round 7 decisions (2026-11-12: the waste types Recycling and EROSE, one waste type per route, free driver submissions instead of tasks) and the Round 8 decision (2026-11-13: a customer on a regular route may have its own collection weekdays). Today in every example is Wed 2026-11-11.
 - Audience: the developer who builds v1. Read this document instead of the earlier design files.
 - User decisions come from `requirements.md`. If this document disagrees with it, `requirements.md` wins.
 - §3 lists every rule with an ID (R1 to R36), and later sections refer to those IDs. Error codes are in CAPS, for example `PAST_DATE_LOCKED`.
@@ -51,10 +51,10 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
 | Route | A planned container of customers, ordered in visit order. It has a type (regular, special or adhoc), a **code** (for example `N1`), a colour, a name and **one waste type** (`waste_type`, R6a). |
 | Recurring route | A route with `start`/`end` plus weekdays (regular) or Sunday/PH flags (special). |
 | One-off route | A route with a single `date`: an adhoc on a work day, a special on a rest day, or a regular copy on a work day (made only by Copy to date, R15). |
-| Template | A recurring route's own stop list. It is the same list every day the route runs. |
+| Template | A recurring route's own standing stop list. On a regular route a stop may carry its own collection weekdays (`days`, R10); a stop without them is collected every day the route runs. |
 | Override | A per-date change to a recurring route (`cancelled`, `stops`, `note`). |
 | Occurrence | A route on one date, as computed for the calendar. |
-| Effective stops | The customer list of a route occurrence after the override has been applied and inactive customers and customers no longer registered with the route's waste type have been dropped (R8). |
+| Effective stops | The customer list of a route occurrence: the override's list, or else the template's stops due on that weekday, after inactive customers and customers no longer registered with the route's waste type have been dropped (R8). |
 | Submission | A driver's free record of one collection of ONE non-routable waste type at ONE customer: the weight, plus optional photos, signature, note, a weighbridge ticket when the type needs one, and the truck plate. It is not planned, not claimed and not part of any run (R17–R19). |
 | Job | A runnable occurrence of a route, with key `r<route_id>@<date>`. |
 | Run | The execution record of one job. It is created at the first claim, assign, office entry or office close-out, and holds the holder, the holds log and the visits. It is never deleted (R21). |
@@ -201,7 +201,7 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
 - Only `scheduled` occurrences can be run.
 
 **R8 EFFECTIVE STOPS** for (route, d):
-- `override(d).stops ?? route.stops`.
+- `override(d).stops ?? the template's stops due on weekday(d)`. A template stop is due on d when it has no `days`, or weekday(d) is one of them (R10). An override's list is used as it is.
 - Drop customers that are inactive or no longer registered with the route's waste type (R6a).
 - Array order is visit order, and `seq` is the position, counted from 1.
 
@@ -212,7 +212,7 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
   - `cancelled`;
   - `stops`: null means inherit from the template; otherwise a full list;
   - `note`.
-- After every write, an override is deleted when it is not cancelled, its note is empty, and its stops are null or equal to the template's effective list. The "edited" badge therefore never lies.
+- After every write, an override is deleted when it is not cancelled, its note is empty, and its stops are null or equal to the template's effective list for that date (the stops due on its weekday, R8). The "edited" badge therefore never lies.
 - Overrides on dates the route no longer generates are kept but ignored.
 - Overrides dated before today are purged on the next write.
 
@@ -220,6 +220,12 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
 - Every customer on a stop list must exist, be active (422 `CUSTOMER_INACTIVE`) and be registered with the route's waste type (422 `CUSTOMER_NOT_ROUTABLE` {customer_id, name, waste_type}).
 - A customer appears at most once in any stop list (422 `DUPLICATE_STOP`).
 - An empty list is legal and returns the warning `EMPTY_ROUTE`.
+- **Stop weekdays** (Round 8). A stop of a **regular recurring** route's template may carry `days`: the weekdays on which that customer is collected.
+  - `days` is a non-empty, de-duplicated, sorted subset of the record's own `days`. A weekday the record does not run returns 422 `WEEKDAY_NOT_ALLOWED` on the field `stops.N.days`.
+  - A stop without the key (`days: null` is read as absent) is collected on every day the route runs. The key is never written for such a stop, so a stop list stored before round 8 is not rewritten.
+  - The days are stored as sent. A stop pinned to every route day keeps its `days`: it does not follow a weekday added to the route later. Only the office's weekday control removes the key, when every route day is pressed.
+  - `days` exists nowhere else: not in an override's list, a one-off route, a special route, a frozen day, an occurrence or a run. Sent there, it returns 422 `VALIDATION` on `stops.N.days`. Those lists are explicit.
+  - A route date on which no stop is due still has its occurrence, with 0 stops. It cannot be taken (`NOT_RUNNABLE`) and the driver's Today list leaves it out.
 - The same customer may be on several routes on one date. The picker labels such a customer "also on N2".
 
 **R11 PAST LOCK (plan only).**
@@ -239,6 +245,14 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
 - **This date and following** makes the on-screen list the route's list from D onward:
   - If D is the first date ≥ today that the route generates, the template `stops` are replaced by the on-screen list.
   - Otherwise the save runs R14 with `from = D` and the on-screen list as the new route's `stops` (the schedule fields stay the same). The old route keeps its list until D − 1.
+  - When the route has stop weekdays (R10), the on-screen list is the list of D's weekday only, so the server builds the route's standing list from it before either step:
+    - a customer removed from the list that has no days of its own leaves the route;
+    - a removed customer with its own days loses only weekday(D), and leaves the route when that was its last day;
+    - a customer new to the route is added with no days (every route day);
+    - a customer that is on the route on other weekdays gains weekday(D);
+    - the route has one order: a reorder moves that day's customers in the places they hold in the standing list, and a customer that gains weekday(D) takes the place it was given, on its other days too.
+
+    For a route without stop weekdays this is exactly the on-screen list.
   - In both cases `override(D).stops` is cleared. The occurrence note is written to `override(D).note`, because it belongs to one date (R9 cleanup removes it when it is empty). `route.note` changes only through Edit route.
 - Later dates that have their own list are not changed, and the dialog names them.
 - One-off routes save directly, with no scope question.
@@ -246,7 +260,7 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
 **R13 DAY FREEZE.**
 - At the start of every request, under the lock, the server first checks that the clock has not gone back: if `plan.frozen_through` ≥ today (a server clock stepped back past a rollover, or a demo's `fake_now` was removed), the request returns 503 `CLOCK_BEHIND_FREEZE` {frozen_through, today} and writes nothing. A frozen day can never become today again.
 - It then checks whether `plan.frozen_through` < today − 1.
-- If so, it writes `days/<d>.json.plan` from the current plan for every d from `frozen_through + 1` to today − 1. The plan includes every route occurrence with its status (cancelled and holiday_skipped ones too).
+- If so, it writes `days/<d>.json.plan` from the current plan for every d from `frozen_through + 1` to today − 1. The plan includes every route occurrence with its status (cancelled and holiday_skipped ones too). Its stops are the date's effective stops (R8) as `{customer_id, note}`: a frozen day never holds stop weekdays.
 - It then sets `frozen_through = today − 1`.
 - Dates before today are rendered only from their frozen plan plus their runs. Today and later dates are computed live.
 - A date ends at its rollover (R1), not at midnight: Wed 11 Nov is frozen by the first request at or after Thu 12 Nov 04:00 (default H), never at 00:00.
@@ -260,11 +274,18 @@ Reports and CSV/Excel export (the first v2 item), billing, per-customer rules th
 
 Edits to `days`, `sun`, `ph`, `start`, `end`, `name`, `note`, `code` and `color` made without "from D" change the template at once, so they apply from today onward.
 
+**Stop weekdays when the route's weekdays change** (R10; an edit from today, a change from D without `stops`, and the weekday change carried into another part, §6.5):
+- A removed route weekday is taken from each stop's `days`. An added weekday reaches only the stops without `days`.
+- A stop left with no weekday loses the key: it is collected on every day the record runs. The write returns the warning `STOP_DAYS_RESET`, and the route form names those customers before the save (§6.5). The write is not refused, so "no Saturday from 1 Dec" can be saved without first changing a Saturday-only customer from today.
+- When this happens to a record that runs today, the customer joins today's run as a new pending stop, like a customer added today (R26).
+- Removing a route weekday and adding it back does not give a stop that day again.
+- `stops` sent with the request are checked against the new weekdays (R10) and not fitted.
+
 **R15 COPY TO DATE (routes)**: `POST /routes/{id}/dates/{src}/copy`.
 - **Source.** The source date may be any date. A past date is read from its frozen plan.
 - **Target.** The target T must be ≥ today.
 - **What is created.**
-  - Stops: the source's effective stops, minus customers that are now inactive or no longer registered with the route's waste type.
+  - Stops: the source's effective stops, minus customers that are now inactive or no longer registered with the route's waste type. They are the stops of the source date, so the copy has no stop weekdays.
   - Waste type: the source's (R6a).
   - Type: if class(T) = rest, `special` (a one-off). If class(T) = work, `adhoc` when the source is adhoc, otherwise `regular` (a one-off, R6). Adhoc stays reserved for emergencies (Urgent pickup, "+ Route ⚡ Adhoc").
   - Code suggested per R5, the source's colour, and the name `<name> (from <src as "Fri 25 Dec">)`.
@@ -403,7 +424,7 @@ The first claim wins. The client never shows a claim before the server has confi
 - With `release_run = true`, the write goes ahead only if every affected run has resolved = 0. Those runs are moved from `runs` to `dropped_runs` in the same day file (kept with their visit history, never displayed).
 - An affected run with no holder and resolved = 0 does not block; it is moved to `dropped_runs` without asking.
 - Apart from that, stop-list edits are always allowed.
-- In the same pass, whenever a plan, customer-detach or archive write drops a pending customer from a today occurrence that has a run, the customer_id is appended to `run.removed`. A late driver collection for that customer is then still accepted (R28 `OFF_PLAN`).
+- In the same pass, whenever a plan, customer-detach or archive write drops a pending customer from a today occurrence that has a run, the customer_id is appended to `run.removed`. A late driver collection for that customer is then still accepted (R28 `OFF_PLAN`). Taking today's weekday from a stop (R10) drops it from today's occurrence in the same way: a pending stop goes to `run.removed`, a visited one stays counted as an off-plan visit. A stop that gains today's weekday is a new pending stop.
 
 ### Visits (results)
 
@@ -428,7 +449,7 @@ The first claim wins. The client never shows a claim before the server has confi
 
 **R28 DRIVER RESULT WRITES.**
 - The driver must appear in `run.holds` (otherwise 409 `NOT_HOLDER`).
-- The customer must belong to the job (otherwise 422 `NOT_ON_JOB`): a customer on the effective stop list, or one that is not on it but is in `run.removed` or already has a visit in this run. Such a write is accepted with the flag `OFF_PLAN`, so a real collection is never refused because the office removed the stop after the driver loaded it. Drivers cannot add other customers on site (requirements: call the office). Office writes are not limited by this rule (R29); they may record any customer registered with the route's waste type as `OFF_PLAN`.
+- The customer must belong to the job (otherwise 422 `NOT_ON_JOB`): a customer on the effective stop list, or one that is not on it but is in `run.removed` or already has a visit in this run. Such a write is accepted with the flag `OFF_PLAN`, so a real collection is never refused because the office removed the stop after the driver loaded it. Drivers cannot add other customers on site (requirements: call the office). Office writes are not limited by this rule (R29); they may record any customer registered with the route's waste type as `OFF_PLAN`. A customer of the route that is not due on the job's weekday (R10) is not on the job: a driver result returns `NOT_ON_JOB`, and the office can record it as `OFF_PLAN`.
 - A **first** result for a pending stop is accepted at any time. Changing an existing visit (correction or undo) must happen before the **edit deadline** = `day_end(run date)` + `driver_edit_grace_hours` (config, 8 h), i.e. the run's rollover plus 8 hours: 12:00 on run date + 1 with the default 04:00 rollover (otherwise 422 `EDIT_WINDOW_CLOSED`). The driver UI offers corrections only on today's (op_date) jobs; this server window only lets corrections queued before the rollover still arrive.
 - The stop must be pending, or its visit must have been written last by this driver (otherwise 409 `VISIT_CHANGED` {visit}).
 - **`LATE`.** The write's effective time is `t = captured_at` when `hold.from ≤ captured_at ≤ received_at`, where `hold.from` is the start of this writer's latest hold on the run (server clock); otherwise `t = received_at`. A writer who is not `run.driver_id` (the holder, or for a past run its last holder), or whose `t` ≥ `day_end(run date)`, adds the flag `LATE`.
@@ -600,7 +621,7 @@ backend/data/                  (git-ignored. On the VPS: /opt/wms/backend/data, 
     { "id": 7, "code": "S1", "color": 5, "type": "special", "waste_type": "REL", "name": "Sunday Market", "note": "", "rev": 1,
       "start": "2026-11-15", "end": null, "sun": true, "ph": true, "stops": [ { "customer_id": 21, "note": "" } ] },
     { "id": 9, "code": "R1", "color": 6, "type": "regular", "waste_type": "RECYCLING", "name": "Recycling · North", "note": "", "rev": 1,
-      "start": "2026-11-02", "end": null, "days": [1, 3, 5], "stops": [ { "customer_id": 40, "note": "" } ] },
+      "start": "2026-11-02", "end": null, "days": [1, 3, 5], "stops": [ { "customer_id": 40, "note": "", "days": [1, 5] } ] },
     { "id": 41, "code": "A1", "color": 2, "type": "adhoc", "waste_type": "REL", "name": "Adhoc 12 Nov", "note": "Call 11 Nov 09:10 (Mr Tan): overflow",
       "rev": 1, "date": "2026-11-12", "copied_from": null, "stops": [ { "customer_id": 12, "note": "" } ] },
     { "id": 42, "code": "N1-25", "color": 1, "type": "special", "waste_type": "REL", "name": "North 1 · Woodlands (from Fri 25 Dec)", "note": "",
@@ -616,7 +637,7 @@ Field notes:
 - **Settings.** `rollover_hour` (0–6, default 4) is the day rollover for night shifts (R1). Only an admin changes it, on the Settings page.
 - **Routes.**
   - A route that has `date` is a one-off. Any other route is recurring.
-  - In `stops`, array order is visit order. A stop is `{customer_id, note}`.
+  - In `stops`, array order is visit order. A stop is `{customer_id, note}`. In the template of a regular recurring route a stop may also have `days` (last key): its collection weekdays, a non-empty sorted subset of the record's `days` (R10). No key means every day the route runs. In the example, R1 collects customer 40 on Mondays and Fridays only.
   - `copied_from` (on a one-off route) links it to the occurrence it was copied from (R15). The name `from` is used only by the change-schedule body.
 - **Overrides.** `stops: null` means inherit from the template.
 - **Route waste type.** Every route created from round 7 on stores `waste_type`. A record stored before has none: it reads as `REL` and is never given the field (R6a).
@@ -813,8 +834,11 @@ for r in plan.routes:
 for each emitted recurring occurrence with an override on d:
   if override.cancelled and status == 'scheduled': status = 'cancelled'
   note = override.note ; edited = true
-stops = effectiveStops(r, d)       # R8: override.stops ?? route.stops, minus inactive customers and customers without the route's waste type
+stops = effectiveStops(r, d)       # R8: override.stops ?? the template's stops due on dow (no days, or dow in stop.days),
+                                   #     minus inactive customers and customers without the route's waste type
 ```
+- A date on which no template stop is due still has its occurrence, with 0 stops. `next_date` can point at such a date.
+- Search finds a customer on a route only on the dates it is due.
 
 ### 5.3 Nothing is generated for the other waste types
 Nothing is generated for OTC, COMPACTOR and EROSE: no occurrence, no job and no line on the calendar. A submission exists only once a driver has made it (R17). The calendar reads a day's submissions only for that day's totals (§5.9).
@@ -880,6 +904,7 @@ A submission can be made on any day (R17).
   - Visited rows (today with a run) can be reordered too; they keep their result. Nothing is saved until [Save]. The same `StopList` component is used by the Routes page template editor.
   - OTC, COMPACTOR and EROSE never appear inside a route container (user rule). The header shows the route's waste-type tag (`REL` / `RCY`) next to the type tag. The same holds for route search hits and the driver's S2, S3 and S4 stop cards.
   - Footer: [Save] [Cancel] and a menu.
+  - The drawer shows the list of one date. It has no weekday label and no weekday control: a customer's collection weekdays (R10) are set in the Routes page template editor (§9.2), and the scope dialog says what a save does to them (§6.2). An empty list reads "No customers on this date."
 - **Edits** go into a local draft keyed by the occurrence key:
   - add customer;
   - remove (✕);
@@ -904,7 +929,8 @@ A submission can be made on any day (R17).
 ### 6.2 Scope dialog (recurring routes)
 - (•) **Only Wed 18 Nov**: writes `override.stops` and note.
 - ( ) **Wed 18 Nov and all following**: per R12, a template replace (when 18 Nov is the next date the route runs) or a split from 18 Nov (R14, same code, so the calendar looks the same).
-- "Only this date" is pre-selected, except when the date inherits an empty list (a route just created, before its first customers): then "and all following" is pre-selected, so the first customers become the route's list on every date it runs.
+- "Only this date" is pre-selected, except when the date inherits an empty list and the route's standing list is empty too (a route just created, before its first customers): then "and all following" is pre-selected, so the first customers become the route's list on every date it runs. A date that is empty only because no customer is due that weekday (R10) keeps "Only this date"; so does the dialog while the route is still loading.
+- While "and all following" is selected on a route with stop weekdays, the dialog has one line per customer whose weekdays the save changes (R12): "ABC Restaurant: Mon, now also Wed" for a saved customer that is on the route on other weekdays, and "Sunday Market Stall: no longer on Wed, still Fri" for a customer due on this weekday, with other days, that is not in the saved list (also when the date's own list already lacked it).
 - On a route that was already split (§6.5), "and all following" also reaches its later records: the customers added, removed, moved or re-noted on D are applied to their lists too. A later record that already had its own changes (for example a customer added from 2 Dec) keeps them: a list equal to the one the clerk started from becomes the new list, any other list gets only the clerk's changes.
 - The dialog lists "Not changed: Mon 23 Nov, Fri 27 Nov (they have their own list)". `GET /api/routes/{id}` returns the overrides of every live record of a split route, so these dates are named whichever record the drawer was opened on.
 - Next to that list, while "and all following" is selected, it names before the save every later record whose customers after that save would differ from the list being saved (§6.5, "Said before the save"). With "Only <D>" selected nothing is named, because that save does not reach them: "Already planned from Wed 2 Dec: that part keeps its own list. It also has Lim Trading and does not have Tan Hardware." A record that differs only in order is not named.
@@ -946,6 +972,8 @@ A submission can be made on any day (R17).
 - "Delete route" removes the route and its overrides. Past days are unaffected, because they are frozen. R26 applies.
 - **Split routes are one route.** A "following" save (R12) or a schedule change (R14) ends the route record at D − 1 and continues it as a new record from D. The new record gets the same `series` as the old one (the id of the route's first record); a route created with `POST /api/routes` starts its own series, so a new route that reuses the code of an ended route is never part of it. A record stored without `series` (before it existed, or written by the seed) is its own route: membership is never guessed from code and dates, because "End route" followed by a new route with the same code looks exactly like a split. Such a record gets `series` (its own id) at its next split. One rule then holds for every operation on a record that runs today or later: **it applies to the whole live route from its date on**, whichever record the clerk opened (a drawer date, a Routes row):
   - **Edit route from today** (code, colour, name, note, weekdays or Sunday/PH, the template's stop list) changes every live record. Weekdays and customers added or removed are added to or removed from each record, so a planned schedule change (Tue/Thu from 21 Dec) or a customer planned from a later date is kept. A record left with no weekday takes the new ones.
+  - **Stop weekdays** (R10) follow the same rule as a stop note. A change of a customer's weekdays reaches another record only when that record's stop still has the old weekdays (the ones that record runs: Mon Fri is held as Mon by a record on Mon Wed), and only with the weekdays that record runs. When none of the new days is a day of that record, its stop is left as it is, with one exception: a stop that only lost weekdays (as "this date and following" does to a customer removed from the date, R12) and has none left that the record runs leaves that record, and the notice of that record names the customer. A stop whose old days name no weekday of a record is left as it is there. A customer new to a record whose days name no day of that record is added with no days. In every record, a stop's days are kept inside the record's weekdays after the edit (R14: a stop left with none runs every day, warning `STOP_DAYS_RESET`).
+  - **Reset notice.** Edit route / schedule shows, before the save and next to the kept-plan notices, which customers a weekday change resets: "These customers' collection weekdays are no longer route days. They will be collected on every day the route runs: Golden Bakery". It is computed on `parts` by the same mirror, for a route with one record too. After the save the returned warning is shown as a toast.
   - **End route from D** (`end = D − 1`, or an end typed in Edit route) ends the route: the record that runs on D − 1 gets the end, and the later records, which have not started yet, are deleted with their overrides. A cleared end (no end) is removed from the last record. A start typed in Edit route is the route's first start (a form that resends the route's real start changes nothing).
   - **Change schedule from D** splits the record that runs on D, which may be a later one than the record opened; when D is the first day of a later record, that record takes the new schedule (nothing to split). The later records get the same weekday and stop-list changes. The `end` of the request is the route's end; an `end` equal to the route's current end is no change. The form sends `end` only when the clerk changed it, so an end that equals a split boundary is applied.
   - **Delete route** deletes every live record. An ended record is history: an edit or delete of it stays on it. The Routes page offers no "Edit route" on an ended part of a route that still runs; over the API, moving such a part's end into a later part is refused (422 VALIDATION, field `end`), not reported as CODE_IN_USE against the route's own record.
@@ -955,7 +983,7 @@ A submission can be made on any day (R17).
   - With Apply from D, when D falls in another record than the opened one and that record has a schedule of its own, the form's schedule replaces it from D, and the notice says so: "Already planned: from Mon 21 Dec this route runs Tue Thu. From Mon 28 Dec it runs Mon Wed Fri instead, as set here." The records after it then get the change measured from that replaced schedule, not only the weekdays the clerk ticked, so their notice names that change instead of saying that the plan is kept: "Already planned: from Tue 22 Dec this route runs Tue Thu Sat. This change, Tue Thu to Mon Wed Fri Sat from Mon 7 Dec, applies to it too, so from Tue 22 Dec it runs Mon Wed Fri Sat." / "已有安排：12月22日起这条路线是 周二、周四、周六。这次的修改（从12月7日起由 周二、周四 改为 周一、周三、周五、周六）也会同样改到它上面，所以12月22日起是 周一、周三、周五、周六。"
   - **Customer lists**: the scope dialog's "and all following" (§6.2) and the Routes page template editor (from today: every other record; from D: the records after D). Each record whose customers after the save differ from the list being saved is named with the customers it also has and the ones it does not have: "Already planned from Wed 2 Dec: that part keeps its own list. It also has Lim Trading and does not have Tan Hardware." Order differences are not named. When the template editor's D falls in another record than the opened one and that record has customers of its own, its list is replaced from D: "Already planned from Wed 2 Dec to Sun 20 Dec: that part has its own list. It also has Lim Trading. From Mon 7 Dec the list saved here replaces it." In the template editor the notices sit above Save in an area capped at about a quarter of the screen's height, which scrolls, so the stop list and Save stay on screen however many records are named.
   - **Never stale.** The notices are computed on `parts`, and the save sends their `[{id, rev}]` (R20). When another clerk changed one of those records meanwhile (even with the opened record unchanged), the save is refused with `STALE_REVISION`, the screen loads the parts again and shows the notices as they are now, and the clerk saves again: what was on screen at the Save is what the server does.
-  - **Exact by construction.** `GET /api/routes/{id}` returns `parts`: the records an edit of this one reaches (the live records, sorted by start; only this one when it has ended), each with its `rev`, `start`, `end`, `days` / `sun`, `ph` and its template `stops`. `frontend/src/office/routeCarry.ts` mirrors `Plan::carry()` and `Plan::mergeStops()` one to one, and what PATCH, change-schedule and PUT … scope=following leave in the parts. Edit route / schedule runs that mirror on the writes the form would send (`planEdit`). The shared cases in `backend/tests/fixtures/split_carry_cases.json` (T2, E2, C2, T5, T6 and more) are run against the server (`plan_split_chain_test.php`) and against the mirror (`routeCarry.test.ts`), and the office e2e (`frontend/e2e/office.e2e.cjs`) makes each change through the screens (Edit route from today and from D, D on the first day of a record with its own schedule, the Routes page's "Change schedule from date…", the scope dialog, the template editor from today and from D, and each of Edit route, the scope dialog and the template editor with another record changed meanwhile) and compares each notice with what the server then stored, read back over the API. Customer names come from the customer list.
+  - **Exact by construction.** `GET /api/routes/{id}` returns `parts`: the records an edit of this one reaches (the live records, sorted by start; only this one when it has ended), each with its `rev`, `start`, `end`, `days` / `sun`, `ph` and its template `stops` (with each stop's `days`, R10). `frontend/src/office/routeCarry.ts` mirrors `Plan::carry()`, `Plan::mergeStops()`, `Plan::fitStops()` and `Plan::standingFromDay()` one to one, and what PATCH, change-schedule and PUT … scope=following leave in the parts. Edit route / schedule runs that mirror on the writes the form would send (`planEdit`). The shared cases in `backend/tests/fixtures/split_carry_cases.json` (T2, E2, C2, T5, T6 and more) are run against the server (`plan_split_chain_test.php`) and against the mirror (`routeCarry.test.ts`), and the office e2e (`frontend/e2e/office.e2e.cjs`) makes each change through the screens (Edit route from today and from D, D on the first day of a record with its own schedule, the Routes page's "Change schedule from date…", the scope dialog, the template editor from today and from D, and each of Edit route, the scope dialog and the template editor with another record changed meanwhile) and compares each notice with what the server then stored, read back over the API. Customer names come from the customer list.
 
 ### 6.6 "+ Route" in a day cell (only `can_create`)
 - **Work day**: [Regular · repeats weekly] or [⚡ Adhoc · this date only].
@@ -1329,10 +1357,11 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
   - Assign driver
 
 **Routes page.**
-- A table with these columns: colour, code, type, name, schedule, start/end, stops, next date and today's status. A filter shows ended routes.
+- A table with these columns: colour, code, type, name, schedule, start/end, stops, next date and today's status. A filter shows ended routes. "Stops" is the size of the standing list (the customers on the route), not the stops of one date.
 - A split route (R12 / R14) has one row per part. Its rows stay together (joined by a dashed line), and each one is tagged "part 1 of 2", "part 2 of 2" (tooltip: "E2 is one route, split by a schedule change on Fri 20 Nov: edit, end and delete apply to the whole route.").
 - The template editor: an ordered stop list (customer and stop note; routable type tags only), reordered by drag and drop, ↑ ↓ or move to # (the same `StopList` as the route drawer, §6.1). A change from a later date goes through [Change schedule from date…].
   - Its header shows the whole route's period.
+  - **Collection weekdays** (regular recurring routes only, R10). Each row has a "Collection weekdays" button that opens one chip per route weekday; a pressed chip is a day the customer is collected, and the last pressed chip cannot be released. With every chip pressed the stop has no weekdays of its own again. A stop with its own weekdays shows them as a small label ("Mon Wed"). When at least one stop has weekdays, the header shows the number of customers per route weekday ("Mon 12 · Tue 9 · …"), so a route day with nobody due is visible as "Tue 0". The note under the title reads: "The route's default list. A customer with its own collection weekdays is collected only on those days. It applies from today; dates with their own list keep it."
   - For a part of a split route, the note names the other parts' dates. When the server links the parts (`series`), "Change the list from today" reaches every part: "The route's default list. It applies from today to every part of E2 (11 Nov – 19 Nov, from 20 Nov); …". Without it, the note says which dates keep their own list: "This list is used 11 Nov – 19 Nov; … E2 has a separate list on its other dates (from 20 Nov): this change does not reach them."
   - "From date D" goes to the part that runs on D.
   - Before the save, below the Apply choice, one notice per other part whose customers after the save differ from the list being saved, naming the customers it also has and the ones it does not have (§6.5, "Said before the save"). The notices scroll in an area capped at about a quarter of the screen's height, so the stop list and Save stay on screen.
@@ -1492,33 +1521,44 @@ GET /api/calendar?view=week|month&anchor=2026-11-11[&week_start=mon|sun] ->
 ```
 GET    /api/routes?ended=0      -> [{"id","code","color","type","waste_type","name","days"|"sun","ph"|"date","start","end","series","route_start","route_end",
                                      "stop_count","next_date","route_next_date","today_status","rev"}]
-       (one row per route record; the records of a split route share "series" and route_next_date is the route's next date)
+       (one row per route record; the records of a split route share "series" and route_next_date is the route's next date;
+        stop_count is the size of the standing list, whatever the stops' weekdays)
 GET    /api/routes/{id}         -> Route + "overrides":[override dated >= today, of every live record of a split route] + "next_date","route_next_date"
                                    + "parts":[{"id","rev","start","end","days","sun","ph","stops"}]
        (parts: the records an edit of this one reaches, sorted by start: the live records of a split route, or only
         this one when it has ended; null for a one-off. The office predicts from them what a later part keeps, §6.5)
+       (a stop in "stops" and in parts[].stops is {"customer_id","note"}, plus "days":[1,5] when the stop has its own
+        collection weekdays, R10; the key is absent otherwise)
 POST   /api/routes
   {"type":"regular","waste_type":"REL","code":"N1","color":null,"name":"North 1","note":"","start":"2026-11-16","end":null,"days":[1,3,5],"stops":[{"customer_id":12,"note":"3 bins"}]}
   {"type":"special","waste_type":"REL","code":"S1","name":"Sunday Market","start":"2026-11-15","sun":true,"ph":true,"stops":[…]}
   {"type":"special","waste_type":"RECYCLING","code":"S2","name":"PH run","date":"2026-12-25","stops":[…]}
   {"type":"adhoc","waste_type":"REL","code":"A1","name":"Adhoc 12 Nov","note":"Call 11 Nov: overflow","date":"2026-11-12","stops":[…]}
+  {"type":"regular",…,"days":[1,3,5],"stops":[{"customer_id":12,"note":"3 bins","days":[1,5]},{"customer_id":40,"note":""}]}
   -> 201 Route (color auto-assigned when null) ; warning EMPTY_ROUTE
-     | 422 VALIDATION (waste_type missing) | TYPE_NOT_ROUTABLE | CUSTOMER_NOT_ROUTABLE {"customer_id","name","waste_type"}
+     | 422 VALIDATION (waste_type missing; stops.N.days on a special or one-off route) | TYPE_NOT_ROUTABLE
+     | CUSTOMER_NOT_ROUTABLE {"customer_id","name","waste_type"} | WEEKDAY_NOT_ALLOWED (stops.N.days not among "days")
        (waste_type: the one type the route collects, an active routable type; it never changes, R6a)
 PATCH  /api/routes/{id} {"rev":4,"code"?,"color"?,"name"?,"note"?,"days"?,"sun"?,"ph"?,"start"?,"end"?,"date"?,"stops"?,"parts"?,"release_run"?} -> Route
        (stops = the full template list. On a live record of a split route the edit reaches every live record, "end" is the
         route's end and "start" its first start (§6.5); the result is the record, or the record that now holds the end
         when the end deleted the opened one)
         A resent "type" or "waste_type" must be unchanged: 422 TYPE_IMMUTABLE.
+        A stop's "days" must be among the record's days after this edit (422 WEEKDAY_NOT_ALLOWED, stops.N.days). "days"
+        sent without "stops" keeps each stop's days inside the new weekdays; a stop left with none runs every day:
+        warning STOP_DAYS_RESET (R14).
 POST   /api/routes/{id}/change-schedule {"rev":4,"from":"2026-12-01","days":[2,4],"end"?:null,"stops"?:[…],"parts"?:[…]} -> {"ended":Route,"created":Route}
        (schedule fields and stops are optional; the "following" save of R12 sends only stops. "from" may be in any live
         record of a split route; when it is a record's first day, "created" is that record with the new schedule and
-        "ended" the record before it. "end" is the route's end, ignored when equal to the route's current end)
+        "ended" the record before it. "end" is the route's end, ignored when equal to the route's current end.
+        Stop "days" as for PATCH: sent stops are checked against the new weekdays, kept stops are fitted; warning STOP_DAYS_RESET)
 DELETE /api/routes/{id}?rev=4[&release_run=1] -> 204   (a split route: every live record)
 PUT    /api/routes/{id}/dates/{date}
        {"rev":4,"scope":"this"|"following","stops":[{"customer_id":40,"note":""}]?,"note":"use small truck"?,"cancelled":false?,"parts":[…]?,"release_run":false?}
        -> {"route":Route,"occurrence":RouteOccurrence}   (scope ignored for one-offs; cancelled only with scope "this";
           when "following" splits the route (R12/R14), "route" is the new route and "ended" carries the old one)
+       ("stops" is the list of that date and never has "days": 422 VALIDATION on stops.N.days. With "following" on a route
+        that has stop weekdays the server merges it into the standing list, R12)
        (PATCH, change-schedule and PUT …/dates/{date} take an optional "parts":[{"id":12,"rev":3},…]: the parts of
         GET /api/routes/{id} that the office showed its notices on (§6.5). When they are not the live records with
         those revs any more: 409 STALE_REVISION, field "parts", details {"parts":[{"id","rev"}…]} (R20))
@@ -1675,7 +1715,7 @@ GET /api/files/{uuid}.{jpg|png} -> bytes (Cache-Control: private, max-age=315360
 | Visits | `VISIT_CHANGED`, `NOT_ON_JOB`, `TYPE_NOT_ALLOWED`, `WEIGHT_INVALID`, `WEIGHT_REQUIRED`, `TICKET_REQUIRED`, `REASON_REQUIRED`, `WHY_REQUIRED`, `EDIT_WINDOW_CLOSED`, `FILE_MISSING` |
 | Files | `FILE_INVALID`, `FILE_TOO_LARGE` |
 | Storage | `DATA_CORRUPT`, `CLOCK_BEHIND_FREEZE` |
-| Warnings (not errors) | `EMPTY_ROUTE`, `OFF_PLAN`, `LATE` |
+| Warnings (not errors) | `EMPTY_ROUTE`, `STOP_DAYS_RESET`, `OFF_PLAN`, `LATE` |
 
 ---
 
@@ -1934,7 +1974,7 @@ Re-running install.sh rewrites the config files and restarts the services; it ne
 5. swap the folders with `mv` (`app` → `app.old`, `app.new` → `app`), then delete `app.old`;
 6. `systemctl reload php8.3-fpm` (clears OPcache).
 
-Data and config are untouched.
+Data and config are untouched. After the update that brings stop weekdays (Round 8), reload every open office tab: a tab loaded before it saves a route's list without the customers' weekdays.
 
 **Nightly backup** (`wms-backup.service` + `wms-backup.timer`):
 ```ini
@@ -2140,6 +2180,7 @@ Round 6: GitHub Actions tests every commit and publishes a demo of the office ca
     - the search and highlight filter;
     - `StopList` reordering: a drag end, ↑ ↓ and "move to #" produce the same draft order (`arrayMove`);
     - `routeCarry.ts`, the mirror of `Plan::carry()` / `Plan::mergeStops()`: the shared cases of `backend/tests/fixtures/split_carry_cases.json` (also run against the server by `plan_split_chain_test.php`) and the kept-plan notices in English and Chinese;
+    - stop weekdays (R10): `backend/tests/unit/stop_days_test.php` (shape and validation, no rewrite of stored lists, the calendar per weekday, R9, the weekday fit and `STOP_DAYS_RESET`, the "following" merge, copies, run totals, `NOT_ON_JOB` / `OFF_PLAN`, close-out, R26 and the freeze), the stop-weekday cases of `split_carry_cases.json`, and a case in `schedule_test.php`;
     - the rollover refetch: a poll response (or the `day_ends_at` timer) with a new `today` triggers a `/api/meta` refetch, a Today reload, and the invalidation of every query, including a calendar range that does not contain today;
     - i18n key parity.
 - **Drag and drop, manual**: reorder a 30-stop route in the drawer with a mouse (Chrome, Edge), with touch on a tablet (press and hold the handle; a swipe still scrolls), and with the keyboard.
@@ -2296,7 +2337,7 @@ Round 6: GitHub Actions tests every commit and publishes a demo of the office ca
 12. **Holidays**: holiday import (CSV or online) and per-state calendars.
 13. **Deletion**: hard delete of customers and waste types.
 14. **Audit and customer pages**: an audit-log viewer UI (v1 writes the JSONL file) and a customer visit-history page.
-15. **Layouts and schedules**: a mobile layout for the office calendar; separate stop lists per weekday; fortnightly or monthly patterns.
+15. **Layouts and schedules**: a mobile layout for the office calendar; fortnightly or monthly patterns. Separate stop lists per weekday are delivered as per-stop weekdays (R10, Round 8); a different visit order per weekday stays deferred. The Customers page does not show a customer's collection weekdays, the date drawer has no weekday label, and a route date on which no customer is due is still shown.
 16. **Storage**: a SQLite or MySQL Store (the interface is ready); cleanup of orphan and old photo files; moving photos to object storage.
 17. **Push**: websockets and push notifications. (v1 polls every 30 s.)
 18. **Languages**: Malay or other languages.

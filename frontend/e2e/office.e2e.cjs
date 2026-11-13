@@ -502,6 +502,182 @@ async function splitRouteChecks(page, { today, consoleErrors }) {
 }
 
 /**
+ * Round 8: a customer of a regular route may be collected on some of the route's weekdays only. The route here
+ * starts next Monday, so today's routes are not touched.
+ */
+async function stopDaysChecks(page, { today }) {
+  console.log('stop weekdays: a customer collected on some of the route days');
+  let mon = addDays(today, 1);
+  while (new Date(mon + 'T00:00:00Z').getUTCDay() !== 1) mon = addDays(mon, 1);
+  const tue = addDays(mon, 1);
+  const [A, B, C] = (await api('GET', '/customers')).filter((c) => c.active !== false && c.waste_types.includes('REL'));
+  const sd = await api('POST', '/routes', {
+    waste_type: 'REL',
+    type: 'regular',
+    code: 'SD1',
+    name: 'Stop days route',
+    start: mon,
+    days: [1, 2, 3, 4, 5, 6],
+    stops: [{ customer_id: A.id, note: '', days: [1, 3, 5] }, { customer_id: B.id, note: '' }],
+  });
+  const nMon = (await occOn(mon, 'SD1')).occ[0]?.stops.length;
+  const nTue = (await occOn(tue, 'SD1')).occ[0]?.stops.length;
+  check(nMon === 2 && nTue === 1, `SD1 has 2 stops on Monday ${mon} and 1 on Tuesday ${tue}`, [nMon, nTue]);
+
+  // The template editor: the label, the control and the per-weekday counts.
+  await page.goto(BASE + '/routes');
+  await page.locator('table tbody tr', { hasText: 'Stop days route' }).first().click();
+  const te = page.locator('.drawer');
+  const rowA = te.locator(`.stop[data-cid="${A.id}"]`);
+  await rowA.waitFor();
+  check((await rowA.locator('[data-testid=stop-days]').innerText()) === 'Mon Wed Fri', 'template editor: the stop shows its weekdays "Mon Wed Fri"');
+  check((await te.locator(`.stop[data-cid="${B.id}"] [data-testid=stop-days]`).count()) === 0, 'a stop collected on every route day shows no weekday label');
+  await rowA.getByRole('button', { name: /^Collection weekdays/ }).click();
+  check((await rowA.locator('.chip').count()) === 6 && (await rowA.locator('.chip[aria-pressed="true"]').count()) === 3, 'Collection weekdays: one chip per route day, the stop\'s days pressed');
+  await rowA.getByRole('button', { name: 'Fri', exact: true }).click();
+  const counts = await te.locator('[data-testid=day-counts]').innerText();
+  check(counts === 'Mon 2 · Tue 1 · Wed 2 · Thu 1 · Fri 1 · Sat 1', 'the header counts the stops per weekday', counts);
+  await shot(page, '50-stop-days-template');
+  await te.getByRole('button', { name: 'Save', exact: true }).click();
+  await te.waitFor({ state: 'detached' });
+  let stored = (await api('GET', `/routes/${sd.id}`)).stops;
+  check(JSON.stringify(stored[0].days) === '[1,3]' && !('days' in stored[1]), 'saved: the stop is collected on Mon Wed', stored);
+
+  // The date drawer on Tuesday: a customer added "and all following" keeps A on the route, on its own days.
+  await page.goto(`${BASE}/?view=week&anchor=${tue}`);
+  await page.locator(`.week .day[data-date="${tue}"] .occ[data-code="SD1"] .nm`).click();
+  const dr = page.locator('.drawer');
+  await dr.locator('.rd-rule').waitFor();
+  check((await dr.locator('.stop').count()) === 1 && (await dr.locator('[data-testid=stop-days]').count()) === 0, 'Tuesday drawer: only the customer due that day, no weekday label');
+  await dr.getByRole('button', { name: /Add customer/ }).click();
+  await dr.locator('.picker input[type=search]').fill(C.code);
+  await dr.locator('.picker-item', { hasText: C.code }).first().click();
+  await dr.getByRole('button', { name: 'Save', exact: true }).click();
+  const sc = page.locator('.dialog', { hasText: 'Apply this change to' });
+  await sc.waitFor();
+  await page.waitForTimeout(1500); // the route has loaded: the default no longer changes
+  check(await sc.locator('input[type=radio]').first().isChecked(), 'scope dialog defaults to "Only <date>" on a route that has its list');
+  await sc.locator('input[type=radio]').nth(1).check();
+  await sc.getByRole('button', { name: 'Save', exact: true }).click();
+  await dr.waitFor({ state: 'detached' });
+  const tueOcc = (await occOn(tue, 'SD1')).occ[0];
+  stored = (await api('GET', `/routes/${tueOcc.route_id}`)).stops;
+  const a = stored.find((x) => x.customer_id === A.id);
+  check(
+    !!a && JSON.stringify(a.days) === '[1,3]' && stored.length === 3 && tueOcc.stops.map((x) => x.customer_id).join() === [B.id, C.id].join(),
+    'Tuesday and all following: the customer due on Mon Wed stays on the route with its days',
+    { stored, tue: tueOcc.stops.map((x) => x.customer_id) },
+  );
+
+  // The scope dialog names each customer that gains or loses the weekday, and the save does what it says.
+  const openTue = async (code) => {
+    await page.goto(`${BASE}/?view=week&anchor=${tue}`);
+    await page.locator(`.week .day[data-date="${tue}"] .occ[data-code="${code}"] .nm`).click();
+    await dr.locator('.rd-rule').waitFor();
+  };
+  const addTo = async (c) => {
+    await dr.getByRole('button', { name: /Add customer/ }).click();
+    await dr.locator('.picker input[type=search]').fill(c.code);
+    await dr.locator('.picker-item', { hasText: c.code }).first().click();
+  };
+  /** Saves the drawer "and all following"; returns the dialog's per-customer lines and A's stored weekdays. */
+  const followingLines = async () => {
+    await dr.getByRole('button', { name: 'Save', exact: true }).click();
+    await sc.waitFor();
+    const before = await sc.locator('[data-testid=day-effect]').count();
+    await sc.locator('input[type=radio]').nth(1).check();
+    const lines = await poll(page, async () => {
+      const x = await sc.locator('[data-testid=day-effect]').allInnerTexts();
+      return x.length ? x : null;
+    });
+    await sc.getByRole('button', { name: 'Save', exact: true }).click();
+    await dr.waitFor({ state: 'detached' });
+    const list = (await api('GET', `/routes/${(await occOn(tue, 'SD1')).occ[0].route_id}`)).stops;
+    return { before, lines, days: list.find((x) => x.customer_id === A.id)?.days };
+  };
+  await openTue('SD1');
+  await addTo(A);
+  let fx = await followingLines();
+  check(
+    fx.before === 0 && JSON.stringify(fx.lines) === JSON.stringify([`${A.name}: Mon Wed, now also Tue`]) && JSON.stringify(fx.days) === '[1,2,3]',
+    'scope dialog, "all following": the customer added on Tuesday is named with its other days, and gains Tuesday',
+    fx,
+  );
+  await openTue('SD1');
+  await dr.locator(`.stop[data-cid="${A.id}"]`).getByRole('button', { name: /^Remove from route/ }).click();
+  fx = await followingLines();
+  check(
+    fx.before === 0 && JSON.stringify(fx.lines) === JSON.stringify([`${A.name}: no longer on Tue, still Mon Wed`]) && JSON.stringify(fx.days) === '[1,3]',
+    'scope dialog, "all following": the customer removed on Tuesday is named, and keeps its other days',
+    fx,
+  );
+
+  // A date with no customer due, on a route that has customers on other weekdays: the default is "Only <date>".
+  const sd2 = await api('POST', '/routes', {
+    waste_type: 'REL',
+    type: 'regular',
+    code: 'SD2',
+    name: 'Stop days empty day',
+    start: mon,
+    days: [1, 2, 3, 4, 5, 6],
+    stops: [{ customer_id: A.id, note: '', days: [1] }],
+  });
+  await openTue('SD2');
+  check((await dr.locator('.stop').count()) === 0, 'SD2 on Tuesday: no customer is due');
+  await addTo(B);
+  await dr.getByRole('button', { name: 'Save', exact: true }).click();
+  await sc.waitFor();
+  const scSave = sc.getByRole('button', { name: 'Save', exact: true });
+  await poll(page, () => scSave.isEnabled()); // Save waits for the route: the default depends on its standing list
+  check(await sc.locator('input[type=radio]').first().isChecked(), 'scope dialog defaults to "Only <date>" on an empty date of a route that has customers on other weekdays');
+  await scSave.click();
+  await dr.waitFor({ state: 'detached' });
+  stored = (await api('GET', `/routes/${sd2.id}`)).stops;
+  const tue2 = (await occOn(tue, 'SD2')).occ[0];
+  check(stored.length === 1 && tue2.edited && tue2.stops.map((x) => x.customer_id).join() === String(B.id), 'saved for that Tuesday only: the standing list is unchanged', { stored, tue2 });
+  // Edit route: Monday removed and saved; the warning is shown after the save.
+  await openTue('SD2');
+  await dr.getByRole('button', { name: /Menu/ }).click();
+  await page.getByRole('menuitem', { name: 'Edit route / schedule…' }).click();
+  const rf2 = page.locator('.dialog', { hasText: 'Edit route SD2' });
+  await rf2.locator('form').waitFor();
+  await rf2.getByRole('button', { name: 'Mon', exact: true }).click();
+  await rf2.locator('[data-testid=days-reset]').waitFor();
+  await rf2.getByRole('button', { name: 'Save', exact: true }).click();
+  const warnToast = page.locator('.toast.warn');
+  const toastText = await warnToast.first().waitFor({ timeout: 10000 }).then(() => warnToast.first().innerText(), () => null);
+  check(toastText === "Some customers' collection weekdays no longer fit the route. They are now collected every day the route runs.", 'Edit route saved: the weekday reset is shown as a warning', toastText);
+  stored = (await api('GET', `/routes/${sd2.id}`)).stops;
+  check(stored.length === 1 && !('days' in stored[0]), 'the customer whose only weekday left the route is collected every day', stored);
+  await rf2.waitFor({ state: 'detached' });
+  await page.keyboard.press('Escape');
+  await dr.waitFor({ state: 'detached' });
+
+  // Edit route / schedule: removing Monday and Wednesday names the customer before the save.
+  await page.goto(`${BASE}/?view=week&anchor=${tue}`);
+  await page.locator(`.week .day[data-date="${tue}"] .occ[data-code="SD1"] .nm`).click();
+  await dr.locator('.rd-rule').waitFor();
+  await dr.getByRole('button', { name: /Menu/ }).click();
+  await page.getByRole('menuitem', { name: 'Edit route / schedule…' }).click();
+  const rf = page.locator('.dialog', { hasText: 'Edit route SD1' });
+  await rf.locator('form').waitFor();
+  check((await rf.locator('[data-testid=days-reset]').count()) === 0, 'Edit route: no weekday notice before a change');
+  await rf.getByRole('button', { name: 'Mon', exact: true }).click();
+  check((await rf.locator('[data-testid=days-reset]').count()) === 0, 'Monday removed: the customer still has Wednesday, no notice');
+  await rf.getByRole('button', { name: 'Wed', exact: true }).click();
+  const note = await poll(page, async () => {
+    const x = await rf.locator('[data-testid=days-reset]').allInnerTexts();
+    return x.length ? x[0] : null;
+  });
+  check(!!note && note.endsWith(`every day the route runs: ${A.name}`), 'Monday and Wednesday removed: the notice names the customer whose weekdays are reset', note);
+  await shot(page, '51-stop-days-reset');
+  await rf.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await rf.waitFor({ state: 'detached' });
+  await page.keyboard.press('Escape');
+  await dr.waitFor({ state: 'detached' });
+}
+
+/**
  * Round 6 (§6.5): a later part of a split route keeps its own planned change (Tue Thu from D2, a customer added
  * from D1); only what the clerk changes reaches it. Edit route / schedule, the scope dialog and the template
  * editor say so before the save, and each notice is compared with what the server stored, read back over the API.
@@ -1480,7 +1656,8 @@ async function main() {
     await nd.getByRole('button', { name: 'Save', exact: true }).click();
     const zsc = page.locator('.dialog', { hasText: 'Apply this change to' });
     await zsc.waitFor();
-    check(await zsc.locator('input[type=radio]').nth(1).isChecked(), 'new route: the scope dialog pre-selects "<date> and all following"');
+    // (the default follows the route's standing list, so it settles once the route has loaded)
+    check(await poll(page, () => zsc.locator('input[type=radio]').nth(1).isChecked()), 'new route: the scope dialog pre-selects "<date> and all following"');
     await zsc.getByRole('button', { name: 'Save', exact: true }).click();
     await nd.waitFor({ state: 'detached' });
     const z9next = (await occOn(addDays(workDay, 7), 'Z9')).occ[0];
@@ -1507,6 +1684,8 @@ async function main() {
     await splitRouteChecks(page, { today, consoleErrors });
     // 12. Round 6: what a later part of a split route keeps is named before the save.
     await keptPlanChecks(page, { today });
+    // 13. Round 8: a customer's own collection weekdays on a route.
+    await stopDaysChecks(page, { today });
 
     // The browser logs every non-2xx response; the 409 RUN_EXISTS and STALE_REVISION above are expected.
     const real = consoleErrors.filter((e) => !/status of 409/.test(e));

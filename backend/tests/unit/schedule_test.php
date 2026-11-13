@@ -106,6 +106,26 @@ return (static function (): array {
             T::eq('RECYCLING', Schedule::routeOccurrence($p, $rcy, '2026-11-16')['waste_type']);
             T::eq('REL', Schedule::routeOccurrence($p, $route($p, 5), '2026-11-16')['waste_type'], 'a route stored without a type is a REL route');
         },
+        'R8 stop weekdays: a stop with days is due only on them; an override and the snapshot hold plain lists' => function () use ($plan, $route) {
+            $p = $plan(['route_overrides' => []]);
+            foreach ($p['routes'] as $k => $r) {
+                if ($r['id'] === 5) { // N1 Mon Wed Fri
+                    $p['routes'][$k]['stops'] = [['customer_id' => 12, 'note' => '3 bins', 'days' => [1]], ['customer_id' => 40, 'note' => ''],
+                        ['customer_id' => 21, 'note' => 'x', 'days' => [3, 5]]];
+                }
+            }
+            $n1 = $route($p, 5);
+            T::eq([['customer_id' => 12, 'note' => '3 bins'], ['customer_id' => 40, 'note' => '']], Schedule::effectiveStops($p, $n1, '2026-11-16'), 'Mon');
+            $wedFri = [['customer_id' => 40, 'note' => ''], ['customer_id' => 21, 'note' => 'x']];
+            T::eq($wedFri, Schedule::effectiveStops($p, $n1, '2026-11-18'), 'Wed');
+            T::eq($wedFri, Schedule::effectiveStops($p, $n1, '2026-11-20'), 'Fri');
+            // an override is returned as it is, including a customer not due that weekday
+            $p['route_overrides'] = [['route_id' => 5, 'date' => '2026-11-16', 'cancelled' => false, 'stops' => [['customer_id' => 21, 'note' => ''], ['customer_id' => 40, 'note' => '']], 'note' => '']];
+            T::eq([['customer_id' => 21, 'note' => ''], ['customer_id' => 40, 'note' => '']], Schedule::effectiveStops($p, $n1, '2026-11-16'));
+            $p['route_overrides'] = [];
+            $snap = array_values(array_filter(Schedule::snapshot($p, '2026-11-16'), static fn ($e) => $e['key'] === 'r5@2026-11-16'));
+            T::eq([['customer_id' => 12, 'note' => '3 bins'], ['customer_id' => 40, 'note' => '']], $snap[0]['stops'], 'Monday only, no days key');
+        },
         '§5.8 order: adhoc first, codes in natural order, paused last' => function () use ($plan, $keys) {
             $mk = static fn (int $id, string $code, string $type, array $x) => $x + ['id' => $id, 'code' => $code, 'color' => 1, 'type' => $type,
                 'name' => $code, 'note' => '', 'rev' => 1, 'stops' => []];

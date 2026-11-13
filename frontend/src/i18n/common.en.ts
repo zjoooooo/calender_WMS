@@ -90,6 +90,7 @@ const common: { [K in keyof typeof zh]: string } = {
   'warn.EMPTY_ROUTE': 'The route has no customers yet',
   'warn.OFF_PLAN': 'Not on the planned list (saved)',
   'warn.LATE': 'Sent after the rollover (saved, marked late)',
+  'warn.STOP_DAYS_RESET': 'Some customers\' collection weekdays no longer fit the route. They are now collected every day the route runs.',
 
   'err.VALIDATION': 'Invalid input: please check',
   'err.VALIDATION_field': 'Invalid value: {field}',

@@ -123,15 +123,23 @@ final class Schedule
         return $out;
     }
 
+    /** The route's standing stops that apply on $d: no days, or weekday($d) among them (template order). */
+    public static function templateStops(array $route, string $d): array
+    {
+        $dow = Dates::weekday($d);
+        return array_values(array_filter($route['stops'] ?? [], static fn ($s) => !isset($s['days']) || in_array($dow, $s['days'], true)));
+    }
+
     /**
-     * R8 effective stops of (route, d): override(d).stops ?? route.stops, minus inactive/non-routable customers.
+     * R8 effective stops of (route, d): override(d).stops ?? the template's stops due on weekday(d), minus
+     * inactive/non-routable customers.
      * @return list<array{customer_id:int,note:string}>
      */
     public static function effectiveStops(array $plan, array $route, string $d, ?array $ix = null): array
     {
         $ix ??= self::index($plan);
         $ov = self::routeOverride($ix, $route, $d);
-        $stops = ($ov !== null && is_array($ov['stops'] ?? null)) ? $ov['stops'] : ($route['stops'] ?? []);
+        $stops = ($ov !== null && is_array($ov['stops'] ?? null)) ? $ov['stops'] : self::templateStops($route, $d);
         return self::filterStops($ix, $stops, Usage::routeType($route));
     }
 

@@ -142,7 +142,9 @@ final class Plan
             'sun' => (!$oneOff && $r['type'] === 'special') ? !empty($r['sun']) : null,
             'ph' => (!$oneOff && $r['type'] === 'special') ? !empty($r['ph']) : null,
             'copied_from' => $oneOff ? ($r['copied_from'] ?? null) : null,
-            'stops' => array_map(static fn ($s) => ['customer_id' => (int) $s['customer_id'], 'note' => (string) ($s['note'] ?? '')], $r['stops'] ?? []),
+            // a stop's "days" key is there only when the stop has its own collection weekdays
+            'stops' => array_map(static fn ($s) => ['customer_id' => (int) $s['customer_id'], 'note' => (string) ($s['note'] ?? '')]
+                + (isset($s['days']) ? ['days' => array_values($s['days'])] : []), $r['stops'] ?? []),
         ];
     }
 
@@ -333,14 +335,14 @@ final class Plan
     }
 
     /** R6 regular days: a non-empty subset of 1..6, de-duplicated and sorted (422 WEEKDAY_NOT_ALLOWED). */
-    private static function regularDays(mixed $v): array
+    private static function regularDays(mixed $v, string $field = 'days'): array
     {
         if (!is_array($v) || !array_is_list($v) || $v === []) {
-            throw new ApiError('WEEKDAY_NOT_ALLOWED', 422, 'days', null, 'Pick at least one weekday from Monday to Saturday');
+            throw new ApiError('WEEKDAY_NOT_ALLOWED', 422, $field, null, 'Pick at least one weekday from Monday to Saturday');
         }
         foreach ($v as $d) {
             if (!is_int($d) || $d < 1 || $d > 6) {
-                throw new ApiError('WEEKDAY_NOT_ALLOWED', 422, 'days', ['day' => $d], 'Regular routes run Monday to Saturday only');
+                throw new ApiError('WEEKDAY_NOT_ALLOWED', 422, $field, ['day' => $d], 'Regular routes run Monday to Saturday only');
             }
         }
         $v = array_values(array_unique($v));
@@ -396,11 +398,20 @@ final class Plan
         return $r;
     }
 
+    /** The weekdays a stop of record $r may name: the days of a recurring regular record, else null (no stop weekdays). */
+    private static function stopDaysOf(array $r): ?array
+    {
+        return (!Usage::isOneOff($r) && $r['type'] === 'regular') ? $r['days'] : null;
+    }
+
     /**
      * R10: every stop's customer exists, is active (CUSTOMER_INACTIVE) and is registered with the route's
-     * waste type (CUSTOMER_NOT_ROUTABLE), at most once (DUPLICATE_STOP). Returns [{customer_id, note}].
+     * waste type (CUSTOMER_NOT_ROUTABLE), at most once (DUPLICATE_STOP). Returns [{customer_id, note}], each
+     * with "days" (last key) when the stop has its own collection weekdays: allowed only with $days (the
+     * days of the recurring regular record the list is the standing list of), a non-empty subset of them.
+     * Its output is valid input.
      */
-    public static function validateStops(array $plan, mixed $stops, string $wasteType, string $field = 'stops'): array
+    public static function validateStops(array $plan, mixed $stops, string $wasteType, string $field = 'stops', ?array $days = null): array
     {
         V::list($stops, $field);
         $customers = [];
@@ -414,7 +425,7 @@ final class Plan
             if (!is_array($s) || array_is_list($s)) {
                 V::fail($f, 'Each stop is {"customer_id", "note"}');
             }
-            V::only($s, ['customer_id', 'note']);
+            V::only($s, ['customer_id', 'note', 'days']);
             $cid = V::id($s['customer_id'] ?? null, "$f.customer_id");
             $cu = $customers[$cid] ?? null;
             if ($cu === null) {
@@ -431,9 +442,82 @@ final class Plan
             }
             $seen[$cid] = true;
             $note = ($s['note'] ?? null) === null ? '' : V::str($s['note'], "$f.note", 0, 200);
-            $out[] = ['customer_id' => $cid, 'note' => $note];
+            $stop = ['customer_id' => $cid, 'note' => $note];
+            $d = $s['days'] ?? null;
+            if ($d !== null) {
+                if ($days === null) {
+                    V::fail("$f.days", 'Only the standing list of a regular recurring route has stop weekdays');
+                }
+                $d = self::regularDays($d, "$f.days");
+                // Known ceiling: the template editor's "from date D" is refused here when D falls in a later
+                // part of the route that runs on other weekdays and a stop has days.
+                if (array_diff($d, $days) !== []) {
+                    throw new ApiError('WEEKDAY_NOT_ALLOWED', 422, "$f.days", ['days' => $days], 'A stop can be collected only on days the route runs');
+                }
+                $stop['days'] = $d;
+            }
+            $out[] = $stop;
         }
         return $out;
+    }
+
+    /** Stop weekdays kept inside $days; a stop left with none runs every day ($reset). */
+    private static function fitStops(array $stops, array $days, bool &$reset = false): array
+    {
+        foreach ($stops as $k => $s) {
+            if (!isset($s['days'])) {
+                continue;
+            }
+            $fit = array_values(array_intersect($s['days'], $days));
+            if ($fit === []) {
+                unset($stops[$k]['days']);
+                $reset = true;
+            } else {
+                $stops[$k]['days'] = $fit;
+            }
+        }
+        return $stops;
+    }
+
+    /**
+     * R12 for a route with stop weekdays: the standing list after "this date and following" saved $saved (the
+     * list of $date, validated, no days) on record $route. A customer removed from the date leaves the route,
+     * or loses only that weekday when it has its own days and another one is left; a customer of the route not
+     * due that weekday gains it; a new customer is added with no days; the order is merged as in carry()
+     * (mergeStops). Without stop weekdays the result is $saved.
+     */
+    private static function standingFromDay(array $plan, array $route, string $date, array $saved): array
+    {
+        $dow = Dates::weekday($date);
+        $live = array_column(Schedule::filterStops(Schedule::index($plan), $route['stops'] ?? [], Usage::routeType($route)), 'customer_id'); // R8
+        $savedIds = array_column($saved, 'customer_id');
+        $seg = [];
+        $old = [];
+        foreach ($route['stops'] ?? [] as $s) {
+            $cid = (int) $s['customer_id'];
+            if (!in_array($cid, $live, true)) {
+                continue;
+            }
+            if (isset($s['days'])) {
+                $due = in_array($dow, $s['days'], true);
+                if (!$due && in_array($cid, $savedIds, true)) {
+                    $s['days'][] = $dow;
+                    sort($s['days']);
+                } elseif ($due && count($s['days']) > 1 && !in_array($cid, $savedIds, true)) {
+                    $s['days'] = array_values(array_diff($s['days'], [$dow]));
+                }
+            }
+            $seg[] = $s;
+            if (!isset($s['days']) || in_array($dow, $s['days'], true)) {
+                $old[] = $s; // the date's list before the save; a removed stop whose only day this is leaves
+            }
+        }
+        $days = array_column($seg, 'days', 'customer_id');
+        $new = [];
+        foreach ($saved as $s) {
+            $new[] = $s + (isset($days[$s['customer_id']]) ? ['days' => $days[$s['customer_id']]] : []);
+        }
+        return self::mergeStops($old, $new, $seg);
     }
 
     /** Inserts or edits the override of (route, date) with $fn(override): override. Kept sorted by date. */
@@ -564,10 +648,13 @@ final class Plan
     /**
      * The change a record went through ($old -> $new) carried into a later or other live record $t of the same
      * route: code, colour, name and note; weekdays (or Sunday / PH) added or removed; with $stops, the customers
-     * added, removed, moved or re-noted. What only $t has (a planned schedule change, customers added or
-     * removed from its start) is kept.
+     * added, removed, moved or re-noted, or given other collection weekdays (only the weekdays $t runs, and only
+     * when $t's stop still has the old ones, as far as $t runs them). A stop that only lost weekdays and has none
+     * left that $t runs leaves $t. What only $t has (a planned schedule change, customers added or
+     * removed from its start) is kept. A stop of $t left with no weekday by a removed route weekday runs on
+     * every day of $t ($reset).
      */
-    private static function carry(array $t, array $old, array $new, bool $stops): array
+    private static function carry(array $t, array $old, array $new, bool $stops, bool &$reset = false): array
     {
         foreach (['code', 'color', 'name', 'note'] as $f) {
             if ($new[$f] !== $old[$f]) {
@@ -588,15 +675,49 @@ final class Plan
                 [$t['sun'], $t['ph']] = [!empty($new['sun']), !empty($new['ph'])];
             }
         }
+        $regular = $new['type'] === 'regular';
+        if ($regular && isset($t['stops'])) {
+            $t['stops'] = self::fitStops($t['stops'], $t['days'], $reset); // the identity when nothing changed
+        }
         if ($stops && $new['stops'] !== $old['stops']) {
-            $t['stops'] = self::mergeStops($old['stops'], $new['stops'], $t['stops'] ?? []);
+            $in = $new['stops'];
+            $was = $old['stops'];
+            if ($regular) {
+                // Both lists as $t holds them: a stop's weekdays are only the ones $t runs.
+                $raw = array_column($old['stops'], null, 'customer_id');
+                $own = array_column($t['stops'] ?? [], null, 'customer_id');
+                $was = self::fitStops($was, $t['days']);
+                $had = array_column($was, null, 'customer_id');
+                foreach ($in as $k => $s) {
+                    $cid = $s['customer_id'];
+                    $o = $raw[$cid]['days'] ?? null;
+                    $oT = $had[$cid]['days'] ?? null;
+                    $fit = array_values(array_intersect($s['days'] ?? [], $t['days']));
+                    unset($in[$k]['days']);
+                    if ($o !== null && $oT === null) {
+                        continue; // the old days name no weekday of $t: no change for $t
+                    }
+                    if ($fit !== []) {
+                        $in[$k]['days'] = $fit;
+                    } elseif (isset($s['days']) && $oT !== null) {
+                        if (array_diff($s['days'], $o) === [] && ($own[$cid]['days'] ?? null) === $oT) {
+                            unset($in[$k]); // weekdays were only taken away and $t runs none of the rest: the stop leaves $t
+                        } else {
+                            $in[$k]['days'] = $oT; // none of the new days: no change for $t
+                        }
+                    }
+                }
+                $in = array_values($in);
+            }
+            $t['stops'] = self::mergeStops($was, $in, $t['stops'] ?? []);
         }
         return $t;
     }
 
     /**
      * Stop list $seg with the change from $old to $new applied (carry()). A list equal to $old becomes $new.
-     * Otherwise: removed customers leave; changed stop notes follow; when customers in both lists were moved,
+     * Otherwise: removed customers leave; changed stop notes follow; changed stop weekdays follow when the stop
+     * in $seg still has the old ones; when customers in both lists were moved,
      * they take the new order in the places they hold in $seg; an added customer goes before the nearest
      * customer after it in $new that $seg has (else at the end), unless $seg already has it.
      */
@@ -610,6 +731,14 @@ final class Plan
         $newIds = $ids($new);
         $oldNote = array_column($old, 'note', 'customer_id');
         $newNote = array_column($new, 'note', 'customer_id');
+        $oldDays = [];
+        $newDays = [];
+        foreach ($old as $s) {
+            $oldDays[(int) $s['customer_id']] = $s['days'] ?? null;
+        }
+        foreach ($new as $s) {
+            $newDays[(int) $s['customer_id']] = $s['days'] ?? null;
+        }
         $out = [];
         foreach ($seg as $s) {
             $cid = (int) $s['customer_id'];
@@ -618,6 +747,13 @@ final class Plan
             }
             if (isset($oldNote[$cid], $newNote[$cid]) && $oldNote[$cid] !== $newNote[$cid]) {
                 $s['note'] = $newNote[$cid];
+            }
+            if (array_key_exists($cid, $oldDays) && array_key_exists($cid, $newDays) && $oldDays[$cid] !== $newDays[$cid]
+                && ($s['days'] ?? null) === $oldDays[$cid]) {
+                unset($s['days']);
+                if ($newDays[$cid] !== null) {
+                    $s['days'] = $newDays[$cid]; // the key stays last
+                }
             }
             $out[] = $s;
         }
@@ -824,7 +960,7 @@ final class Plan
             }
             $r = self::applyRecurring($r, $b, $c->today, true);
         }
-        $r['stops'] = self::validateStops($plan, $b['stops'] ?? [], $wt['code']);
+        $r['stops'] = self::validateStops($plan, $b['stops'] ?? [], $wt['code'], 'stops', self::stopDaysOf($r));
         $r['color'] = self::given($b, 'color') ? V::int($b['color'], 'color', 1, count(self::PALETTE)) : self::autoColor($plan, $c->today, $r['code']);
         $r['id'] = (int) ($plan['seq']['route'] ?? 0) + 1;
         $plan['seq']['route'] = $r['id'];
@@ -868,6 +1004,7 @@ final class Plan
         }
         $before = $plan;
         $r = $old;
+        $reset = false;
         if (array_key_exists('code', $b)) {
             $r['code'] = self::normalizeCode($b['code']);
         }
@@ -919,7 +1056,9 @@ final class Plan
             $r = self::applyRecurring($r, $sched, $c->today, false);
         }
         if (array_key_exists('stops', $b)) {
-            $r['stops'] = self::validateStops($plan, $b['stops'], Usage::routeType($old));
+            $r['stops'] = self::validateStops($plan, $b['stops'], Usage::routeType($old), 'stops', self::stopDaysOf($r));
+        } elseif (self::stopDaysOf($r) !== null) {
+            $r['stops'] = self::fitStops($r['stops'] ?? [], $r['days'], $reset);
         }
         $r['rev'] = (int) ($old['rev'] ?? 1) + 1;
         $r = self::canonRoute($r);
@@ -928,7 +1067,7 @@ final class Plan
         $ids = self::idsOf($plan, $live);
         foreach ($live as $k) {
             if ($k !== $i) {
-                $plan = self::setRoute($plan, (int) $plan['routes'][$k]['id'], self::carry($plan['routes'][$k], $old, $r, array_key_exists('stops', $b)), $bumped);
+                $plan = self::setRoute($plan, (int) $plan['routes'][$k]['id'], self::carry($plan['routes'][$k], $old, $r, array_key_exists('stops', $b), $reset), $bumped);
             }
         }
         $holder = (int) $r['id'];
@@ -945,6 +1084,9 @@ final class Plan
         $c->savePlan($plan, ['release_run' => self::flag($b, 'release_run')]);
         if (array_key_exists('stops', $b) && $r['stops'] === []) {
             $c->warn('EMPTY_ROUTE');
+        }
+        if ($reset) {
+            $c->warn('STOP_DAYS_RESET');
         }
         return self::routeView($plan, $plan['routes'][self::routeIndex($plan, $holder)]);
     }
@@ -977,10 +1119,14 @@ final class Plan
         self::checkRev($plan['routes'][$i], $b['rev'] ?? null);
         self::checkParts($plan, $i, $b, $c->today);
         $from = V::date($b['from'] ?? null, 'from');
-        [$plan, $ended, $created] = self::split($plan, $i, $from, $b, $c->today);
+        $reset = false;
+        [$plan, $ended, $created] = self::split($plan, $i, $from, $b, $c->today, $reset);
         $c->savePlan($plan, ['release_run' => self::flag($b, 'release_run')]);
         if (array_key_exists('stops', $b) && $created['stops'] === []) {
             $c->warn('EMPTY_ROUTE');
+        }
+        if ($reset) {
+            $c->warn('STOP_DAYS_RESET');
         }
         return ['ended' => self::routeView($plan, $ended), 'created' => self::routeView($plan, $created)];
     }
@@ -988,7 +1134,8 @@ final class Plan
     /**
      * R14 change schedule from D (D > today), one transaction. D may fall in any live record of a split route
      * (§6.5): the record that runs on D is the one split. end = D - 1 on it; a copy (new id, same code, colour
-     * and series, $b's stops or the same ones) from D with $b's days/sun/ph or the old ones, up to the record's
+     * and series, $b's stops or the same ones, their weekdays kept inside the new days: fitStops, $reset) from D
+     * with $b's days/sun/ph or the old ones, up to the record's
      * end; overrides dated >= D move to the copy; copied_from of one-offs {old id, date >= D} re-pointed. When D
      * is the first day of a later record, that record takes the new schedule instead (nothing to split). The
      * later records get the same change (carry()). $b's end is the route's end (setChainEnd); an end equal to
@@ -996,7 +1143,7 @@ final class Plan
      * happens to equal a split boundary is applied, not dropped.
      * @return array{0:array,1:array,2:array} [plan, ended record, created (or changed) record]
      */
-    private static function split(array $plan, int $i, string $from, array $b, string $today): array
+    private static function split(array $plan, int $i, string $from, array $b, string $today, bool &$reset = false): array
     {
         $opened = $plan['routes'][$i];
         if (Usage::isOneOff($opened)) {
@@ -1029,7 +1176,9 @@ final class Plan
         if ($from === $seg['start']) {
             $new = self::applyRecurring($seg, $sched, $today, false);
             if (array_key_exists('stops', $b) && $b['stops'] !== null) {
-                $new['stops'] = self::validateStops($plan, $b['stops'], Usage::routeType($seg));
+                $new['stops'] = self::validateStops($plan, $b['stops'], Usage::routeType($seg), 'stops', self::stopDaysOf($new));
+            } elseif (self::stopDaysOf($new) !== null) {
+                $new['stops'] = self::fitStops($new['stops'] ?? [], $new['days'], $reset);
             }
             $new['rev'] = (int) ($seg['rev'] ?? 1) + 1;
             $plan['routes'][$k] = self::canonRoute($new);
@@ -1045,7 +1194,9 @@ final class Plan
             $new['start'] = $from;
             $new = self::applyRecurring($new, $sched, $today, false);
             if (array_key_exists('stops', $b) && $b['stops'] !== null) {
-                $new['stops'] = self::validateStops($plan, $b['stops'], Usage::routeType($seg));
+                $new['stops'] = self::validateStops($plan, $b['stops'], Usage::routeType($seg), 'stops', self::stopDaysOf($new));
+            } elseif (self::stopDaysOf($new) !== null) {
+                $new['stops'] = self::fitStops($new['stops'] ?? [], $new['days'], $reset);
             }
             $ended = $seg;
             $ended['end'] = Dates::addDays($from, -1);
@@ -1069,7 +1220,7 @@ final class Plan
         }
         $created = $plan['routes'][self::routeIndex($plan, $createdId)];
         foreach (array_slice($live, $n + 1) as $l) {
-            $plan = self::setRoute($plan, (int) $plan['routes'][$l]['id'], self::carry($plan['routes'][$l], $seg, $created, true), $bumped);
+            $plan = self::setRoute($plan, (int) $plan['routes'][$l]['id'], self::carry($plan['routes'][$l], $seg, $created, true, $reset), $bumped);
         }
         if (array_key_exists('end', $b)) {
             $end = self::optDate($b['end'], 'end');
@@ -1090,7 +1241,8 @@ final class Plan
 
     /**
      * PUT /api/routes/{id}/dates/{date} {rev, scope, stops?, note?, cancelled?, parts?, release_run?}
-     * -> {route, occurrence} (+ "ended" when "following" split the route, R12/R14).
+     * -> {route, occurrence} (+ "ended" when "following" split the route, R12/R14). "stops" is the list of
+     * that date and never carries stop weekdays.
      */
     public static function putRouteDate(Ctx $c): array
     {
@@ -1110,6 +1262,7 @@ final class Plan
         $cancelled = (array_key_exists('cancelled', $b) && $b['cancelled'] !== null) ? V::bool($b['cancelled'], 'cancelled') : null;
         $targetId = (int) $route['id'];
         $ended = null;
+        $reset = false;
 
         if (Usage::isOneOff($route)) {
             // One-off routes save directly, with no scope question (R12).
@@ -1155,8 +1308,12 @@ final class Plan
                 if ($cancelled === true) {
                     V::fail('cancelled', 'Skipping applies to "only this date"');
                 }
+                if ($stops !== null && self::stopDaysOf($route) !== null) {
+                    // the body is the date's list: the standing list is built from it (stop weekdays, standingFromDay)
+                    $stops = self::validateStops($plan, self::standingFromDay($plan, $route, $date, $stops), Usage::routeType($route), 'stops', $route['days']);
+                }
                 if ($stops !== null && Schedule::firstGenerated($route, $c->today, $holidays) !== $date) {
-                    [$plan, $ended, $created] = self::split($plan, $i, $date, ['stops' => $stops], $c->today);
+                    [$plan, $ended, $created] = self::split($plan, $i, $date, ['stops' => $stops], $c->today, $reset);
                     $targetId = (int) $created['id'];
                 } else {
                     $plan['routes'][$i]['rev'] = (int) ($route['rev'] ?? 1) + 1;
@@ -1167,7 +1324,7 @@ final class Plan
                         $bumped = [$targetId => true];
                         $live = self::liveChain($plan, $i, $c->today);
                         foreach (array_slice($live, (int) array_search($i, $live, true) + 1) as $l) {
-                            $plan = self::setRoute($plan, (int) $plan['routes'][$l]['id'], self::carry($plan['routes'][$l], $route, $plan['routes'][$i], true), $bumped);
+                            $plan = self::setRoute($plan, (int) $plan['routes'][$l]['id'], self::carry($plan['routes'][$l], $route, $plan['routes'][$i], true, $reset), $bumped);
                         }
                     }
                 }
@@ -1186,6 +1343,9 @@ final class Plan
         $occ = Calendar::forCtx($c)->routeOccurrence($targetId, $date);
         if ($hasStops && $occ !== null && $occ['stops'] === []) {
             $c->warn('EMPTY_ROUTE');
+        }
+        if ($reset) {
+            $c->warn('STOP_DAYS_RESET');
         }
         $out = ['route' => self::routeView($plan, $plan['routes'][self::mustRoute($plan, $targetId)]), 'occurrence' => $occ];
         if ($ended !== null) {
@@ -1331,7 +1491,7 @@ final class Plan
     /**
      * R9 after every plan write: overrides dated before today are purged; overrides of missing or
      * one-off routes are dropped; a route override that is not cancelled, has an empty note and inherits
-     * (stops null or equal to the template's effective list) is deleted.
+     * (stops null or equal to the template's effective list for its own date) is deleted.
      */
     public static function cleanupOverrides(Ctx $c, array $before, array &$after, array $opts): void
     {
@@ -1348,7 +1508,7 @@ final class Plan
                 continue;
             }
             $inherits = !is_array($o['stops'] ?? null)
-                || Schedule::filterStops($ix, $o['stops'], Usage::routeType($r)) === Schedule::filterStops($ix, $r['stops'] ?? [], Usage::routeType($r));
+                || Schedule::filterStops($ix, $o['stops'], Usage::routeType($r)) === Schedule::filterStops($ix, Schedule::templateStops($r, $o['date']), Usage::routeType($r));
             if (!empty($o['cancelled']) || trim((string) ($o['note'] ?? '')) !== '' || !$inherits) {
                 $keep[] = $o;
             }
