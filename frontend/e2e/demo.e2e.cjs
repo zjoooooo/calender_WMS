@@ -352,15 +352,19 @@ async function main() {
     const bar = await page.locator('.demo-bar').boundingBox();
     const reset = await page.getByRole('button', { name: 'Reset demo data' }).boundingBox();
     check(bar.width <= 390 && reset.x >= 0 && reset.x + reset.width <= 390, 'phone width: the banner and its reset button fit the screen', { bar, reset });
-    // On failure: the elements that reach past the right edge (tag.class, right edge, text, month cell).
+    // On failure: the page's scroll width and the elements that reach furthest right (tag.class, right edge,
+    // width, text, month cell).
     const tooWide = () =>
-      page.evaluate(() =>
-        [...document.querySelectorAll('body *')]
+      page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        innerWidth: window.innerWidth,
+        widest: [...document.querySelectorAll('body *')]
           .map((e) => [e, e.getBoundingClientRect()])
-          .filter(([, r]) => r.width > 0 && r.right > window.innerWidth + 0.5)
-          .slice(0, 8)
-          .map(([e, r]) => `${e.tagName}.${String(e.className).slice(0, 30)} right=${Math.round(r.right)} "${(e.textContent || '').slice(0, 24)}" ${e.closest('.mcell')?.dataset.date || ''}`),
-      );
+          .filter(([, r]) => r.width > 0 && r.right > window.innerWidth - 1)
+          .sort((a, b) => b[1].right - a[1].right)
+          .slice(0, 10)
+          .map(([e, r]) => `${e.tagName}.${String(e.className).slice(0, 30)} right=${r.right.toFixed(2)} w=${r.width.toFixed(2)} sw=${e.scrollWidth} "${(e.textContent || '').slice(0, 24)}" ${e.closest('.mcell')?.dataset.date || ''}`),
+      }));
     check(await noOverflow(page), 'phone width: no horizontal page overflow', await tooWide());
     check((await page.locator('.month .mcell').count()) >= 28, 'phone width: the month grid is there');
     await shot(page, 'demo-03-phone');
