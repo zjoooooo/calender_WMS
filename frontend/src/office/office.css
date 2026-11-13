@@ -26,7 +26,6 @@
 /* the route code sits on its progress colour (calendarModel routeTone); a cancelled or paused one has none */
 .occ .code, .mline .code { border-radius: 4px; padding: 0 5px; flex: none; background: none; color: var(--fg); }
 [data-tone] > .code, .tonekey i { color: #fff; background: var(--st-idle); }
-[data-tone="early"] > .code, .tonekey [data-tone="early"] i { background: var(--st-early); }
 [data-tone="late"] > .code, .tonekey [data-tone="late"] i { background: var(--st-late); }
 [data-tone="done"] > .code, .tonekey [data-tone="done"] i { background: var(--st-done); }
 [data-tone="problem"] > .code, .tonekey [data-tone="problem"] i { background: var(--st-problem); }

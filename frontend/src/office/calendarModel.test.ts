@@ -217,20 +217,25 @@ describe('paused PH counts (OFF-5)', () => {
 });
 
 describe('routeTone: the progress colour of a route code', () => {
+  const TODAY = '2026-11-11';
   const run = (collected: number, missed: number, total: number) => ({ collected, missed, total }) as RouteOccurrence['run'];
-  const tone = (run_status: RouteOccurrence['run_status'], r: RouteOccurrence['run'] = null, status: RouteOccurrence['status'] = 'scheduled') =>
-    routeTone({ status, run_status, run: r });
+  const tone = (run_status: RouteOccurrence['run_status'], r: RouteOccurrence['run'] = null, status: RouteOccurrence['status'] = 'scheduled', date = '2026-11-10') =>
+    routeTone({ date, status, run_status, run: r }, TODAY);
+  const today = (s: RouteOccurrence['run_status'], r: RouteOccurrence['run'] = null) => tone(s, r, 'scheduled', TODAY);
   it('not started and future days are idle', () => {
-    expect([tone('planned'), tone('not_started', run(0, 0, 10))]).toEqual(['idle', 'idle']);
+    expect([today('planned'), today('not_started', run(0, 0, 10)), tone('planned', null, 'scheduled', '2026-11-12')]).toEqual(['idle', 'idle', 'idle']);
   });
-  it('under way: early below half, late from half', () => {
-    expect([tone('active', run(0, 0, 10)), tone('active', run(4, 0, 10)), tone('active', run(5, 0, 10)), tone('active', run(9, 0, 10))]).toEqual(['early', 'early', 'late', 'late']);
+  it('under way is one colour, whatever the share done', () => {
+    expect([today('active', run(0, 0, 10)), today('active', run(4, 0, 10)), today('active', run(9, 0, 10))]).toEqual(['late', 'late', 'late']);
   });
   it('done only when every stop was collected', () => {
-    expect([tone('done', run(10, 0, 10)), tone('done', run(8, 2, 10))]).toEqual(['done', 'problem']);
+    expect([today('done', run(10, 0, 10)), tone('done', run(10, 0, 10))]).toEqual(['done', 'done']);
   });
-  it('a stop not collected, a past day not finished, no record, or no driver is a problem', () => {
-    expect([tone('active', run(1, 1, 10)), tone('incomplete', run(3, 0, 10)), tone('no_record'), tone('open', run(3, 0, 10))]).toEqual(['problem', 'problem', 'problem', 'problem']);
+  it('red only once the day has ended: not collected, not finished, no record, no driver', () => {
+    expect([tone('done', run(8, 2, 10)), tone('incomplete', run(3, 0, 10)), tone('no_record'), tone('open', run(3, 0, 10))]).toEqual(['problem', 'problem', 'problem', 'problem']);
+  });
+  it('the same cases on the running day are blue: still unfinished work', () => {
+    expect([today('active', run(1, 1, 10)), today('open', run(3, 0, 10)), today('done', run(8, 2, 10))]).toEqual(['late', 'late', 'late']);
   });
   it('a cancelled or paused occurrence has no colour', () => {
     expect([tone(null, null, 'cancelled'), tone(null, null, 'holiday_skipped')]).toEqual([null, null]);
