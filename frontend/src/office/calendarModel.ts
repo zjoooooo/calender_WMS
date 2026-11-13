@@ -188,22 +188,23 @@ export function monthWeeks<T extends { day: Pick<CalendarDay, 'in_month'> }>(gro
 // ---- progress colour (§9.2) ------------------------------------------------------------------------
 
 /** The colour of a route's code on the calendar: how far the route is, not which route it is. */
-export type Tone = 'idle' | 'early' | 'late' | 'done' | 'problem';
-export const TONES: Tone[] = ['idle', 'early', 'late', 'done', 'problem'];
+export type Tone = 'idle' | 'late' | 'done' | 'problem';
+export const TONES: Tone[] = ['idle', 'late', 'done', 'problem'];
 
 /**
- * idle: not started (also a future day) · early: under way, less than half of the stops have a result ·
- * late: under way, half or more · done: every stop collected · problem: a past day that was not finished or
- * has no record, a route that needs a driver, or a stop that was not collected. A cancelled or paused
- * occurrence has no colour (null).
+ * idle: not started (also a future day) · late: under way, or not finished yet today · done: every stop
+ * collected · problem: a day that has ended and was not finished or has no record, still needs a driver, or
+ * has a stop that was not collected. Red is only for days that have ended: while the operational day `today`
+ * runs (until the rollover hour of the next morning) such a route is unfinished work and is blue. A cancelled
+ * or paused occurrence has no colour (null).
  */
-export function routeTone(o: Pick<RouteOccurrence, 'status' | 'run_status' | 'run'>): Tone | null {
+export function routeTone(o: Pick<RouteOccurrence, 'date' | 'status' | 'run_status' | 'run'>, today: string): Tone | null {
   if (o.status !== 'scheduled') return null;
-  const run = o.run;
-  if ((run?.missed ?? 0) > 0 || o.run_status === 'incomplete' || o.run_status === 'no_record' || o.run_status === 'open') return 'problem';
+  if ((o.run?.missed ?? 0) > 0 || o.run_status === 'incomplete' || o.run_status === 'no_record' || o.run_status === 'open') {
+    return o.date < today ? 'problem' : 'late';
+  }
   if (o.run_status === 'done') return 'done';
-  if (o.run_status === 'active') return run && run.total > 0 && (run.collected + run.missed) * 2 >= run.total ? 'late' : 'early';
-  return 'idle';
+  return o.run_status === 'active' ? 'late' : 'idle';
 }
 
 // ---- misc --------------------------------------------------------------------------------------------

@@ -149,12 +149,11 @@ async function monthChecks(page, { today, tomorrow, workDay, ph }) {
   const toneOf = (o) => {
     if (o.status !== 'scheduled') return null;
     const r = o.run;
-    if ((r && r.missed > 0) || ['incomplete', 'no_record', 'open'].includes(o.run_status)) return 'problem';
+    if ((r && r.missed > 0) || ['incomplete', 'no_record', 'open'].includes(o.run_status)) return o.date < today ? 'problem' : 'late'; // red only once the day has ended
     if (o.run_status === 'done') return 'done';
-    if (o.run_status === 'active') return r && r.total > 0 && (r.collected + r.missed) * 2 >= r.total ? 'late' : 'early';
-    return 'idle';
+    return o.run_status === 'active' ? 'late' : 'idle';
   };
-  const TONE_BG = { idle: 'rgb(72, 102, 112)', early: 'rgb(125, 94, 19)', late: 'rgb(0, 105, 162)', done: 'rgb(59, 107, 52)', problem: 'rgb(147, 63, 52)' };
+  const TONE_BG = { idle: 'rgb(72, 102, 112)', late: 'rgb(0, 105, 162)', done: 'rgb(59, 107, 52)', problem: 'rgb(147, 63, 52)' };
   const todayOcc = mcal.routes.filter((o) => o.date === today && o.status === 'scheduled');
   const shown = [];
   for (const o of todayOcc) {
@@ -162,7 +161,7 @@ async function monthChecks(page, { today, tomorrow, workDay, ph }) {
   }
   check(shown.length >= 8 && shown.every(([, want, tone, bg]) => tone === want && bg === TONE_BG[want]), "the code's colour is the route's progress, the same for every route in that state", shown.filter(([, want, tone, bg]) => tone !== want || bg !== TONE_BG[want]));
   check(new Set(shown.map((x) => x[1])).size >= 2, 'today shows at least two different states', [...new Set(shown.map((x) => x[1]))]);
-  check((await page.locator('[data-testid=tone-key] span').count()) === 5 && (await page.locator('.legend, .lchip').count()) === 0, 'a key explains the five colours; there is no list of route codes above the calendar');
+  check((await page.locator('[data-testid=tone-key] span').count()) === 4 && (await page.locator('.legend, .lchip').count()) === 0, 'a key explains the four colours; there is no list of route codes above the calendar');
   // Two looks, switched in the header and remembered in this browser.
   const bodyBg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
   const look = page.locator('[data-testid=style-switch] button');

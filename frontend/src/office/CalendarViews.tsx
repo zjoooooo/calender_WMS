@@ -166,7 +166,7 @@ export function RouteRow({ o, paused }: { o: RouteOccurrence; paused?: boolean }
   return (
     <div
       className={cls}
-      data-tone={routeTone(o) ?? undefined}
+      data-tone={routeTone(o, data.today) ?? undefined}
       role="button"
       tabIndex={0}
       data-key={o.key}
@@ -342,7 +342,7 @@ function MonthAdd({ day, right }: { day: CalendarDay; right: boolean }) {
 function MonthRouteLine({ o }: { o: RouteOccurrence }) {
   const { t, lang } = useI18n();
   const { meta } = useSession();
-  const { matcher, open } = useCalendar();
+  const { matcher, open, data } = useCalendar();
   const dim = matcher.active && !matcher.route(o);
   const run = o.run;
   const resolved = run ? run.collected + run.missed : 0;
@@ -362,7 +362,7 @@ function MonthRouteLine({ o }: { o: RouteOccurrence }) {
     <button
       type="button"
       className={cls}
-      data-tone={routeTone(o) ?? undefined}
+      data-tone={routeTone(o, data.today) ?? undefined}
       data-key={o.key}
       data-code={o.code}
       title={[`${o.code} · ${o.name}`, covered || detail].filter(Boolean).join('\n')}
