@@ -3,7 +3,8 @@
 // Plan::mergeStops): weekdays (or Sunday / PH) added or removed, customers added, removed, moved or re-noted.
 // What only that part has (a planned schedule change such as "Tue Thu from 21 Dec", customers added or
 // removed from its start) is kept. This module mirrors those rules on the parts GET /api/routes/{id} returns:
-// - carry, mergeStops: the server's rules, one to one;
+// - carry, mergeStops, fitStops, standingFromDay: the server's rules, one to one (a stop's own collection
+//   weekdays, `days`, included);
 // - afterPatch, afterSplit, afterFollowing: what PATCH /api/routes/{id}, POST …/change-schedule and
 //   PUT …/dates/{D} with scope "following" leave in the parts (a part that a split creates has id 0);
 // - keptSchedules, keptListsFollowing, keptListsTemplate: the parts whose own plan the clerk should hear
@@ -13,19 +14,33 @@
 // notice says what the server then stores. The save sends the parts the notices were computed on (partsRev),
 // and the server refuses it when one of them changed meanwhile, so a notice cannot go stale either.
 import type { IsoDate, Lang, PartRev, RoutePart, Stop } from '../api';
-import { fmtDay, weekdayList } from '../i18n/format';
+import { fmtDay, weekdayList, weekdayOf } from '../i18n/format';
 import { addDays } from './calendarModel';
 
 /** PHP trim(): the server trims a stop note (V::str) of these characters only. */
 const phpTrim = (s: string) => s.replace(/^[ \t\n\r\0\x0B]+|[ \t\n\r\0\x0B]+$/g, '');
 
-/** Plan::validateStops: [{customer_id, note}], the note trimmed. */
-export function cleanStops(stops: readonly Stop[]): Stop[] {
-  return stops.map((s) => ({ customer_id: Number(s.customer_id), note: phpTrim(s.note ?? '') }));
+const sortedDays = (d: readonly number[]) => [...new Set(d)].sort((x, y) => x - y);
+const dayKey = (s?: Stop) => (s?.days ?? []).join();
+
+/** The stop with these weekdays (the key last), or with none. */
+function withDays(s: Stop, days?: readonly number[] | null): Stop {
+  const { days: _, ...rest } = s;
+  return days?.length ? { ...rest, days: [...days] } : rest;
 }
 
-const sameList = (a: readonly Stop[], b: readonly Stop[]) => a.length === b.length && a.every((s, i) => s.customer_id === b[i].customer_id && s.note === b[i].note);
-const sortedDays = (d: readonly number[]) => [...new Set(d)].sort((x, y) => x - y);
+/** Plan::validateStops: [{customer_id, note}], the note trimmed; a stop's weekdays sorted and unique, last. */
+export function cleanStops(stops: readonly Stop[]): Stop[] {
+  return stops.map((s) => withDays({ customer_id: Number(s.customer_id), note: phpTrim(s.note ?? '') }, s.days && sortedDays(s.days)));
+}
+
+const sameList = (a: readonly Stop[], b: readonly Stop[]) =>
+  a.length === b.length && a.every((s, i) => s.customer_id === b[i].customer_id && s.note === b[i].note && dayKey(s) === dayKey(b[i]));
+
+/** Plan::fitStops: stop weekdays kept inside `days`; a stop left with none runs every day (no key). */
+export function fitStops(stops: readonly Stop[], days: readonly number[]): Stop[] {
+  return stops.map((s) => (s.days ? withDays(s, s.days.filter((d) => days.includes(d))) : { ...s }));
+}
 
 /** Plan::carry for weekdays: the days added (old → neu) join `t`, the removed ones leave it; a part left with
  *  no weekday takes the new ones. */
@@ -49,7 +64,8 @@ export function carrySunPh(t: SunPh, old: SunPh, neu: SunPh): { sun: boolean; ph
 
 /**
  * Plan::mergeStops: list `seg` with the change from `old` to `neu`. A list equal to `old` becomes `neu`.
- * Otherwise removed customers leave; changed stop notes follow; customers in both lists that were moved take
+ * Otherwise removed customers leave; changed stop notes follow; changed stop weekdays follow when the stop in
+ * `seg` still has the old ones; customers in both lists that were moved take
  * the new order in the places they hold in `seg`; an added customer goes before the nearest customer after it
  * in `neu` that `seg` has (else at the end), unless `seg` already has it.
  */
@@ -57,14 +73,18 @@ export function mergeStops(old: readonly Stop[], neu: readonly Stop[], seg: read
   if (sameList(seg, old)) return neu.map((s) => ({ ...s }));
   const oldIds = old.map((s) => s.customer_id);
   const newIds = neu.map((s) => s.customer_id);
-  const oldNote = new Map(old.map((s) => [s.customer_id, s.note]));
-  const newNote = new Map(neu.map((s) => [s.customer_id, s.note]));
+  const oldBy = new Map(old.map((s) => [s.customer_id, s]));
+  const newBy = new Map(neu.map((s) => [s.customer_id, s]));
   const out: Stop[] = [];
   for (const s of seg) {
     const cid = s.customer_id;
     if (oldIds.includes(cid) && !newIds.includes(cid)) continue;
-    const changed = oldNote.has(cid) && newNote.has(cid) && oldNote.get(cid) !== newNote.get(cid);
-    out.push(changed ? { ...s, note: newNote.get(cid) ?? '' } : { ...s });
+    const o = oldBy.get(cid);
+    const n = newBy.get(cid);
+    let x: Stop = { ...s };
+    if (o && n && o.note !== n.note) x.note = n.note;
+    if (o && n && dayKey(o) !== dayKey(n) && dayKey(s) === dayKey(o)) x = withDays(x, n.days);
+    out.push(x);
   }
   const after = newIds.filter((c) => oldIds.includes(c));
   if (oldIds.filter((c) => newIds.includes(c)).join() !== after.join()) {
@@ -96,13 +116,91 @@ export function mergeStops(old: readonly Stop[], neu: readonly Stop[], seg: read
 }
 
 /** Plan::carry: the change a record went through (old → neu) carried into another part `t` of the route:
- *  weekdays or Sunday / PH and, with `stops`, the customer list. */
+ *  weekdays or Sunday / PH and, with `stops`, the customer list. A stop's weekdays stay inside the part's days;
+ *  new ones reach `t` only on the weekdays it runs (none of them: no change for `t`, unless the stop only lost
+ *  weekdays: then it leaves `t`), and only when `t`'s stop still has the old ones that `t` runs. */
 export function carry(t: RoutePart, old: RoutePart, neu: RoutePart, stops: boolean): RoutePart {
   const out: RoutePart = { ...t };
-  if (neu.days) out.days = carryDays(t.days ?? [], old.days ?? [], neu.days);
-  else Object.assign(out, carrySunPh(t, old, neu));
+  if (neu.days) {
+    const days = carryDays(t.days ?? [], old.days ?? [], neu.days);
+    out.days = days;
+    out.stops = fitStops(t.stops, days);
+    if (stops && !sameList(neu.stops, old.stops)) {
+      // Both lists as `t` holds them: a stop's weekdays are only the ones `t` runs.
+      const was = fitStops(old.stops, days);
+      const raw = new Map(old.stops.map((s) => [s.customer_id, s.days]));
+      const had = new Map(was.map((s) => [s.customer_id, s.days]));
+      const own = new Map(out.stops.map((s) => [s.customer_id, s.days]));
+      const inn = neu.stops.flatMap((s) => {
+        const o = raw.get(s.customer_id);
+        const oT = had.get(s.customer_id);
+        if (o && !oT) return [withDays(s)]; // the old days name no weekday of `t`: no change for `t`
+        const fit = (s.days ?? []).filter((d) => days.includes(d));
+        if (fit.length || !s.days || !oT) return [withDays(s, fit)];
+        // weekdays were only taken away and `t` runs none of the rest: the stop leaves `t`; else no change for `t`
+        return s.days.every((d) => o!.includes(d)) && (own.get(s.customer_id) ?? []).join() === oT.join() ? [] : [withDays(s, oT)];
+      });
+      out.stops = mergeStops(was, inn, out.stops);
+    }
+    return out;
+  }
+  Object.assign(out, carrySunPh(t, old, neu));
   if (stops && !sameList(neu.stops, old.stops)) out.stops = mergeStops(old.stops, neu.stops, t.stops);
   return out;
+}
+
+/**
+ * Plan::standingFromDay (without its R8 step, which the office cannot see): the standing list of `part` after
+ * "this date and following" saved `saved` (the date's list, no weekdays) on `date`. A customer removed from the
+ * date leaves the route, or loses only that weekday when it has its own days and another one is left; a
+ * customer of the route not due that weekday gains it; a new customer is added with no days.
+ */
+export function standingFromDay(part: RoutePart, date: IsoDate, saved: readonly Stop[]): Stop[] {
+  const dow = weekdayOf(date);
+  const savedIds = new Set(saved.map((s) => s.customer_id));
+  const seg: Stop[] = [];
+  const old: Stop[] = [];
+  for (const s0 of part.stops) {
+    let s: Stop = { ...s0 };
+    if (s.days) {
+      const due = s.days.includes(dow);
+      if (!due && savedIds.has(s.customer_id)) s = withDays(s, sortedDays([...s.days, dow]));
+      else if (due && s.days.length > 1 && !savedIds.has(s.customer_id)) s = withDays(s, s.days.filter((d) => d !== dow));
+    }
+    seg.push(s);
+    if (!s.days || s.days.includes(dow)) old.push(s); // the date's list before the save
+  }
+  const days = new Map(seg.map((s) => [s.customer_id, s.days]));
+  return mergeStops(old, saved.map((s) => withDays({ customer_id: s.customer_id, note: s.note }, days.get(s.customer_id))), seg);
+}
+
+/** The stops of `part` (with their days now) whose weekdays that save changes: `gains` are saved customers not
+ *  due on the date's weekday, `loses` are due customers with other days that the saved list does not have. */
+export function dayEffects(part: RoutePart, date: IsoDate, saved: readonly Stop[]): { gains: Stop[]; loses: Stop[] } {
+  const dow = weekdayOf(date);
+  const savedIds = new Set(saved.map((s) => s.customer_id));
+  const own = part.days ? part.stops.filter((s) => s.days) : [];
+  return {
+    gains: own.filter((s) => !s.days!.includes(dow) && savedIds.has(s.customer_id)),
+    loses: own.filter((s) => s.days!.includes(dow) && s.days!.length > 1 && !savedIds.has(s.customer_id)),
+  };
+}
+
+/**
+ * The customers whose stop loses its weekdays in a save (Plan::fitStops, warning STOP_DAYS_RESET): the stop has
+ * `days` in a part of `before` and none in the part of `after` that continues it (the same id; a part the save
+ * creates, id 0, continues the part before it).
+ */
+export function daysReset(before: readonly RoutePart[], after: readonly RoutePart[] | null): number[] {
+  const out = new Set<number>();
+  (after ?? []).forEach((a, n) => {
+    const b = before.find((p) => p.id === (a.id === 0 ? after![n - 1]?.id : a.id));
+    for (const s of b?.stops ?? []) {
+      const now = a.stops.find((x) => x.customer_id === s.customer_id);
+      if (s.days && now && !now.days) out.add(s.customer_id);
+    }
+  });
+  return [...out];
 }
 
 type SchedFields = { days?: number[]; sun?: boolean | null; ph?: boolean | null };
@@ -147,7 +245,7 @@ export function afterPatch(parts: readonly RoutePart[], id: number, body: PartsP
   if (!old) return [...parts];
   const r = withSched(old, body);
   if (!r) return null;
-  if (body.stops !== undefined) r.stops = cleanStops(body.stops);
+  r.stops = body.stops !== undefined ? cleanStops(body.stops) : r.days ? fitStops(r.stops, r.days) : r.stops;
   if (parts.length === 1 && body.end !== undefined) r.end = body.end;
   const out = parts.map((p) => (p.id === id ? r : carry(p, old, r, body.stops !== undefined)));
   if (body.start !== undefined) out[0] = { ...out[0], start: body.start };
@@ -168,7 +266,7 @@ export function afterSplit(parts: readonly RoutePart[], body: PartsSchedule, tod
   if (seg.end !== null && from > seg.end) return null;
   const created = withSched(from === seg.start ? seg : { ...seg, id: 0, start: from }, body);
   if (!created) return null;
-  if (body.stops !== undefined && body.stops !== null) created.stops = cleanStops(body.stops);
+  created.stops = body.stops !== undefined && body.stops !== null ? cleanStops(body.stops) : created.days ? fitStops(created.stops, created.days) : created.stops;
   const later = new Set(parts.slice(n + 1).map((p) => p.id));
   let out = (from === seg.start ? parts.map((p, k) => (k === n ? created : p)) : [...parts.slice(0, n), { ...seg, end: addDays(from, -1) }, created, ...parts.slice(n + 1)]).map(
     (p) => (later.has(p.id) ? carry(p, seg, created, true) : p),
@@ -183,13 +281,14 @@ export function afterSplit(parts: readonly RoutePart[], body: PartsSchedule, tod
 /**
  * PUT /api/routes/{id}/dates/{D} with scope "following" and a list (R12): record `id`, the one that runs on D,
  * has that list from D (a template replace or a split, Plan::putRouteDate) and every later part gets the change
- * from that record's own list (carry). Returns those later parts, as the save leaves them.
+ * from that record's own list (carry). Returns those later parts, as the save leaves them. On a regular route
+ * the list is the date's, and the record's standing list is built from it (standingFromDay).
  */
-export function afterFollowing(parts: readonly RoutePart[], id: number, stops: readonly Stop[]): RoutePart[] {
+export function afterFollowing(parts: readonly RoutePart[], id: number, stops: readonly Stop[], date: IsoDate): RoutePart[] {
   const k = parts.findIndex((p) => p.id === id);
   if (k < 0) return [];
   const seg = parts[k];
-  const neu: RoutePart = { ...seg, stops: cleanStops(stops) };
+  const neu: RoutePart = { ...seg, stops: seg.days ? standingFromDay(seg, date, cleanStops(stops)) : cleanStops(stops) };
   return parts.slice(k + 1).map((p) => carry(p, seg, neu, true));
 }
 
@@ -266,10 +365,13 @@ function keptOf(part: RoutePart, after: RoutePart, have: readonly Stop[], saved:
 }
 
 /** The scope dialog's "this date and all following" on record `id` (afterFollowing): the later parts whose
- *  list after the save has other customers than the saved list (an order of their own is not listed). */
-export function keptListsFollowing(parts: readonly RoutePart[], id: number, stops: readonly Stop[]): KeptList[] {
+ *  list after the save has other customers than the record's standing list after it (an order of their own is
+ *  not listed). */
+export function keptListsFollowing(parts: readonly RoutePart[], id: number, stops: readonly Stop[], date: IsoDate): KeptList[] {
   const k = parts.findIndex((p) => p.id === id);
-  return afterFollowing(parts, id, stops).flatMap((a, j) => keptOf(parts[k + 1 + j], a, a.stops, stops));
+  if (k < 0) return [];
+  const saved = parts[k].days ? standingFromDay(parts[k], date, cleanStops(stops)) : stops;
+  return afterFollowing(parts, id, stops, date).flatMap((a, j) => keptOf(parts[k + 1 + j], a, a.stops, saved));
 }
 
 /**

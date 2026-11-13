@@ -12,8 +12,8 @@ export interface Draft {
   note: string;
 }
 
-export function draftFrom(stops: { customer_id: number; note: string }[], note: string): Draft {
-  return { stops: stops.map((s) => ({ customer_id: s.customer_id, note: s.note ?? '' })), removed: [], note: note ?? '' };
+export function draftFrom(stops: Stop[], note: string): Draft {
+  return { stops: stops.map((s) => ({ customer_id: s.customer_id, note: s.note ?? '', ...(s.days ? { days: [...s.days] } : {}) })), removed: [], note: note ?? '' };
 }
 
 /** Moves the stop at `from` to `to` (both clamped); the same arrayMove as a drag end. */
@@ -67,8 +67,32 @@ export function setStopNote(d: Draft, index: number, note: string): Draft {
   return { ...d, stops: d.stops.map((s, i) => (i === index ? { ...s, note } : s)) };
 }
 
+/** The stop's collection weekdays: sorted, unique, only days the route runs. A selection with no day is ignored;
+ *  every route day means "no weekdays of its own" (the key is removed). */
+export function setStopDays(d: Draft, index: number, days: number[], routeDays: number[]): Draft {
+  const own = [...new Set(days)].filter((x) => routeDays.includes(x)).sort((a, b) => a - b);
+  if (!own.length || !d.stops[index]) return d;
+  const all = routeDays.every((x) => own.includes(x));
+  return {
+    ...d,
+    stops: d.stops.map((s, i) => {
+      if (i !== index) return s;
+      const { days: _, ...rest } = s;
+      return all ? rest : { ...rest, days: own };
+    }),
+  };
+}
+
+/** Per route day, the number of stops collected on it (no weekdays of their own, or that day among them). */
+export function dayCounts(stops: Stop[], routeDays: number[]): number[] {
+  return routeDays.map((day) => stops.filter((s) => !s.days || s.days.includes(day)).length);
+}
+
 export function sameStops(a: Stop[], b: Stop[]): boolean {
-  return a.length === b.length && a.every((s, i) => s.customer_id === b[i].customer_id && (s.note ?? '') === (b[i].note ?? ''));
+  return (
+    a.length === b.length &&
+    a.every((s, i) => s.customer_id === b[i].customer_id && (s.note ?? '') === (b[i].note ?? '') && (s.days ?? []).join() === (b[i].days ?? []).join())
+  );
 }
 
 export function isDirty(d: Draft, base: { stops: Stop[]; note: string }): boolean {

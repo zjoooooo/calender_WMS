@@ -209,6 +209,7 @@ final class Http
         'RECURRING_NOT_ALLOWED' => 'This waste type allows one-off tasks only',
         'TASK_FIELD_IMMUTABLE' => 'Type, customer and kind of a task cannot be changed: create a new task',
         'EMPTY_ROUTE' => 'The route has no customers',
+        'STOP_DAYS_RESET' => 'Some customers\' collection weekdays no longer fit the route. They are now collected every day the route runs.',
         // Runs and visits (R21-R30), files (R35)
         'NOT_TODAY' => 'This job is not today\'s',
         'NOT_RUNNABLE' => 'This job cannot be taken (not scheduled, no stops, or already done)',

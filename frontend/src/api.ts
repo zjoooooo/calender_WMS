@@ -58,7 +58,7 @@ export const ERROR_CODES = [
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
 /** Warnings (not errors, §10.11). */
-export const WARNING_CODES = ['EMPTY_ROUTE', 'OFF_PLAN', 'LATE'] as const;
+export const WARNING_CODES = ['EMPTY_ROUTE', 'OFF_PLAN', 'LATE', 'STOP_DAYS_RESET'] as const;
 export type WarningCode = (typeof WARNING_CODES)[number];
 
 export class ApiError extends Error {
@@ -554,6 +554,9 @@ export const getCalendar = (view: CalendarView, anchor: IsoDate, opts?: RequestO
 export interface Stop {
   customer_id: number;
   note: string;
+  /** The stop's own collection weekdays (ISO 1..6, sorted), only in the standing list of a recurring regular
+   *  route. Absent = every day the route runs. */
+  days?: number[];
 }
 
 export interface Route {

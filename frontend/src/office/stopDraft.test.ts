@@ -11,7 +11,9 @@ import {
   moveUp,
   removeStop,
   restoreStop,
+  setStopDays,
   setStopNote,
+  dayCounts,
 } from './stopDraft';
 
 const ids = (list: { customer_id: number }[]) => list.map((s) => s.customer_id);
@@ -77,5 +79,34 @@ describe('draft edits', () => {
     expect(isDirty(d, saved)).toBe(true);
     const back = draftFrom(saved.stops, 'x');
     expect(isDirty(back, saved)).toBe(true); // a note change alone makes it dirty
+  });
+});
+
+describe('stop weekdays', () => {
+  const route = [1, 3, 5];
+  const saved = { stops: [{ customer_id: 10, note: '', days: [1, 5] }, { customer_id: 20, note: '' }], note: '' };
+  it('the draft keeps them, and a weekday change alone makes it dirty', () => {
+    const d = draftFrom(saved.stops, '');
+    expect(d.stops).toEqual(saved.stops);
+    expect(d.stops[0].days).not.toBe(saved.stops[0].days);
+    expect(isDirty(d, saved)).toBe(false);
+    expect(isDirty(setStopDays(d, 0, [1], route), saved)).toBe(true);
+    expect(isDirty(setStopDays(d, 1, [1], route), saved)).toBe(true);
+  });
+  it('setStopDays: sorted, unique, inside the route days; every route day removes the key; none is ignored', () => {
+    const d = draftFrom(saved.stops, '');
+    const a = setStopDays(d, 1, [5, 1, 1, 2], route);
+    expect(a.stops[1]).toEqual({ customer_id: 20, note: '', days: [1, 5] });
+    expect(Object.keys(a.stops[1])).toEqual(['customer_id', 'note', 'days']);
+    expect(a.stops[0]).toBe(d.stops[0]); // other stops untouched
+    const all = setStopDays(d, 0, [5, 3, 1], route);
+    expect(all.stops[0]).toEqual({ customer_id: 10, note: '' });
+    expect('days' in all.stops[0]).toBe(false);
+    expect(setStopDays(d, 0, [], route)).toBe(d);
+    expect(setStopDays(d, 0, [2, 4], route)).toBe(d);
+  });
+  it('dayCounts: the stops collected on each route day', () => {
+    expect(dayCounts(saved.stops, route)).toEqual([2, 1, 2]);
+    expect(dayCounts([{ customer_id: 10, note: '', days: [1] }], route)).toEqual([1, 0, 0]);
   });
 });

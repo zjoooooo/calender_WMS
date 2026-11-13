@@ -174,9 +174,8 @@ final class Usage
     }
 
     /**
-     * R8 effective stop customer ids of a job on a date, from the live plan:
-     * override(d).stops ?? route.stops, minus inactive customers and customers without the route's waste
-     * type. Unknown job (also a job of the old task feature): [].
+     * R8 effective stop customer ids of a job on a date, from the live plan (Schedule::effectiveStops).
+     * Unknown job (also a job of the old task feature): [].
      * @return list<int>
      */
     public static function jobStopIds(array $plan, string $date, string $job): array
@@ -194,26 +193,7 @@ final class Usage
         if ($route === null) {
             return [];
         }
-        $stops = $route['stops'] ?? [];
-        if (!self::isOneOff($route)) {
-            foreach ($plan['route_overrides'] ?? [] as $o) {
-                if ($o['route_id'] === $id && $o['date'] === $date && is_array($o['stops'] ?? null)) {
-                    $stops = $o['stops'];
-                }
-            }
-        }
-        $customers = [];
-        foreach ($plan['customers'] ?? [] as $cu) {
-            $customers[$cu['id']] = $cu;
-        }
-        $ids = [];
-        foreach ($stops as $s) {
-            $cu = $customers[(int) $s['customer_id']] ?? null;
-            if ($cu !== null && !empty($cu['active']) && in_array(self::routeType($route), $cu['waste_types'] ?? [], true)) {
-                $ids[] = (int) $s['customer_id'];
-            }
-        }
-        return $ids;
+        return array_map(static fn ($s) => (int) $s['customer_id'], Schedule::effectiveStops($plan, $route, $date));
     }
 
     /** Stop-list customers of the run with no collected or missed visit (R21). */

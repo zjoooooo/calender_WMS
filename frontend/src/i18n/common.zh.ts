@@ -89,6 +89,7 @@ const common = {
   'warn.EMPTY_ROUTE': '路线里还没有客户',
   'warn.OFF_PLAN': '不在计划名单内（已保存）',
   'warn.LATE': '换日后才提交（已保存，标记为迟交）',
+  'warn.STOP_DAYS_RESET': '有客户的收运星期已不在路线的出车星期内，现改为路线每次出车都收。',
 
   'err.VALIDATION': '输入有误，请检查',
   'err.VALIDATION_field': '输入有误：{field}',

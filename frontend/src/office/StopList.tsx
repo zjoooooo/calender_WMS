@@ -21,7 +21,8 @@ import {
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { Stop } from '../api';
-import { useI18n } from '../i18n';
+import { useI18n, weekdayList, weekdayName } from '../i18n';
+import { Chip } from '../ui/Chip';
 import { dropMove, moveDown, moveToPosition, moveUp } from './stopDraft';
 
 export interface StopRowView {
@@ -51,9 +52,13 @@ export interface StopListProps {
   onChange: (stops: Stop[]) => void;
   onRemove: (index: number) => void;
   onNote?: (index: number, note: string) => void;
+  /** With both, each stop gets the "Collection weekdays" control: the days the route runs, and the stop's new
+   *  days (the standing list of a recurring regular route only). */
+  routeDays?: number[];
+  onDays?: (index: number, days: number[]) => void;
 }
 
-export function StopList({ stops, view, editable, onChange, onRemove, onNote }: StopListProps) {
+export function StopList({ stops, view, editable, onChange, onRemove, onNote, routeDays, onDays }: StopListProps) {
   const { t } = useI18n();
   const [dragId, setDragId] = useState<string | null>(null);
   const sensors = useSensors(
@@ -102,6 +107,8 @@ export function StopList({ stops, view, editable, onChange, onRemove, onNote }: 
             onMoveTo={(pos) => onChange(moveToPosition(stops, i, pos))}
             onRemove={() => onRemove(i)}
             onNote={onNote ? (n) => onNote(i, n) : undefined}
+            routeDays={routeDays}
+            onDays={onDays ? (d) => onDays(i, d) : undefined}
           />
         ))}
       </SortableContext>
@@ -123,6 +130,8 @@ interface RowProps {
   onMoveTo?: (pos: number) => void;
   onRemove?: () => void;
   onNote?: (note: string) => void;
+  routeDays?: number[];
+  onDays?: (days: number[]) => void;
 }
 
 function SortableStop(props: RowProps) {
@@ -152,10 +161,13 @@ function StopRowBody(
     handle?: { ref: (el: HTMLElement | null) => void; props: Record<string, unknown> };
   },
 ) {
-  const { t } = useI18n();
-  const { s, index, count, v, editable } = props;
+  const { t, lang } = useI18n();
+  const { s, index, count, v, editable, routeDays, onDays } = props;
   const [seqEdit, setSeqEdit] = useState<string | null>(null);
   const [noteEdit, setNoteEdit] = useState(false);
+  const [daysEdit, setDaysEdit] = useState(false);
+  const canDays = editable && !!routeDays && !!onDays;
+  const own = s.days ?? routeDays ?? [];
   const cls = ['stop', v.done ? 'done' : '', v.tone ?? '', v.isNew ? 'new' : '', props.placeholder ? 'placeholder' : '', props.overlay ? 'overlay' : ''].filter(Boolean).join(' ');
   const commitSeq = () => {
     if (seqEdit !== null && seqEdit.trim() !== '') props.onMoveTo?.(Number(seqEdit));
@@ -213,6 +225,11 @@ function StopRowBody(
             <span className="sn">{v.name}</span>
           )}
           {v.tags}
+          {s.days && (
+            <span className="tag" data-testid="stop-days">
+              {weekdayList(s.days, lang)}
+            </span>
+          )}
         </div>
         {v.detail && <div className="sa">{v.detail}</div>}
         {v.extra && <div className="wt">{v.extra}</div>}
@@ -232,12 +249,29 @@ function StopRowBody(
         ) : s.note ? (
           <div className="snote">📝 {s.note}</div>
         ) : null}
+        {canDays && daysEdit && (
+          <div className="chips" role="group" aria-label={`${t('stops.days')} ${v.name}`} style={{ marginTop: 4 }}>
+            {routeDays.map((d) => {
+              const pressed = own.includes(d);
+              return (
+                <Chip key={d} pressed={pressed} disabled={pressed && own.length === 1} onClick={() => onDays(pressed ? own.filter((x) => x !== d) : [...own, d])}>
+                  {weekdayName(d, lang)}
+                </Chip>
+              );
+            })}
+          </div>
+        )}
       </div>
       {editable ? (
         <div className="ops">
           {props.onNote && (
             <button type="button" className="icon-btn" onClick={() => setNoteEdit(true)} title={t('stops.note')} aria-label={`${t('stops.note')} ${v.name}`}>
               ✎
+            </button>
+          )}
+          {canDays && (
+            <button type="button" className="icon-btn" aria-pressed={daysEdit} onClick={() => setDaysEdit((x) => !x)} title={t('stops.days')} aria-label={`${t('stops.days')} ${v.name}`}>
+              📅
             </button>
           )}
           <button type="button" className="icon-btn" disabled={index === 0} onClick={props.onUp} aria-label={`${t('common.moveUp')} ${v.name}`}>

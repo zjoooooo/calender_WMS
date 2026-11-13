@@ -22,7 +22,7 @@ import {
   type RouteListItem,
   type Stop,
 } from '../api';
-import { fmtDay, useI18n, weekdayOf } from '../i18n';
+import { fmtDay, useI18n, weekdayName, weekdayOf } from '../i18n';
 import { useSession } from '../session';
 import { TypeTag, WasteTag } from '../ui/Chip';
 import { ConfirmDialog } from '../ui/Dialog';
@@ -38,7 +38,7 @@ import { keptListsTemplate, keptListText, partsRev } from './routeCarry';
 import { chainPeriod, endTarget, liveChain, routeChain, segmentLive, segmentOn, segmentPeriods, useAllRoutes } from './routeChain';
 import { RouteForm } from './RouteForm';
 import { StopList } from './StopList';
-import { addStop, draftFrom, isDirty, removeStop, restoreStop, setStopNote } from './stopDraft';
+import { addStop, dayCounts, draftFrom, isDirty, removeStop, restoreStop, sameStops, setStopDays, setStopNote } from './stopDraft';
 import './office.css';
 
 type Dlg =
@@ -273,7 +273,7 @@ function TemplateEditor({ id, onClose }: { id: number; onClose: () => void }) {
   const sig = JSON.stringify(base);
   useEffect(() => {
     if (!route || sig === baseSig) return;
-    const clean = baseSig === null || JSON.stringify(draft.stops) === baseSig;
+    const clean = baseSig === null || sameStops(draft.stops, JSON.parse(baseSig) as Stop[]);
     setBaseSig(sig);
     if (clean) setDraft(draftFrom(base, ''));
   }, [sig, route]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -289,6 +289,8 @@ function TemplateEditor({ id, onClose }: { id: number; onClose: () => void }) {
   const others = live.filter((x) => x.id !== route?.id);
   const fmtShort = (d: string) => fmtDay(d, lang, { weekday: false });
   const fromWord = (d: string) => t('rule.from', { date: d });
+  // A stop may have its own collection weekdays only in the standing list of a recurring regular route.
+  const stopDays = route?.recurring && route.type === 'regular' ? (route.days ?? undefined) : undefined;
   // What the other parts keep after this save (from today: every other part; from D: the parts from D on),
   // once the customer names are loaded.
   const kept = useMemo(
@@ -363,6 +365,13 @@ function TemplateEditor({ id, onClose }: { id: number; onClose: () => void }) {
                           others: segmentPeriods(others, fmtShort, fromWord).join(', '),
                         })}
             </div>
+            {stopDays && draft.stops.some((s) => s.days) && (
+              <div className="muted small" data-testid="day-counts">
+                {dayCounts(draft.stops, stopDays)
+                  .map((n, i) => `${weekdayName(stopDays[i], lang)} ${n}`)
+                  .join(' · ')}
+              </div>
+            )}
           </>
         )
       }
@@ -433,6 +442,8 @@ function TemplateEditor({ id, onClose }: { id: number; onClose: () => void }) {
               onChange={(stops) => setDraft((d) => ({ ...d, stops }))}
               onRemove={(i) => setDraft((d) => removeStop(d, i))}
               onNote={(i, n) => setDraft((d) => setStopNote(d, i, n))}
+              routeDays={stopDays}
+              onDays={(i, days) => setDraft((d) => setStopDays(d, i, days, stopDays ?? []))}
             />
             {draft.stops.length === 0 && <div className="muted small">{t('rd.noStops')}</div>}
           </div>

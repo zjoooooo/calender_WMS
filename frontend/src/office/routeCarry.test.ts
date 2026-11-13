@@ -11,6 +11,9 @@ import {
   afterSplit,
   carryDays,
   carrySunPh,
+  dayEffects,
+  daysReset,
+  fitStops,
   keptListsFollowing,
   keptListsTemplate,
   keptListText,
@@ -18,6 +21,7 @@ import {
   keptScheduleText,
   mergeStops,
   partsRev,
+  standingFromDay,
 } from './routeCarry';
 
 interface Case {
@@ -44,7 +48,7 @@ describe('the shared carry cases (what the server stores)', () => {
       if (c.call.kind === 'patch') expect(afterPatch(c.parts, c.call.id, b)).toEqual(c.after);
       else if (c.call.kind === 'schedule') expect(afterSplit(c.parts, b as { from: string }, today)).toEqual(c.after);
       // "following": record id has the list from the date on; the later parts are predicted
-      else expect(afterFollowing(c.parts, c.call.id, b.stops as Stop[])).toEqual(c.after.filter((p) => p.start > c.call.date!));
+      else expect(afterFollowing(c.parts, c.call.id, b.stops as Stop[], c.call.date!)).toEqual(c.after.filter((p) => p.start > c.call.date!));
     });
   }
   it('covers the scenarios of plan_split_chain_test.php', () => {
@@ -186,7 +190,7 @@ describe('the save sends the parts its notices were computed on', () => {
 
 describe('stop lists: the notice names what a later part also has or does not have', () => {
   it('T5: list [70] from 25 Nov: 2 Dec = [21, 70]; named per part', () => {
-    const k = keptListsFollowing(T5, 131, S(70));
+    const k = keptListsFollowing(T5, 131, S(70), '2026-11-25');
     expect(k.map((x) => [x.part.id, ids(x.after.stops), x.also, x.lacks])).toEqual([
       [132, [21, 70], [21], []],
       [133, [21, 70], [21], []],
@@ -196,10 +200,10 @@ describe('stop lists: the notice names what a later part also has or does not ha
   });
   it('also has and does not have; a pure order difference is not named', () => {
     const parts = [R(1, '2026-11-11', '2026-12-01', [1, 3, 5], S(12, 40, 21)), R(2, '2026-12-02', null, [1, 3, 5], S(21, 40, 12))];
-    expect(afterFollowing(parts, 1, S(12, 40)).map((p) => ids(p.stops))).toEqual([[40, 12]]);
-    expect(keptListsFollowing(parts, 1, S(12, 40))).toEqual([]);
+    expect(afterFollowing(parts, 1, S(12, 40), '2026-11-25').map((p) => ids(p.stops))).toEqual([[40, 12]]);
+    expect(keptListsFollowing(parts, 1, S(12, 40), '2026-11-25')).toEqual([]);
     const own = [R(1, '2026-11-11', '2026-12-01', [1, 3, 5], S(12, 40)), R(2, '2026-12-02', null, [1, 3, 5], S(21, 40))];
-    const k = keptListsFollowing(own, 1, S(12, 40, 70));
+    const k = keptListsFollowing(own, 1, S(12, 40, 70), '2026-11-25');
     expect(k.map((x) => [x.also, x.lacks])).toEqual([[[21], [12]]]);
     expect(keptListText(k[0], today, en, 'en', nameOf)).toBe('Already planned from Wed 2 Dec: that part keeps its own list. It also has Sunday Market Stall and does not have ABC Restaurant.');
     expect(keptListText(k[0], today, zh, 'zh', nameOf)).toBe('已有安排（12月2日起）：那一段保留自己的名单。它比这份名单多了 Sunday Market Stall，少了 ABC Restaurant。');
@@ -221,5 +225,49 @@ describe('stop lists: the notice names what a later part also has or does not ha
   it('the template editor from D inside a later part with the same customers: nothing is said about it', () => {
     const parts = [R(1, '2026-11-11', '2026-12-01', [1, 3, 5], S(12, 40)), R(2, '2026-12-02', null, [2, 4], S(40, 12))];
     expect(keptListsTemplate(parts, 1, S(12, 40, 70), '2026-12-08', today)).toEqual([]);
+  });
+});
+
+// Round 8: a stop's own collection weekdays.
+const D = (customer_id: number, days?: number[]): Stop => ({ customer_id, note: '', ...(days ? { days } : {}) });
+
+describe('stop weekdays', () => {
+  it('fitStops: kept inside the days; a stop left with none has no weekdays', () => {
+    expect(fitStops([D(12, [1, 5]), D(40, [5]), D(21)], [1, 3])).toEqual([D(12, [1]), D(40), D(21)]);
+    expect('days' in fitStops([D(40, [5])], [1, 3])[0]).toBe(false);
+  });
+  it('mergeStops: new weekdays follow only where the stop still has the old ones', () => {
+    expect(mergeStops([D(12), D(40)], [D(12), D(40, [1, 3])], [D(40), D(21), D(12)])).toEqual([D(40, [1, 3]), D(21), D(12)]);
+    expect(mergeStops([D(12, [1]), D(40)], [D(12, [1, 3]), D(40)], [D(40), D(12, [2])])).toEqual([D(40), D(12, [2])]);
+    expect(mergeStops([D(12, [1]), D(40)], [D(12), D(40)], [D(40), D(12, [1])])).toEqual([D(40), D(12)]);
+  });
+  // backend stop_days_test case 8: Wed 18 Nov, the date's list is 40, 21
+  const part = R(1, '2026-11-11', null, [1, 3, 5], [D(12, [1]), D(40), D(21, [3, 5])]);
+  const wed = '2026-11-18';
+  it('standingFromDay: the saves of "this date and following"', () => {
+    expect(standingFromDay(part, wed, S(21, 40, 70))).toEqual([D(12, [1]), D(21, [3, 5]), D(40), D(70)]);
+    expect(standingFromDay(part, wed, S(40))).toEqual([D(12, [1]), D(40), D(21, [5])]);
+    expect(standingFromDay(part, wed, S(21))).toEqual([D(12, [1]), D(21, [3, 5])]);
+    expect(standingFromDay(part, wed, S(40, 21, 12))).toEqual([D(40), D(21, [3, 5]), D(12, [1, 3])]);
+    // without stop weekdays it is the saved list
+    expect(standingFromDay(R(1, '2026-11-11', null, [1, 3, 5], S(12, 40)), wed, S(40, 70))).toEqual(S(40, 70));
+  });
+  it('dayEffects: who gains or loses that weekday', () => {
+    expect(dayEffects(part, wed, S(40, 21, 12))).toEqual({ gains: [D(12, [1])], loses: [] });
+    expect(dayEffects(part, wed, S(40))).toEqual({ gains: [], loses: [D(21, [3, 5])] });
+    expect(dayEffects(part, wed, S(40, 21))).toEqual({ gains: [], loses: [] });
+    // a stop whose only day it is simply leaves the route
+    expect(dayEffects(R(1, '2026-11-11', null, [1, 3, 5], [D(21, [3])]), wed, [])).toEqual({ gains: [], loses: [] });
+  });
+  it('keptListsFollowing compares a later part with the standing list, not with the date\'s list', () => {
+    const parts = [part, R(2, '2026-12-07', null, [1, 3, 5], [D(12, [1]), D(40), D(21, [3, 5])])];
+    expect(keptListsFollowing(parts, 1, S(40, 21), wed)).toEqual([]); // 12 is not on the Wednesday list, but is on the route
+  });
+  it('daysReset: the customers whose weekdays a route-weekday change removes, per part and in a created part', () => {
+    const parts = [R(1, '2026-11-11', '2026-11-29', [1, 3, 5], [D(12, [1, 5]), D(40, [5]), D(21)]), R(2, '2026-11-30', null, [1, 3, 5], [D(40), D(12, [5])])];
+    expect(daysReset(parts, afterPatch(parts, 1, { days: [1, 3] }))).toEqual([40, 12]);
+    expect(daysReset(parts, afterPatch(parts, 1, { days: [1, 3, 5, 6] }))).toEqual([]);
+    expect(daysReset(parts, afterSplit(parts, { from: '2026-11-20', days: [2, 4] }, today))).toEqual([12, 40]);
+    expect(daysReset(parts, null)).toEqual([]);
   });
 });
