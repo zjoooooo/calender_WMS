@@ -18,9 +18,9 @@
   --r1: #4E79A7; --r2: #F28E2B; --r3: #E15759; --r4: #76B7B2; --r5: #59A14F;
   --r6: #EDC948; --r7: #B07AA1; --r8: #FF9DA7; --r9: #9C755F; --r10: #17BECF;
   --rc: var(--line);
-  /* Progress colours of a route code on the calendar (white text on each): not started, under way (less
-     than half), under way (half or more), all collected, problem. */
-  --st-idle: #64748B; --st-early: #B45309; --st-late: #2563EB; --st-done: #15803D; --st-problem: #DC2626;
+  /* Progress colours of a route code on the calendar (white text on each): not started, under way (or not
+     finished yet today), all collected, problem (only once the day has ended). */
+  --st-idle: #64748B; --st-late: #2563EB; --st-done: #15803D; --st-problem: #DC2626;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -56,7 +56,7 @@
   --warn-bg: #F8E6C3; --danger-bg: #FEDBD5; --ok-bg: #D8F0D4; --info-bg: #D5EBFE;
   --cal-today: #0069A2; --cal-ph: #933F34; --cal-ph-bg: #FEDBD5;
   --shadow: 0 8px 24px rgba(10, 50, 80, .2);
-  --st-idle: #486670; --st-early: #7D5E13; --st-late: #0069A2; --st-done: #3B6B34; --st-problem: #933F34;
+  --st-idle: #486670; --st-late: #0069A2; --st-done: #3B6B34; --st-problem: #933F34;
   --font-head: "Songti SC", "Noto Serif SC", "Source Han Serif SC", "STSong", "SimSun", Georgia, serif;
 }
 @media (prefers-color-scheme: dark) {

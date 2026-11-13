@@ -18,7 +18,7 @@
 6. Night shifts are supported: the working day rolls over at a configurable hour (default 04:00), so work done after midnight still belongs to the previous day (R1).
 
 ### In v1
-- Calendar: week view with one-line route rows and month view with route-code chips. Routes are identified by their code. The colour behind a code on the calendar is the route's progress on that day, not the route: grey not started, ochre under way (less than half), blue under way (half or more), green all collected, red a problem (a past day not finished, no driver, or a stop not collected). The office pages have two looks, switched in the header: "Jiangshan" (the palette of the Song painting *A Thousand Li of Rivers and Mountains*, the default) and a plain neutral one. Clicking a code highlights that route, and search matches a code or a customer name. A route line carries a tag only for what is not the usual case: `S` / `⚡A` for a special or adhoc route, `RCY` for a route that is not REL.
+- Calendar: week view with one-line route rows and month view with route-code chips. Routes are identified by their code. The colour behind a code on the calendar is the route's progress on that day, not the route: grey not started, blue under way or not finished yet today, green all collected, red a day that has ended with work left (not finished, no driver, or a stop not collected). Red never shows on the running operational day: it appears after the rollover hour (04:00) of the next morning. The office pages have two looks, switched in the header: "Jiangshan" (the palette of the Song painting *A Thousand Li of Rivers and Mountains*, the default) and a plain neutral one. Clicking a code highlights that route, and search matches a code or a customer name. A route line carries a tag only for what is not the usual case: `S` / `⚡A` for a special or adhoc route, `RCY` for a route that is not REL.
 - Route editing: add, edit and delete route containers; add, remove and reorder customers (drag and drop with mouse or touch, plus ↑ ↓ buttons and "move to #"). A change can apply to "only this date" or to "this date and the following ones". Other route actions: skip a date, copy to another date (to run on a PH or move to a work day), change the schedule, and urgent pickup.
 - Free submissions: a driver submits an OTC, COMPACTOR or EROSE collection at any time (type, customer, weight; photos, signature, weighbridge ticket and truck plate as for a route stop), also with no signal. The office sees them by date on the Submissions page (read only).
 - Master data pages: customers (each registers its waste types), waste types (configurable), holidays (Singapore 2026–2027 prefilled, maintained by users), trucks (the vehicle list drivers pick from) and users.
@@ -1247,20 +1247,20 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
   8. `#FF9DA7`
   9. `#9C755F`
   10. `#17BECF`
-- **Office theme**: two looks, chosen with the switch in the header and kept in the browser (`localStorage` `wms.style`, `<html data-style>`): **Jiangshan** (default; colours taken from the painting, see the table below; headings in a Song typeface) and **Plain** (neutral chrome). Both have a light and a dark variant; the driver app keeps its own high-contrast theme. The progress colours of route codes are tokens (`--st-idle`, `--st-early`, `--st-late`, `--st-done`, `--st-problem`) with white text. Codes are set in a monospace font. Light and dark themes come from CSS tokens.
+- **Office theme**: two looks, chosen with the switch in the header and kept in the browser (`localStorage` `wms.style`, `<html data-style>`): **Jiangshan** (default; colours taken from the painting, see the table below; headings in a Song typeface) and **Plain** (neutral chrome). Both have a light and a dark variant; the driver app keeps its own high-contrast theme. The progress colours of route codes are tokens (`--st-idle`, `--st-late`, `--st-done`, `--st-problem`) with white text. Codes are set in a monospace font. Light and dark themes come from CSS tokens.
 - **Jiangshan palette: where the colours come from.** Source image: the Palace Museum's own page for the scroll (`https://www.dpm.org.cn/collection/paint/228354.html`), image `https://img.dpm.org.cn/Uploads/Picture/2017/04/01/s58defb9d45b7f.jpg`, 1258 × 500 px (the public reproduction; the museum's high-resolution scan needs an account and was not used). Method: every pixel converted to OKLCH; k-means (12 clusters) for the shares; for each pigment the median pixel of the most saturated 5 % in its hue band. The silk ground is about 86 % of the image, azurite about 2.4 %, malachite about 2.5 %.
 
   | Pigment | Sample | Pixel (x, y) | Used for |
   |---|---|---|---|
-  | Azurite 石青 | `#2E5F8A` (also `#467CA0` at 1095, 459 and `#37729C` at 120, 342) | 437, 431 | hue 243 of the accent: buttons, today's date, "under way, half or more" (`#0069A2`); the grounds and lines; ridge line |
+  | Azurite 石青 | `#2E5F8A` (also `#467CA0` at 1095, 459 and `#37729C` at 120, 342) | 437, 431 | hue 243 of the accent: buttons, today's date, "under way" (`#0069A2`); the grounds and lines; ridge line |
   | Water teal | `#437181`, `#486670` | 795, 400 and 776, 350 | links and focus (hue 222); `#486670` as it is for "not started"; ridge line |
   | Malachite 石绿 | `#6F9469` (also `#7FA16F` at 142, 377) | 942, 394 | hue 141 of "all collected" and OK (`#3B6B34`); ridge line |
-  | Silk ochre | `#977C45`, `#8E7743` | 267, 151 and 268, 128 | hue 84 of "under way, less than half" and warnings (`#7D5E13`); ridge line |
+  | Silk ochre | `#977C45`, `#8E7743` | 267, 151 and 268, 128 | hue 84 of warnings (`#7D5E13`); ridge line |
   | Cinnabar 朱砂 (seals) | `#933F34` | 1084, 67 | as it is: problems, errors, public holidays |
   | Ink | `#1A2020` | 98, 478 | as it is: text |
 
   - The painting's pigments are aged and muted (chroma about 0.09). Where a sample could not be used as it is, the token keeps the sample's hue and sets lightness and chroma for the screen; the accent is therefore brighter than the pigment in the image. The silk ochre is not used as a ground (user: no beige background): the grounds are near-white at the azurite hue.
-  - Atmosphere colours (grounds, lines, accent, ridge line) and state colours (the five `--st-*` and OK / warning / danger) are separate tokens. Every text / ground pair of the look, light and dark, and white on each state colour was computed at 4.5 : 1 or more (lowest: 4.91).
+  - Atmosphere colours (grounds, lines, accent, ridge line) and state colours (the four `--st-*` and OK / warning / danger) are separate tokens. Every text / ground pair of the look, light and dark, and white on each state colour was computed at 4.5 : 1 or more (lowest: 4.91).
 - **Driver theme**: a high-contrast light theme, readable in sunlight.
 - **Fonts**: system fonts only, no external font CDN.
 
@@ -1280,7 +1280,7 @@ Rows show glyph + short word + count, like the mockup the user approved ("◑ �
   - type chips: `R`, `S` and `⚡A`;
   - [Clear highlight], shown while a highlight or search is active;
   - month view only: [Expand all / Collapse all] for the collapsed cells.
-- **Colour key**: one line under the filter bar that names the five progress colours. There is no list of route codes above the calendar (removed at the user's request, 2026-11-12).
+- **Colour key**: one line under the filter bar that names the four progress colours. There is no list of route codes above the calendar (removed at the user's request, 2026-11-12).
 - **Highlight and search.**
   - Clicking a code (in a week row) highlights that code on every date. Everything else dims to 18% opacity.
   - Clicking the same code again, or pressing Esc, clears the highlight.
